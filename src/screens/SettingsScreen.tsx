@@ -37,7 +37,7 @@ import { ComposingSettings } from '../components/settings/ComposingSettings';
 import { LayoutSettings } from '../components/settings/LayoutSettings';
 import { DownloadsSettings } from '../components/settings/DownloadsSettings';
 import { useLocaleStore } from '../stores/locale-store';
-import { useHasCalendar, useHasContacts, useHasFiles } from '../lib/capabilities';
+import { useHasCalendar, useHasContacts, useHasFiles, useHasSieve, useHasVacation } from '../lib/capabilities';
 import { supportsSideloadUpdates } from '../lib/platform-capabilities';
 
 type Tab =
@@ -170,13 +170,17 @@ export default function SettingsScreen({ onLogout, onBack, onTabSelect }: Settin
   const hasCalendar = useHasCalendar();
   const hasContacts = useHasContacts();
   const hasFiles = useHasFiles();
+  const hasSieve = useHasSieve();
+  const hasVacation = useHasVacation();
   const unavailableTabs = React.useMemo(() => {
     const set = new Set<Tab>();
     if (!hasCalendar) set.add('calendar');
     if (!hasContacts) set.add('contacts');
     if (!hasFiles) set.add('files');
+    if (!hasSieve) set.add('filters');
+    if (!hasVacation) set.add('vacation');
     return set;
-  }, [hasCalendar, hasContacts, hasFiles]);
+  }, [hasCalendar, hasContacts, hasFiles, hasSieve, hasVacation]);
   const groupedTabs = React.useMemo(() => {
     void locale; // dependency: re-translate on locale change
     return groupTabs().map((g) => ({
@@ -225,7 +229,11 @@ export default function SettingsScreen({ onLogout, onBack, onTabSelect }: Settin
         </View>
 
         <ScrollView style={styles.scrollArea} contentContainerStyle={styles.detailContent}>
-          {Component ? <Component /> : null}
+          {selectedTab === 'filters' ? (
+            <FilterSettings
+              onOpenVacation={hasVacation ? () => setSelectedTab('vacation') : undefined}
+            />
+          ) : Component ? <Component /> : null}
         </ScrollView>
       </SafeAreaView>
     );

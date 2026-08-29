@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native';
 import {
   Plus, X, Code, AlertTriangle, Filter, RotateCcw, Lock,
-  ChevronUp, ChevronDown, Palmtree,
+  ChevronUp, ChevronDown, Palmtree, ChevronRight,
 } from 'lucide-react-native';
 import { SettingsSection, ToggleSwitch } from './settings-section';
 import Button from '../Button';
@@ -17,13 +17,86 @@ import { useLocaleStore } from '../../stores/locale-store';
 import { FilterRuleModal } from '../filters/FilterRuleModal';
 import { SieveEditorSheet } from '../filters/SieveEditorSheet';
 import type { FilterRule } from '../../lib/sieve/types';
-import { summarizeRule } from '../../lib/sieve/condition-value';
+import { formatConditionValue, summarizeRule } from '../../lib/sieve/condition-value';
+
+type Translate = (key: string, fallback?: string) => string;
 
 function isReadonlyRule(r: FilterRule): boolean {
   return r.origin === 'external' || r.origin === 'opaque';
 }
 
-export function FilterSettings() {
+// Expanded "IF ... / THEN ..." view (webmail VisualRuleSummary, 1.4.6): every
+// condition and action as a chip, with the match-type hint after the IF row.
+function VisualRuleSummary({ rule, t, c }: { rule: FilterRule; t: Translate; c: ThemePalette }) {
+  const styles = useMemo(() => makeSummaryStyles(c), [c]);
+  const joiner = rule.matchType === 'all' ? t('settings.filters.and', 'and') : t('settings.filters.or', 'or');
+  const matchLabel = rule.matchType === 'all'
+    ? t('settings.filters.match_all_conditions', 'all match')
+    : t('settings.filters.match_any_condition', 'any matches');
+  return (
+    <View style={styles.wrap}>
+      <View style={styles.row}>
+        <Text style={[styles.keyword, { color: c.primary }]}>{t('settings.filters.if', 'If')}</Text>
+        {rule.conditions.map((cond, i) => {
+          const field = t(`settings.filters.condition_fields.${cond.field}`, cond.field);
+          const comparator = t(`settings.filters.comparators.${cond.comparator}`, cond.comparator);
+          const value = formatConditionValue(cond, t);
+          return (
+            <React.Fragment key={i}>
+              {i > 0 && <Text style={styles.joiner}>{joiner}</Text>}
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>
+                  <Text style={[styles.chipKey, { color: c.primary }]}>{field}</Text>
+                  <Text style={styles.chipMuted}>{` ${comparator}`}</Text>
+                  {value ? <Text style={styles.chipValue}>{` ${value}`}</Text> : null}
+                </Text>
+              </View>
+            </React.Fragment>
+          );
+        })}
+        <Text style={styles.joiner}>({matchLabel})</Text>
+      </View>
+      <View style={styles.row}>
+        <Text style={[styles.keyword, { color: c.success }]}>{t('settings.filters.then', 'Then')}</Text>
+        {rule.actions.map((a, i) => {
+          const action = t(`settings.filters.action_types.${a.type}`, a.type);
+          return (
+            <React.Fragment key={i}>
+              {i > 0 && <Text style={styles.joiner}>›</Text>}
+              <View style={styles.chip}>
+                <Text style={styles.chipText}>
+                  <Text style={[styles.chipKey, { color: c.success }]}>{action}</Text>
+                  {a.value ? <Text style={styles.chipMuted}>{` "${a.value}"`}</Text> : null}
+                </Text>
+              </View>
+            </React.Fragment>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function makeSummaryStyles(c: ThemePalette) {
+  return StyleSheet.create({
+    wrap: { gap: 4, marginTop: 6 },
+    row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 },
+    keyword: { fontSize: 10, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
+    joiner: { fontSize: 10, fontStyle: 'italic', color: c.mutedForeground },
+    chip: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: radius.xs, backgroundColor: c.muted },
+    chipText: { ...typography.caption, color: c.text },
+    chipKey: { fontWeight: '500' },
+    chipMuted: { color: c.mutedForeground },
+    chipValue: { color: c.text },
+  });
+}
+
+interface FilterSettingsProps {
+  /** Opens the Vacation Responder tab; makes the "active" banner actionable. */
+  onOpenVacation?: () => void;
+}
+
+export function FilterSettings({ onOpenVacation }: FilterSettingsProps = {}) {
   const c = useColors();
   const styles = useMemo(() => makeStyles(c), [c]);
   const t = useLocaleStore((s) => s.t);
@@ -213,7 +286,12 @@ export function FilterSettings() {
         )}
 
         {!isOpaque && showVacationBanner && (
-          <View style={styles.vacationBanner}>
+          <Pressable
+            onPress={onOpenVacation}
+            disabled={!onOpenVacation}
+            accessibilityRole={onOpenVacation ? 'button' : undefined}
+            style={({ pressed }) => [styles.vacationBanner, pressed && onOpenVacation && { opacity: 0.8 }]}
+          >
             <View style={styles.vacationIcon}>
               <Palmtree size={16} color={c.success} />
             </View>
@@ -221,7 +299,13 @@ export function FilterSettings() {
               <Text style={styles.vacationTitle}>{t('settings.filters.vacation_active', 'Vacation Responder is active')}</Text>
               <Text style={styles.vacationDesc}>{t('settings.filters.vacation_active_description', 'Auto-reply is enabled for incoming messages')}</Text>
             </View>
-          </View>
+            {onOpenVacation && (
+              <View style={styles.vacationConfigure}>
+                <Text style={styles.vacationConfigureText}>{t('settings.filters.vacation_configure', 'Configure')}</Text>
+                <ChevronRight size={14} color={c.success} />
+              </View>
+            )}
+          </Pressable>
         )}
 
         {!isOpaque && rules.length === 0 && !showVacationBanner && (
@@ -249,9 +333,13 @@ export function FilterSettings() {
                         <View style={styles.originBadge}><Text style={styles.originBadgeText}>{label}</Text></View>
                       </View>
                       {hasStructured ? (
-                        <Text style={styles.ruleSummary} numberOfLines={expandedView ? undefined : 2}>
-                          {summarizeRule(rule, t)}
-                        </Text>
+                        expandedView ? (
+                          <VisualRuleSummary rule={rule} t={t} c={c} />
+                        ) : (
+                          <Text style={styles.ruleSummary} numberOfLines={2}>
+                            {summarizeRule(rule, t)}
+                          </Text>
+                        )
                       ) : rule.rawBlock ? (
                         <Text style={styles.rawBlock} numberOfLines={expandedView ? undefined : 4}>
                           {rule.rawBlock.trim()}
@@ -273,9 +361,13 @@ export function FilterSettings() {
                     onPress={() => { setEditingRule(rule); setShowRuleModal(true); }}
                   >
                     <Text style={styles.ruleName} numberOfLines={1}>{rule.name}</Text>
-                    <Text style={styles.ruleSummary} numberOfLines={expandedView ? undefined : 2}>
-                      {summarizeRule(rule, t)}
-                    </Text>
+                    {expandedView ? (
+                      <VisualRuleSummary rule={rule} t={t} c={c} />
+                    ) : (
+                      <Text style={styles.ruleSummary} numberOfLines={2}>
+                        {summarizeRule(rule, t)}
+                      </Text>
+                    )}
                   </Pressable>
 
                   <View style={styles.reorderCol}>
@@ -399,6 +491,8 @@ function makeStyles(c: ThemePalette) {
     },
     vacationTitle: { ...typography.bodyMedium, color: c.success },
     vacationDesc: { ...typography.caption, color: c.mutedForeground, marginTop: 2 },
+    vacationConfigure: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+    vacationConfigureText: { ...typography.caption, color: c.success, fontWeight: '500' },
 
     emptyState: { alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.md },
     emptyText: { ...typography.body, color: c.mutedForeground },

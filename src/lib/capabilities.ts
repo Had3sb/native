@@ -33,3 +33,15 @@ export function useHasContacts(): boolean {
 export function useHasFiles(): boolean {
   return useAuthStore((s) => (s.session ? CAPABILITIES.FILES in s.session.capabilities : true));
 }
+
+// Settings tabs for Sieve filters and the vacation responder are gated on the
+// same session capabilities api/sieve.ts and api/vacation.ts check, so the
+// tab is disabled up front instead of opening onto a "not supported" screen.
+export function useHasSieve(): boolean {
+  return useAuthStore((s) => (s.session ? CAPABILITIES.SIEVE in s.session.capabilities : true));
+}
+
+export function useHasVacation(): boolean {
+  return useAuthStore((s) => (s.session ? CAPABILITIES.VACATION in s.session.capabilities : true));
+}
+
