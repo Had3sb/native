@@ -140,3 +140,42 @@ describe('account scoping helpers', () => {
     expect(mailboxesForSiblingOf(all, null).map((m) => m.id)).toEqual(['inbox', 'trash']);
   });
 });
+
+describe('role-folder deduplication (#771)', () => {
+  it('keeps user folders whose name merely contains a role folder name', () => {
+    const tree = buildMailboxTree([
+      own('inbox', 'Inbox', { role: 'inbox' }),
+      own('sent', 'Sent', { role: 'sent' }),
+      own('archive', 'Archive', { role: 'archive' }),
+      own('old-inbox', 'Old Inbox'),
+      own('arch-2025', '2025 Archive'),
+      own('sent-acc', 'Sent to Accounting'),
+      own('in', 'In'),
+    ]);
+    expect(tree.map((n) => n.id)).toEqual([
+      'inbox', 'sent', 'archive', 'arch-2025', 'in', 'old-inbox', 'sent-acc',
+    ]);
+  });
+
+  it('drops only an exact (trimmed, case-insensitive) duplicate of a role folder', () => {
+    const tree = buildMailboxTree([
+      own('sent', 'Sent', { role: 'sent' }),
+      own('sent-dup', ' sent '),
+      own('sent-mail', 'Sent Mail'),
+    ]);
+    expect(tree.map((n) => n.id)).toEqual(['sent', 'sent-mail']);
+  });
+
+  it('never drops a nested folder or a duplicate that has children', () => {
+    const tree = buildMailboxTree([
+      own('inbox', 'Inbox', { role: 'inbox' }),
+      own('sent', 'Sent', { role: 'sent' }),
+      own('proj', 'Projects'),
+      own('proj-sent', 'Sent', { parentId: 'proj' }),
+      own('inbox-dup', 'Inbox'),
+      own('inbox-dup-child', 'Child', { parentId: 'inbox-dup' }),
+    ]);
+    expect(tree.map((n) => n.id)).toEqual(['inbox', 'sent', 'inbox-dup', 'proj']);
+    expect(tree.find((n) => n.id === 'proj')?.children.map((n) => n.id)).toEqual(['proj-sent']);
+  });
+});

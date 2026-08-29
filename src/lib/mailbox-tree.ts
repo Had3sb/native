@@ -44,8 +44,12 @@ const ROLE_PRIORITY: Record<string, number> = {
 };
 
 // Drop root-level folders whose name collides with an existing role mailbox
-// (e.g. "Sent Mail" when a role=sent mailbox already exists). Mirrors the
-// webmail's `deduplicateMailboxes`; kept minimal (single account only).
+// (e.g. a plain "Sent" folder when a role=sent mailbox already exists).
+// Mirrors the webmail's `deduplicateMailboxes`; kept minimal (single account
+// only). Only an *exact* (trimmed, case-insensitive) name collision counts:
+// substring matching silently hid legitimate user folders whose name merely
+// contained a role folder's name — "Old Inbox", "2025 Archive",
+// "Sent to Accounting" (GitHub #771).
 function deduplicate(mailboxes: Mailbox[]): Mailbox[] {
   const roles = mailboxes.filter((m) => m.role);
   const referencedParentIds = new Set<string>();
@@ -56,12 +60,11 @@ function deduplicate(mailboxes: Mailbox[]): Mailbox[] {
   const result: Mailbox[] = [];
   for (const m of mailboxes) {
     if (m.role) { result.push(m); continue; }
+    // Never deduplicate nested folders — removing one would orphan its
+    // children to the root (GitHub #118).
     if (m.parentId) { result.push(m); continue; }
-    const lower = m.name.toLowerCase();
-    const dup = roles.find((r) => {
-      const rn = r.name.toLowerCase();
-      return lower.includes(rn) || rn.includes(lower);
-    });
+    const lower = m.name.trim().toLowerCase();
+    const dup = roles.find((r) => r.name.trim().toLowerCase() === lower);
     if (!dup || referencedParentIds.has(m.id)) result.push(m);
   }
   return result;
