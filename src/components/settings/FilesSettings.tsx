@@ -8,14 +8,13 @@ import { spacing, radius, typography, type ThemePalette } from '../../theme/toke
 import { useColors } from '../../theme/colors';
 import {
   useSettingsStore,
-  type FilesFolderLayout,
   type FilesViewMode,
   type FilesSortKey,
   type FilesSortDir,
 } from '../../stores/settings-store';
+import { useLocaleStore } from '../../stores/locale-store';
 
 interface FilesPrefs {
-  folderLayout: FilesFolderLayout;
   defaultViewMode: FilesViewMode;
   defaultSortKey: FilesSortKey;
   defaultSortDir: FilesSortDir;
@@ -69,6 +68,7 @@ function getIcon(c: ThemePalette, file: SampleFile, colored: boolean, sz: number
 function FilesPreview({ prefs }: { prefs: FilesPrefs }) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const files = SAMPLE.filter((f) => {
     if (!prefs.showHiddenFiles && f.hidden) return false;
     return true;
@@ -99,9 +99,9 @@ function FilesPreview({ prefs }: { prefs: FilesPrefs }) {
   return (
     <View style={styles.previewBox}>
       <View style={styles.listHeader}>
-        <Text style={[styles.listHeaderText, { flex: 1 }]}>Name</Text>
-        <Text style={[styles.listHeaderText, { width: 60, textAlign: 'right' }]}>Size</Text>
-        <Text style={[styles.listHeaderText, { width: 60, textAlign: 'right' }]}>Modified</Text>
+        <Text style={[styles.listHeaderText, { flex: 1 }]}>{t('files.name', 'Name')}</Text>
+        <Text style={[styles.listHeaderText, { width: 60, textAlign: 'right' }]}>{t('files.size', 'Size')}</Text>
+        <Text style={[styles.listHeaderText, { width: 60, textAlign: 'right' }]}>{t('files.modified', 'Modified')}</Text>
       </View>
       {files.map((f) => (
         <View key={f.name} style={[styles.listRow, f.hidden && { opacity: 0.5 }]}>
@@ -126,8 +126,8 @@ export function FilesSettings() {
   const hydrated = useSettingsStore((s) => s.hydrated);
   const hydrate = useSettingsStore((s) => s.hydrate);
   const set = useSettingsStore((s) => s.updateSetting);
+  const t = useLocaleStore((s) => s.t);
 
-  const folderLayout = useSettingsStore((s) => s.filesFolderLayout);
   const defaultViewMode = useSettingsStore((s) => s.filesDefaultViewMode);
   const defaultSortKey = useSettingsStore((s) => s.filesDefaultSortKey);
   const defaultSortDir = useSettingsStore((s) => s.filesDefaultSortDir);
@@ -141,7 +141,6 @@ export function FilesSettings() {
   }, [hydrated, hydrate]);
 
   const prefs: FilesPrefs = {
-    folderLayout,
     defaultViewMode,
     defaultSortKey,
     defaultSortDir,
@@ -154,69 +153,76 @@ export function FilesSettings() {
   return (
     <View style={styles.container}>
       <View>
-        <Text style={styles.previewLabel}>Preview</Text>
+        <Text style={styles.previewLabel}>{t('files.preview', 'Preview')}</Text>
         <FilesPreview prefs={prefs} />
       </View>
 
-      <SettingsSection title="Display" description="How files and folders are presented.">
-        <SettingItem label="Folder layout" description="Choose how folders appear in the browser.">
-          <RadioGroup
-            value={folderLayout}
-            onChange={(v) => set('filesFolderLayout', v as FilesFolderLayout)}
-            options={[
-              { value: 'inline', label: 'Inline' },
-              { value: 'sidebar', label: 'Sidebar' },
-            ]}
-          />
-        </SettingItem>
-
-        <SettingItem label="Default view" description="List or grid view.">
+      <SettingsSection title={t('files.settings_display', 'Display')}>
+        <SettingItem
+          label={t('files.settings_default_view', 'Default View')}
+          description={t('files.settings_default_view_desc', 'Choose between grid and list layout')}
+        >
           <RadioGroup
             value={defaultViewMode}
             onChange={(v) => set('filesDefaultViewMode', v as FilesViewMode)}
             options={[
-              { value: 'list', label: 'List' },
-              { value: 'grid', label: 'Grid' },
+              { value: 'list', label: t('files.list_view', 'List') },
+              { value: 'grid', label: t('files.grid_view', 'Grid') },
             ]}
           />
         </SettingItem>
 
-        <SettingItem label="Default sort" description="Primary sort key.">
+        <SettingItem
+          label={t('files.settings_default_sort', 'Default Sort')}
+          description={t('files.settings_default_sort_desc', 'Choose the default sorting for files')}
+        >
           <RadioGroup
             value={defaultSortKey}
             onChange={(v) => set('filesDefaultSortKey', v as FilesSortKey)}
             options={[
-              { value: 'name', label: 'Name' },
-              { value: 'size', label: 'Size' },
-              { value: 'modified', label: 'Modified' },
+              { value: 'name', label: t('files.name', 'Name') },
+              { value: 'size', label: t('files.size', 'Size') },
+              { value: 'modified', label: t('files.modified', 'Modified') },
             ]}
           />
         </SettingItem>
 
-        <SettingItem label="Sort direction">
+        <SettingItem
+          label={t('files.settings_sort_direction', 'Sort Direction')}
+          description={t('files.settings_sort_direction_desc', 'Choose ascending or descending order')}
+        >
           <RadioGroup
             value={defaultSortDir}
             onChange={(v) => set('filesDefaultSortDir', v as FilesSortDir)}
             options={[
-              { value: 'asc', label: 'Ascending' },
-              { value: 'desc', label: 'Descending' },
+              { value: 'asc', label: t('files.settings_ascending', 'Ascending') },
+              { value: 'desc', label: t('files.settings_descending', 'Descending') },
             ]}
           />
         </SettingItem>
       </SettingsSection>
 
-      <SettingsSection title="Icons" description="Appearance of file and folder icons.">
-        <SettingItem label="Show icons" description="Display icons for files and folders.">
+      <SettingsSection title={t('files.settings_icons', 'Icons')}>
+        <SettingItem
+          label={t('files.settings_show_icons', 'Show File Icons')}
+          description={t('files.settings_show_icons_desc', 'Display icons next to files and folders')}
+        >
           <ToggleSwitch checked={showIcons} onChange={(v) => set('filesShowIcons', v)} />
         </SettingItem>
-        <SettingItem label="Colored icons" description="Use file-type-specific colors.">
+        <SettingItem
+          label={t('files.settings_colored_icons', 'Colored Icons')}
+          description={t('files.settings_colored_icons_desc', 'Use colorful icons instead of monochrome')}
+        >
           <ToggleSwitch
             checked={coloredIcons}
             onChange={(v) => set('filesColoredIcons', v)}
             disabled={!showIcons}
           />
         </SettingItem>
-        <SettingItem label="Show thumbnails" description="Generate previews for images.">
+        <SettingItem
+          label={t('files.settings_show_thumbnails', 'Show Thumbnails')}
+          description={t('files.settings_show_thumbnails_desc', 'Display image previews instead of icons for image files')}
+        >
           <ToggleSwitch
             checked={showThumbnails}
             onChange={(v) => set('filesShowThumbnails', v)}
@@ -224,8 +230,11 @@ export function FilesSettings() {
         </SettingItem>
       </SettingsSection>
 
-      <SettingsSection title="Behavior">
-        <SettingItem label="Show hidden files" description="Include dotfiles (.name) in listings.">
+      <SettingsSection title={t('files.settings_behavior', 'Behavior')}>
+        <SettingItem
+          label={t('files.settings_show_hidden', 'Show Hidden Files')}
+          description={t('files.settings_show_hidden_desc', 'Display files and folders that start with a dot')}
+        >
           <ToggleSwitch
             checked={showHiddenFiles}
             onChange={(v) => set('filesShowHiddenFiles', v)}

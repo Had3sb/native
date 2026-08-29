@@ -17,6 +17,7 @@ import { getPrincipals, isFolder, ownPrincipalId, setFileNodeShare } from '../..
 import type { FileNode, FileNodeRights, Principal } from '../../api/types';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
+import { useLocaleStore } from '../../stores/locale-store';
 
 type RolePreset = 'read' | 'readWrite' | 'manager';
 
@@ -38,10 +39,10 @@ const FILE_PRESETS: Record<RolePreset, FileNodeRights> = {
   },
 };
 
-const PRESET_LABELS: Record<RolePreset, string> = {
-  read: 'Viewer',
-  readWrite: 'Editor',
-  manager: 'Manager',
+const PRESET_LABEL_KEYS: Record<RolePreset, [string, string]> = {
+  read: ['files.share_role_viewer', 'Viewer'],
+  readWrite: ['files.share_role_editor', 'Editor'],
+  manager: ['files.share_role_manager', 'Manager'],
 };
 
 const PRESET_ORDER: RolePreset[] = ['read', 'readWrite', 'manager'];
@@ -65,6 +66,7 @@ interface ShareSheetProps {
 export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
 
   const [principals, setPrincipals] = useState<Principal[]>([]);
   const [loadingPrincipals, setLoadingPrincipals] = useState(false);
@@ -121,12 +123,12 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
         });
         onChanged();
       } catch (e) {
-        Alert.alert('Sharing failed', e instanceof Error ? e.message : String(e));
+        Alert.alert(t('files.share_error', 'Failed to update sharing'), e instanceof Error ? e.message : String(e));
       } finally {
         setSavingId(null);
       }
     },
-    [node, savingId, onChanged],
+    [node, savingId, onChanged, t],
   );
 
   if (!node) return null;
@@ -157,12 +159,12 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
               <View style={styles.titleRow}>
                 <Icon size={18} color={c.textMuted} />
                 <Text style={styles.title} numberOfLines={1}>
-                  Share “{node.name}”
+                  {t('files.share', 'Share')} “{node.name}”
                 </Text>
               </View>
               {isFolder(node) ? (
                 <Text style={styles.subtitle}>
-                  Sharing a folder shares everything inside it.
+                  {t('files.share_folder_hint', 'Sharing a folder shares everything inside it.')}
                 </Text>
               ) : null}
 
@@ -172,7 +174,7 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
               >
                 {sharedEntries.length > 0 ? (
                   <View style={styles.section}>
-                    <Text style={styles.sectionLabel}>Shared with</Text>
+                    <Text style={styles.sectionLabel}>{t('files.shared_with', 'Shared with')}</Text>
                     {sharedEntries.map(([principalId, rights]) => {
                       const preset = detectPreset(rights);
                       const busy = savingId === principalId;
@@ -190,12 +192,12 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
                                 <Text
                                   style={[styles.chipText, preset === p && styles.chipTextActive]}
                                 >
-                                  {PRESET_LABELS[p]}
+                                  {t(PRESET_LABEL_KEYS[p][0], PRESET_LABEL_KEYS[p][1])}
                                 </Text>
                               </Pressable>
                             ))}
                             {preset === 'custom' ? (
-                              <Text style={styles.customLabel}>Custom</Text>
+                              <Text style={styles.customLabel}>{t('files.share_role_custom', 'Custom')}</Text>
                             ) : null}
                           </View>
                           {busy ? (
@@ -204,7 +206,7 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
                             <Pressable
                               onPress={() => void applyShare(principalId, null)}
                               hitSlop={8}
-                              accessibilityLabel="Remove access"
+                              accessibilityLabel={t('files.share_remove', 'Remove access')}
                             >
                               <Trash2 size={18} color={c.error} />
                             </Pressable>
@@ -216,16 +218,16 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
                 ) : (
                   <View style={styles.emptyRow}>
                     <Users size={18} color={c.textMuted} />
-                    <Text style={styles.emptyText}>Not shared with anyone yet</Text>
+                    <Text style={styles.emptyText}>{t('files.share_empty', 'Not shared with anyone yet')}</Text>
                   </View>
                 )}
 
                 <View style={styles.section}>
-                  <Text style={styles.sectionLabel}>Add people</Text>
+                  <Text style={styles.sectionLabel}>{t('files.share_add_people', 'Add people')}</Text>
                   <TextInput
                     value={search}
                     onChangeText={setSearch}
-                    placeholder="Search by name or email"
+                    placeholder={t('files.share_search_placeholder', 'Search by name or email')}
                     placeholderTextColor={c.textMuted}
                     style={styles.input}
                     autoCapitalize="none"
@@ -239,7 +241,9 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
                     />
                   ) : candidates.length === 0 ? (
                     <Text style={styles.noMatches}>
-                      {principals.length === 0 ? 'No other users found' : 'No matches'}
+                      {principals.length === 0
+                        ? t('files.share_no_users', 'No other users found')
+                        : t('files.share_no_matches', 'No matches')}
                     </Text>
                   ) : (
                     candidates.map((p) => (
@@ -265,7 +269,7 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
               </ScrollView>
 
               <Pressable onPress={onClose} style={styles.doneBtn}>
-                <Text style={styles.doneText}>Done</Text>
+                <Text style={styles.doneText}>{t('files.done', 'Done')}</Text>
               </Pressable>
             </View>
           </TouchableWithoutFeedback>

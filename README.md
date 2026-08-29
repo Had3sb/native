@@ -27,7 +27,7 @@ React Native (Expo SDK 54) client for [Bulwark Webmail](https://github.com/bulwa
 ## What's missing or rough
 
 - iOS builds, but push notifications and client certificates are Android-only so far
-- Filters & rules, S/MIME, plugins, themes, file storage - UI stubs only
+- S/MIME, plugins, themes - UI stubs only (filters & rules, the vacation responder and file storage are real implementations)
 - Calendar editing is partial; contacts editing is basic
 - No Play Store distribution yet (sideload APK from Releases); iOS ships via TestFlight
 
