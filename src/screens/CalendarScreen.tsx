@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Alert,
+  AppState,
   View,
   Text,
   StyleSheet,
@@ -52,6 +53,8 @@ import { CalendarSidebarDrawer } from '../components/calendar/CalendarSidebarDra
 import { TasksSheet } from '../components/calendar/TasksSheet';
 import { ICalImportSheet } from '../components/calendar/ICalImportSheet';
 import { ICalSubscriptionSheet } from '../components/calendar/ICalSubscriptionSheet';
+import { CalendarEditSheet, type CalendarEditValues } from '../components/calendar/CalendarEditSheet';
+import { CalendarShareSheet } from '../components/calendar/CalendarShareSheet';
 import {
   applySharedCalendarColors,
   buildEventDayIndex,
@@ -177,6 +180,17 @@ export default function CalendarScreen() {
   const deleteTask = useCalendarStore((s) => s.deleteTask);
   const toggleCalendarVisibility = useCalendarStore((s) => s.toggleCalendarVisibility);
   const setDefaultCalendar = useCalendarStore((s) => s.setDefaultCalendar);
+  const createCalendar = useCalendarStore((s) => s.createCalendar);
+  const updateCalendar = useCalendarStore((s) => s.updateCalendar);
+  const removeCalendar = useCalendarStore((s) => s.removeCalendar);
+  const clearCalendarEvents = useCalendarStore((s) => s.clearCalendarEvents);
+  const shareCalendar = useCalendarStore((s) => s.shareCalendar);
+  // Calendar management sheets (create / edit / share) opened from the drawer.
+  const [calendarEditTarget, setCalendarEditTarget] = React.useState<
+    { mode: 'create' } | { mode: 'edit'; calendar: Calendar } | null
+  >(null);
+  const [shareTarget, setShareTarget] = React.useState<Calendar | null>(null);
+  const syncDueSubscriptions = useCalendarSubscriptionsStore((s) => s.syncDue);
   const storeCalendars = useCalendarStore((s) => s.calendars);
   const taskOnlyCalendarIds = useCalendarStore((s) => s.taskOnlyCalendarIds);
   const hiddenCalendarIds = useCalendarStore((s) => s.hiddenCalendarIds);
@@ -277,6 +291,16 @@ export default function CalendarScreen() {
     void hydrate();
     void fetchCalendarsAction();
   }, [hydrate, fetchCalendarsAction]);
+
+  // Refresh iCal subscriptions whose interval elapsed: on mount and whenever
+  // the app returns to the foreground (like the webmail's periodic refresh).
+  React.useEffect(() => {
+    void syncDueSubscriptions();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void syncDueSubscriptions();
+    });
+    return () => sub.remove();
+  }, [syncDueSubscriptions]);
 
   React.useEffect(() => {
     const { after, before } = rangeForView(viewMode, currentDate, calendarFirstDayOfWeek);
@@ -509,6 +533,86 @@ export default function CalendarScreen() {
     }
   }, [refresh]);
 
+  const reportError = React.useCallback(
+    (err: unknown) => {
+      Alert.alert(
+        t('calendar.notifications.event_error', 'Something went wrong'),
+        err instanceof Error ? err.message : undefined,
+      );
+    },
+    [t],
+  );
+
+  const handleCalendarEditSave = React.useCallback(
+    async (values: CalendarEditValues) => {
+      if (!calendarEditTarget) return;
+      if (calendarEditTarget.mode === 'create') {
+        await createCalendar(values.name, values.color, values.description);
+      } else {
+        await updateCalendar(calendarEditTarget.calendar.id, {
+          name: values.name,
+          color: values.color,
+          description: values.description || null,
+        });
+      }
+    },
+    [calendarEditTarget, createCalendar, updateCalendar],
+  );
+
+  const handleSetCalendarColor = React.useCallback(
+    (cal: Calendar, color: string) => {
+      if (cal.isShared) {
+        // Per-viewer recolor (#345): the owner's colour is left alone.
+        setSharedCalendarColor(sharedCalendarColorKey(cal), color);
+        return;
+      }
+      updateCalendar(cal.id, { color }).catch(reportError);
+    },
+    [setSharedCalendarColor, updateCalendar, reportError],
+  );
+
+  const handleClearCalendar = React.useCallback(
+    (cal: Calendar) => {
+      Alert.alert(
+        t('calendar.management.clear_title', 'Remove all events?'),
+        t(
+          'calendar.management.clear_description',
+          'Every event in this calendar will be deleted. Events that also belong to another calendar are only unlinked.',
+        ),
+        [
+          { text: t('common.cancel', 'Cancel'), style: 'cancel' },
+          {
+            text: t('calendar.management.clear_confirm', 'Remove all'),
+            style: 'destructive',
+            onPress: () => { clearCalendarEvents(cal.id).catch(reportError); },
+          },
+        ],
+      );
+    },
+    [t, clearCalendarEvents, reportError],
+  );
+
+  const handleDeleteCalendar = React.useCallback(
+    (cal: Calendar) => {
+      Alert.alert(
+        t('calendar.management.delete_title', 'Delete calendar?'),
+        t(
+          'calendar.management.delete_description',
+          'The calendar and all of its events will be deleted. This cannot be undone.',
+        ),
+        [
+          { text: t('common.cancel', 'Cancel'), style: 'cancel' },
+          {
+            text: t('common.delete', 'Delete'),
+            style: 'destructive',
+            onPress: () => { removeCalendar(cal.id).catch(reportError); },
+          },
+        ],
+      );
+    },
+    [t, removeCalendar, reportError],
+  );
+
   const isSelectedToday = isToday(selectedDate);
 
   return (
@@ -689,13 +793,19 @@ export default function CalendarScreen() {
         onClose={() => setSidebarVisible(false)}
         onImport={() => { setSidebarVisible(false); setImportVisible(true); }}
         onManageSubscriptions={() => { setSidebarVisible(false); setSubscriptionsVisible(true); }}
-        onSetDefault={(cal) => { void setDefaultCalendar(cal.id); }}
-        onSetColor={(cal, color) => setSharedCalendarColor(sharedCalendarColorKey(cal), color)}
+        onCreate={() => { setSidebarVisible(false); setCalendarEditTarget({ mode: 'create' }); }}
+        onSetDefault={(cal) => { setDefaultCalendar(cal.id).catch(reportError); }}
+        onSetColor={handleSetCalendarColor}
         onResetColor={(cal) => {
           // Drop the local override; the auto-assign effect picks a fresh
           // unused color (so it never reverts to a collision).
           removeSharedCalendarColor(sharedCalendarColorKey(cal));
         }}
+        onRename={(cal) => { setSidebarVisible(false); setCalendarEditTarget({ mode: 'edit', calendar: cal }); }}
+        onShare={(cal) => { setSidebarVisible(false); setShareTarget(cal); }}
+        onClear={handleClearCalendar}
+        onDelete={handleDeleteCalendar}
+        isSubscriptionCalendar={isSubscriptionCalendar}
       />
 
       <TasksSheet
@@ -723,6 +833,19 @@ export default function CalendarScreen() {
       <ICalSubscriptionSheet
         visible={subscriptionsVisible}
         onClose={() => setSubscriptionsVisible(false)}
+      />
+
+      <CalendarEditSheet
+        visible={!!calendarEditTarget}
+        calendar={calendarEditTarget?.mode === 'edit' ? calendarEditTarget.calendar : null}
+        onSave={handleCalendarEditSave}
+        onClose={() => setCalendarEditTarget(null)}
+      />
+
+      <CalendarShareSheet
+        calendar={shareTarget}
+        onShare={shareCalendar}
+        onClose={() => setShareTarget(null)}
       />
     </SafeAreaView>
   );

@@ -152,17 +152,17 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: plain `Calendar/set` (`src/api/calendar.ts:374-396`). Only matters once RN gains a create-calendar UI; RN has no WebDAV proxy, but it can talk to Stalwart's CalDAV endpoint directly (the same host serves `/dav/`).
   - Fix hint: when adding calendar creation, issue `MKCALENDAR` against the account's calendar-home with `supported-calendar-component-set`, then `Calendar/get` to find the new id.
 
-- [ ] **No first-touch gate: duplicate default calendars on clustered Stalwart (#907)** — `P2` — `bugfix-parity`
+- [x] **No first-touch gate: duplicate default calendars on clustered Stalwart (#907)** — `P2` — `bugfix-parity` — fixed in 58e3ef6 (in-flight dedupe of fetchCalendars/fetchTasks; ensureRange awaits it)
   - What WEB does: `FirstTouchGate` serialises the first `Calendar/*`/`CalendarEvent/*` request per account so concurrent first-touch requests cannot each create a default calendar (ref `lib/jmap/first-touch-gate.ts:56-101`, `lib/jmap/client.ts:678, 1129`, changelog 1.9.0 #907).
   - What RN does: `CalendarScreen` fires `fetchCalendars()` on mount and, in a second effect, `ensureRange()` which sees `calendars.length === 0` and calls `fetchCalendars()` again then `CalendarEvent/query` (`src/screens/CalendarScreen.tsx:261-269`, `src/stores/calendar-store.ts:235-251`); `auth-store` also kicks `fetchCalendars`/`refresh` after login (`src/stores/auth-store.ts:92-98`). Two to three concurrent first-touch calls — exactly the #907 race. RN affected.
   - Fix hint: port `FirstTouchGate` into `src/api/jmap-client.ts` `request()`, or at minimum dedupe in-flight `fetchCalendars` and make `ensureRange` await the mount fetch.
 
-- [ ] **Tasks-only calendar detection misses CalDAV tasks without `@type`** — `P2` — `bugfix-parity`
+- [x] **Tasks-only calendar detection misses CalDAV tasks without `@type`** — `P2` — `bugfix-parity` — fixed in 58e3ef6
   - What WEB does: `isTaskLikeObject` treats `@type: Task` OR presence of `due`/`progress`/`percentComplete` (and `@type !== 'Event'`) as a task, both for the tasks list and for hiding tasks-only calendars (ref `lib/calendar-component-detection.ts:30-58`, `lib/jmap/client.ts:6300-6316`, changelog 1.5.x #84 "Detect tasks created by external CalDAV clients such as Thunderbird").
   - What RN does: `fetchEvents` classifies solely on `'@type' === 'Task'` (`src/stores/calendar-store.ts:208-227`); Thunderbird/Todoist VTODOs that Stalwart returns without `@type` are neither shown as tasks nor counted for `taskOnlyCalendarIds` (they fall through as start-less "events" and are dropped by `!!e.start`).
   - Fix hint: port `isTaskLikeObject` and use it in both filters.
 
-- [ ] **Shared accounts without calendar access are re-probed on every fetch** — `P3` — `bugfix-parity`
+- [x] **Shared accounts without calendar access are re-probed on every fetch** — `P3` — `bugfix-parity` — fixed in 58e3ef6
   - What WEB does: remembers `forbidden`/`accountNotFound` per account in `calendarAccessDenied` and skips it (ref `lib/jmap/client.ts:5806-5813`, changelog 1.8.1 "Stop re-probing shared accounts that have no calendar access").
   - What RN does: `getCalendars` and `fetchEvents` try every calendar-capable session account each time and swallow errors (`src/api/calendar.ts:140-186`, `src/stores/calendar-store.ts:194-204`).
   - Fix hint: keep a module-level `Set` of denied account ids, reset on reconnect.
@@ -226,7 +226,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Data loading / sync
 
-- [ ] **Range queries fetch every event in the account (no `after`/`before`), capped at 1000** — `P2` — `bug`
+- [x] **Range queries fetch every event in the account (no `after`/`before`), capped at 1000** — `P2` — `bug` — fixed in 58e3ef6
   - What WEB does: `CalendarEvent/query` with `{ after, before }` + `timeZone` (changelog 1.7.0 "timezone-aware calendar queries", 1.7.1 "Stalwart-compatible calendar filters") (ref `lib/jmap/client.ts:5722-5745`).
   - What RN does: `queryEvents` ignores its `_after`/`_before` arguments citing "Stalwart rejects after/before filters" (outdated) and uses `limit: 1000` (`src/api/calendar.ts:188-208`); `fetchEvents` then re-fetches everything whenever `ensureRange` widens the union (`src/stores/calendar-store.ts:235-251`). Accounts with more than 1000 objects silently lose events; every navigation past the loaded range re-downloads all events.
   - Fix hint: send `filter: { after, before, inCalendar... }` as WEB does (`{ operator: 'AND', conditions: [...] }` when combined), keep `timeZone`; then `loadedRange` can be the requested window rather than a growing union.
@@ -246,7 +246,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `fetch(url)` from the phone (`src/stores/calendar-subscriptions-store.ts:42-53`). No server is exposed, so the SSRF class does not apply; the device can be pointed at LAN hosts, which is the user's own network. Redirects are followed by `fetch` without validation (fine). N/A for the advisory; worth a 10 MB size cap and a `text/calendar`-ish content check (already checks `BEGIN:VCALENDAR`).
   - Fix hint: optional size cap.
 
-- [ ] **Created recurring event appears as a single instance until refresh; created event lacks `utcStart`/`utcEnd`** — `P3` — `partial`
+- [x] **Created recurring event appears as a single instance until refresh; created event lacks `utcStart`/`utcEnd`** — `P3` — `partial` — fixed in 58e3ef6
   - What WEB does: `createCalendarEvent` refetches the created event with full properties (`lib/jmap/client.ts:5942-5960`) and the store refetches when occurrences are in view.
   - What RN does: `createEvent` merges the `/set` echo over the payload (`src/api/calendar.ts:272-274`) and appends without expansion (`src/stores/calendar-store.ts:286-304`).
   - Fix hint: after create, `CalendarEvent/get` the id (RN `getEvents([id])`) and, if `recurrenceRules` is set, run `expandRecurringEvents` for `loadedRange` or call `refresh()`.

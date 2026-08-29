@@ -1,6 +1,6 @@
 import { jmapClient } from './jmap-client';
 import { CAPABILITIES } from './types';
-import type { Calendar, CalendarEvent } from './types';
+import type { Calendar, CalendarEvent, CalendarRights } from './types';
 import { getEffectiveTimeZone } from '../lib/calendar-timezone';
 import { SCAN_PROPERTIES, type ScannedCalendarObject } from '../lib/calendar-component-detection';
 
@@ -489,12 +489,15 @@ export async function parseCalendarBlob(blobId: string): Promise<Partial<Calenda
 export async function createCalendar(
   name: string,
   color?: string,
+  description?: string,
 ): Promise<Calendar> {
   const accountId = jmapClient.accountId;
+  const props: Record<string, unknown> = { name, color, isVisible: true, isSubscribed: true };
+  if (description?.trim()) props.description = description.trim();
   const res = await jmapClient.request(
     [['Calendar/set', {
       accountId,
-      create: { 'new-cal': { name, color, isVisible: true, isSubscribed: true } },
+      create: { 'new-cal': props },
     }, '0']],
     USING,
   );
@@ -527,12 +530,119 @@ export async function setDefaultCalendar(
   methodResult(res);
 }
 
-// Destroy a calendar. `onDestroyEvents: 'destroy'` removes its events too —
+// Destroy a calendar. `onDestroyRemoveEvents` removes its events too —
 // Stalwart otherwise refuses to delete a non-empty calendar.
-export async function deleteCalendar(id: string): Promise<void> {
-  const accountId = jmapClient.accountId;
-  await jmapClient.request(
+export async function deleteCalendar(id: string, targetAccountId?: string): Promise<void> {
+  const accountId = targetAccountId || jmapClient.accountId;
+  const res = await jmapClient.request(
     [['Calendar/set', { accountId, destroy: [id], onDestroyRemoveEvents: true }, '0']],
     USING,
   );
+  const result = methodResult<{ notDestroyed?: Record<string, { description?: string; type?: string }> }>(res);
+  const err = result.notDestroyed?.[id];
+  if (err) throw new Error(err.description || err.type || 'Failed to delete calendar');
+}
+
+export interface CalendarUpdates {
+  name?: string;
+  color?: string | null;
+  description?: string | null;
+  sortOrder?: number;
+  isSubscribed?: boolean;
+}
+
+// Rename / recolour / describe a calendar (Calendar/set update).
+export async function updateCalendar(
+  id: string,
+  updates: CalendarUpdates,
+  targetAccountId?: string,
+): Promise<void> {
+  const accountId = targetAccountId || jmapClient.accountId;
+  const res = await jmapClient.request(
+    [['Calendar/set', { accountId, update: { [id]: updates } }, '0']],
+    USING,
+  );
+  const result = methodResult<{ notUpdated?: Record<string, { description?: string; type?: string }> }>(res);
+  const err = result.notUpdated?.[id];
+  if (err) throw new Error(err.description || err.type || 'Failed to update calendar');
+}
+
+// Add, update, or remove a principal's rights on an owned calendar via a
+// `shareWith/{principalId}` patch (null removes the share).
+export async function setCalendarShare(
+  calendarId: string,
+  principalId: string,
+  rights: CalendarRights | null,
+  targetAccountId?: string,
+): Promise<void> {
+  const accountId = targetAccountId || jmapClient.accountId;
+  const res = await jmapClient.request(
+    [['Calendar/set', {
+      accountId,
+      update: { [calendarId]: { [`shareWith/${principalId}`]: rights } },
+    }, '0']],
+    USING,
+  );
+  const result = methodResult<{ notUpdated?: Record<string, { description?: string; type?: string }> }>(res);
+  const err = result.notUpdated?.[calendarId];
+  if (err) throw new Error(err.description || err.type || 'Failed to update sharing');
+}
+
+/**
+ * Remove every event from a calendar. Events that live ONLY in this calendar
+ * are destroyed; events also linked to another calendar are unlinked instead
+ * (their `calendarIds` loses this calendar) so the user's copy elsewhere is
+ * not cascade-deleted. Returns the number of events removed.
+ */
+export async function clearCalendarEvents(
+  calendarId: string,
+  targetAccountId?: string,
+): Promise<number> {
+  const accountId = targetAccountId || jmapClient.accountId;
+  let removed = 0;
+  // Loop for accounts with more than one query page of objects.
+  for (let pass = 0; pass < 20; pass++) {
+    const ids = await queryEvents([calendarId], '', '', accountId);
+    if (ids.length === 0) break;
+    const batchSize = jmapClient.getMaxObjectsInGet();
+    const objects: Array<{ id: string; calendarIds?: Record<string, boolean> }> = [];
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const res = await jmapClient.request(
+        [['CalendarEvent/get', {
+          accountId,
+          ids: ids.slice(i, i + batchSize),
+          properties: ['id', 'calendarIds'],
+        }, '0']],
+        USING,
+      );
+      objects.push(...(methodResult<{ list: typeof objects }>(res).list ?? []));
+    }
+    const toDestroy: string[] = [];
+    const toUnlink: Array<{ id: string; calendarIds: Record<string, boolean> }> = [];
+    for (const obj of objects) {
+      const others = { ...(obj.calendarIds || {}) };
+      delete others[calendarId];
+      if (Object.keys(others).length === 0) toDestroy.push(obj.id);
+      else toUnlink.push({ id: obj.id, calendarIds: others });
+    }
+    if (toDestroy.length > 0) {
+      const res = await jmapClient.request(
+        [['CalendarEvent/set', { accountId, destroy: toDestroy }, '0']],
+        USING,
+      );
+      removed += (methodResult<{ destroyed?: string[] }>(res).destroyed ?? []).length;
+    }
+    if (toUnlink.length > 0) {
+      const update: Record<string, unknown> = {};
+      for (const { id, calendarIds } of toUnlink) update[id] = { calendarIds };
+      const res = await jmapClient.request(
+        [['CalendarEvent/set', { accountId, update }, '0']],
+        USING,
+      );
+      removed += Object.keys(methodResult<{ updated?: Record<string, unknown> }>(res).updated ?? {}).length;
+    }
+    if (toDestroy.length === 0 && toUnlink.length === 0) break;
+    if (ids.length < 1000) break;
+  }
+  return removed;
 }

@@ -11,7 +11,9 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Check, X, Upload, Rss, Shuffle, Star } from 'lucide-react-native';
+import {
+  Check, X, Upload, Rss, Shuffle, Star, Plus, Pencil, Share2, Eraser, Trash2,
+} from 'lucide-react-native';
 import type { Calendar } from '../../api/types';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
@@ -28,11 +30,19 @@ interface CalendarSidebarDrawerProps {
   onClose: () => void;
   onImport?: () => void;
   onManageSubscriptions?: () => void;
-  // Long-press actions. Set-default applies to the user's own calendars;
-  // color change/reset applies to shared calendars (per-viewer recolor).
+  onCreate?: () => void;
+  // Long-press actions. Set-default / rename / share / clear / delete apply
+  // to the user's own calendars; color change applies to own calendars
+  // (server-side) and shared calendars (per-viewer recolor).
   onSetDefault?: (calendar: Calendar) => void;
   onSetColor?: (calendar: Calendar, color: string) => void;
   onResetColor?: (calendar: Calendar) => void;
+  onRename?: (calendar: Calendar) => void;
+  onShare?: (calendar: Calendar) => void;
+  onClear?: (calendar: Calendar) => void;
+  onDelete?: (calendar: Calendar) => void;
+  // Client-side iCal subscriptions are managed from the subscriptions sheet.
+  isSubscriptionCalendar?: (calendarId: string) => boolean;
 }
 
 export function CalendarSidebarDrawer({
@@ -43,9 +53,15 @@ export function CalendarSidebarDrawer({
   onClose,
   onImport,
   onManageSubscriptions,
+  onCreate,
   onSetDefault,
   onSetColor,
   onResetColor,
+  onRename,
+  onShare,
+  onClear,
+  onDelete,
+  isSubscriptionCalendar,
 }: CalendarSidebarDrawerProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
@@ -102,6 +118,11 @@ export function CalendarSidebarDrawer({
     onSetDefault,
     onSetColor,
     onResetColor,
+    onRename,
+    onShare,
+    onClear,
+    onDelete,
+    isSubscriptionCalendar,
   };
 
   return (
@@ -144,8 +165,17 @@ export function CalendarSidebarDrawer({
               <Section title="Subscribed" calendars={subscribed} {...sectionProps} />
             )}
 
-            {(onImport || onManageSubscriptions) && (
+            {(onImport || onManageSubscriptions || onCreate) && (
               <View style={styles.actionsSection}>
+                {onCreate && (
+                  <Pressable
+                    onPress={onCreate}
+                    style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
+                  >
+                    <Plus size={18} color={c.textSecondary} />
+                    <Text style={styles.actionText}>New calendar</Text>
+                  </Pressable>
+                )}
                 {onManageSubscriptions && (
                   <Pressable
                     onPress={onManageSubscriptions}
@@ -183,6 +213,11 @@ function Section({
   onSetDefault,
   onSetColor,
   onResetColor,
+  onRename,
+  onShare,
+  onClear,
+  onDelete,
+  isSubscriptionCalendar,
 }: {
   title: string;
   calendars: Calendar[];
@@ -193,6 +228,11 @@ function Section({
   onSetDefault?: (calendar: Calendar) => void;
   onSetColor?: (calendar: Calendar, color: string) => void;
   onResetColor?: (calendar: Calendar) => void;
+  onRename?: (calendar: Calendar) => void;
+  onShare?: (calendar: Calendar) => void;
+  onClear?: (calendar: Calendar) => void;
+  onDelete?: (calendar: Calendar) => void;
+  isSubscriptionCalendar?: (calendarId: string) => boolean;
 }) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
@@ -202,9 +242,17 @@ function Section({
       {calendars.map((cal) => {
         const visible = !hiddenSet.has(cal.id);
         const isBirthday = cal.id === BIRTHDAY_CALENDAR_ID;
-        const canSetDefault = !!onSetDefault && !cal.isShared && !isBirthday && !cal.isDefault;
-        const canRecolor = !!onSetColor && !!cal.isShared;
-        const hasActions = canSetDefault || canRecolor;
+        const isSubscription = !!isSubscriptionCalendar?.(cal.id);
+        const isOwn = !cal.isShared && !isBirthday && !isSubscription;
+        const canSetDefault = !!onSetDefault && isOwn && !cal.isDefault;
+        // Own calendars recolour server-side; shared ones locally (#345).
+        const canRecolor = !!onSetColor && (!!cal.isShared || isOwn);
+        const canRename = !!onRename && isOwn;
+        const canShare = !!onShare && isOwn && (!cal.myRights || cal.myRights.mayShare !== false);
+        const canClear = !!onClear && isOwn && isWritableCalendar(cal);
+        // Like webmail: the default calendar and shared calendars can't be deleted.
+        const canDelete = !!onDelete && isOwn && !cal.isDefault && (!cal.myRights || cal.myRights.mayDelete !== false);
+        const hasActions = canSetDefault || canRecolor || canRename || canShare || canClear || canDelete;
         const expanded = expandedId === cal.id && hasActions;
         return (
           <View key={cal.id}>
@@ -246,6 +294,15 @@ function Section({
                     <Text style={styles.panelRowText}>Set as default calendar</Text>
                   </Pressable>
                 )}
+                {canRename && (
+                  <Pressable
+                    onPress={() => { onExpand(null); onRename!(cal); }}
+                    style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
+                  >
+                    <Pencil size={16} color={c.textSecondary} />
+                    <Text style={styles.panelRowText}>Edit name and description</Text>
+                  </Pressable>
+                )}
                 {canRecolor && (
                   <>
                     <View style={styles.paletteRow}>
@@ -266,7 +323,7 @@ function Section({
                         );
                       })}
                     </View>
-                    {!!onResetColor && cal.colorIsLocalOverride && (
+                    {!!onResetColor && cal.isShared && cal.colorIsLocalOverride && (
                       <Pressable
                         onPress={() => { onExpand(null); onResetColor(cal); }}
                         style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
@@ -276,6 +333,33 @@ function Section({
                       </Pressable>
                     )}
                   </>
+                )}
+                {canShare && (
+                  <Pressable
+                    onPress={() => { onExpand(null); onShare!(cal); }}
+                    style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
+                  >
+                    <Share2 size={16} color={c.textSecondary} />
+                    <Text style={styles.panelRowText}>Share…</Text>
+                  </Pressable>
+                )}
+                {canClear && (
+                  <Pressable
+                    onPress={() => { onExpand(null); onClear!(cal); }}
+                    style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
+                  >
+                    <Eraser size={16} color={c.textSecondary} />
+                    <Text style={styles.panelRowText}>Remove all events</Text>
+                  </Pressable>
+                )}
+                {canDelete && (
+                  <Pressable
+                    onPress={() => { onExpand(null); onDelete!(cal); }}
+                    style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
+                  >
+                    <Trash2 size={16} color={c.error} />
+                    <Text style={[styles.panelRowText, { color: c.error }]}>Delete calendar</Text>
+                  </Pressable>
                 )}
               </View>
             )}

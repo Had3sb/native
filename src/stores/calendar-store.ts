@@ -1,8 +1,13 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { Calendar, CalendarEvent, StateChange } from '../api/types';
+import type { Calendar, CalendarEvent, CalendarRights, StateChange } from '../api/types';
 import {
+  type CalendarUpdates,
+  updateCalendar as apiUpdateCalendar,
+  deleteCalendar as apiDeleteCalendar,
+  clearCalendarEvents as apiClearCalendarEvents,
+  setCalendarShare as apiSetCalendarShare,
   getCalendars as fetchCalendars,
   queryEvents,
   getEvents as fetchEvents,
@@ -108,7 +113,11 @@ export interface CalendarState {
     replyTo?: Record<string, string> | null,
   ) => Promise<void>;
   importEvents: (events: Partial<CalendarEvent>[], calendarId: string) => Promise<number>;
-  createCalendar: (name: string, color?: string) => Promise<Calendar>;
+  createCalendar: (name: string, color?: string, description?: string) => Promise<Calendar>;
+  updateCalendar: (id: string, updates: CalendarUpdates) => Promise<void>;
+  removeCalendar: (id: string) => Promise<void>;
+  clearCalendarEvents: (id: string) => Promise<number>;
+  shareCalendar: (id: string, principalId: string, rights: CalendarRights | null) => Promise<void>;
   setDefaultCalendar: (id: string) => Promise<void>;
   // Tasks
   createTask: (task: Partial<CalendarEvent>, calendarId: string) => Promise<void>;
@@ -508,10 +517,50 @@ export const useCalendarStore = create<CalendarState>()(
     return count;
   },
 
-  createCalendar: async (name, color) => {
-    const created = await apiCreateCalendar(name, color);
+  createCalendar: async (name, color, description) => {
+    const created = await apiCreateCalendar(name, color, description);
     set({ calendars: [...get().calendars, created] });
     return created;
+  },
+
+  updateCalendar: async (id, updates) => {
+    const cal = get().calendars.find((c) => c.id === id);
+    await apiUpdateCalendar(cal?.originalId || id, updates, cal?.accountId);
+    set({
+      calendars: get().calendars.map((c) => (c.id === id ? { ...c, ...updates } as Calendar : c)),
+    });
+  },
+
+  removeCalendar: async (id) => {
+    const cal = get().calendars.find((c) => c.id === id);
+    await apiDeleteCalendar(cal?.originalId || id, cal?.accountId);
+    set({
+      calendars: get().calendars.filter((c) => c.id !== id),
+      events: get().events.filter((e) => !e.calendarIds?.[id]),
+      tasks: get().tasks.filter((t) => !t.calendarIds?.[id]),
+      hiddenCalendarIds: get().hiddenCalendarIds.filter((x) => x !== id),
+    });
+  },
+
+  clearCalendarEvents: async (id) => {
+    const cal = get().calendars.find((c) => c.id === id);
+    const removed = await apiClearCalendarEvents(cal?.originalId || id, cal?.accountId);
+    await get().refresh();
+    return removed;
+  },
+
+  shareCalendar: async (id, principalId, rights) => {
+    const cal = get().calendars.find((c) => c.id === id);
+    await apiSetCalendarShare(cal?.originalId || id, principalId, rights, cal?.accountId);
+    set({
+      calendars: get().calendars.map((c) => {
+        if (c.id !== id) return c;
+        const next = { ...(c.shareWith ?? {}) };
+        if (rights === null) delete next[principalId];
+        else next[principalId] = rights;
+        return { ...c, shareWith: next };
+      }),
+    });
   },
 
   setDefaultCalendar: async (id) => {

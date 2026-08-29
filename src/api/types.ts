@@ -544,6 +544,8 @@ export interface Calendar {
   isDefault?: boolean;
   sortOrder?: number;
   myRights?: CalendarRights;
+  // Principals this (owned) calendar is shared with and their rights.
+  shareWith?: Record<string, CalendarRights> | null;
   // Client-only: JMAP account the calendar was fetched from. Absent for the
   // primary account; set for calendars shared with the user.
   accountId?: string;
