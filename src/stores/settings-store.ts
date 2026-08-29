@@ -77,7 +77,8 @@ export function normalizeBottomQuickActions(value: unknown): QuickAction[] {
 }
 export type ArchiveMode = 'single' | 'year' | 'month';
 export type CalendarView = 'month' | 'week' | 'day' | 'agenda';
-export type FirstDayOfWeek = 0 | 1;
+// 0 = Sunday, 1 = Monday, 6 = Saturday (same values as the webmail).
+export type FirstDayOfWeek = 0 | 1 | 6;
 export type TimeFormat = '12h' | '24h';
 // Email-list date rendering style. Mirrors the webmail `dateFormat` setting:
 //   smart    — locale-aware, age-bucketed (today→time, this week→weekday+time, older→date)

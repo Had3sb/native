@@ -5,6 +5,7 @@ import {
   endOfMonth,
   endOfWeek,
   format,
+  getISOWeek,
   getWeek,
   isSameDay,
   isSameMonth,
@@ -19,11 +20,14 @@ import {
   buildEventDayIndex,
   eventsOnDayFromIndex,
   getEventColor,
+  getEventStartDate,
+  timePattern,
   type EventDayIndex,
+  type TimeFormat,
 } from '../../lib/calendar-utils';
+import { useCalendarLocale } from '../../lib/calendar-locale';
 
-const SUN_FIRST = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-const MON_FIRST = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+type WeekStart = 0 | 1 | 6;
 
 interface MonthViewProps {
   currentDate: Date;
@@ -31,10 +35,21 @@ interface MonthViewProps {
   events: CalendarEvent[];
   calendars: Calendar[];
   eventsByDay?: EventDayIndex;
-  weekStartsOn?: 0 | 1;
+  weekStartsOn?: WeekStart;
   showWeekNumbers?: boolean;
+  // Render compact event chips (title + start time) instead of dots (#666).
+  showTimeInMonthView?: boolean;
+  timeFormat?: TimeFormat;
   onSelectDate: (date: Date) => void;
   onLongPressDate?: (date: Date) => void;
+}
+
+// ISO week numbers when the week starts on Monday (ISO 8601 weeks do), else
+// the locale-style numbering with the given start day — plain
+// `getWeek(date, { weekStartsOn })` is not ISO and drifts around New Year.
+export function weekNumberFor(date: Date, weekStartsOn: WeekStart): number {
+  if (weekStartsOn === 1) return getISOWeek(date);
+  return getWeek(date, { weekStartsOn });
 }
 
 function MonthViewInner({
@@ -45,12 +60,18 @@ function MonthViewInner({
   eventsByDay,
   weekStartsOn = 0,
   showWeekNumbers = false,
+  showTimeInMonthView = false,
+  timeFormat,
   onSelectDate,
   onLongPressDate,
 }: MonthViewProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
-  const weekdayLabels = weekStartsOn === 1 ? MON_FIRST : SUN_FIRST;
+  const { locale } = useCalendarLocale();
+  const weekdayLabels = React.useMemo(() => {
+    const start = startOfWeek(new Date(), { weekStartsOn });
+    return Array.from({ length: 7 }, (_, i) => format(addDays(start, i), 'EEEEE', { locale }));
+  }, [weekStartsOn, locale]);
   const index = React.useMemo(
     () => eventsByDay ?? buildEventDayIndex(events),
     [eventsByDay, events],
@@ -82,13 +103,15 @@ function MonthViewInner({
     const selected = isSameDay(d, selectedDate);
     const dayEvents = eventsOnDayFromIndex(index, d);
     const MAX_DOTS = dayEvents.length > 3 ? 2 : 3;
-    const visibleDots = dayEvents.slice(0, MAX_DOTS);
-    const overflow = Math.max(0, dayEvents.length - MAX_DOTS);
+    const MAX_CHIPS = dayEvents.length > 2 ? 1 : 2;
+    const maxVisible = showTimeInMonthView ? MAX_CHIPS : MAX_DOTS;
+    const visible = dayEvents.slice(0, maxVisible);
+    const overflow = Math.max(0, dayEvents.length - maxVisible);
 
     return (
       <Pressable
         key={key}
-        style={[styles.dayCell, flexLayout && styles.dayCellFlex]}
+        style={[styles.dayCell, flexLayout && styles.dayCellFlex, showTimeInMonthView && styles.dayCellTall]}
         onPress={() => onSelectDate(d)}
         onLongPress={onLongPressDate ? () => onLongPressDate(d) : undefined}
       >
@@ -106,14 +129,37 @@ function MonthViewInner({
             {format(d, 'd')}
           </Text>
         </View>
-        {dayEvents.length > 0 && (
+        {dayEvents.length > 0 && !showTimeInMonthView && (
           <View style={styles.dotsRow}>
-            {visibleDots.map((event, idx) => (
+            {visible.map((event, idx) => (
               <View
                 key={`${event.id}-${idx}`}
                 style={[styles.dot, { backgroundColor: getEventColor(event, calendars) }]}
               />
             ))}
+            {overflow > 0 && (
+              <Text style={styles.overflowText}>+{overflow}</Text>
+            )}
+          </View>
+        )}
+        {dayEvents.length > 0 && showTimeInMonthView && (
+          <View style={styles.chipsCol}>
+            {visible.map((event, idx) => {
+              const color = getEventColor(event, calendars);
+              const cancelled = event.status === 'cancelled';
+              return (
+                <View key={`${event.id}-${idx}`} style={[styles.chip, { backgroundColor: color }]}>
+                  <Text
+                    style={[styles.chipText, cancelled && styles.chipTextCancelled]}
+                    numberOfLines={1}
+                  >
+                    {event.showWithoutTime
+                      ? (event.title || '')
+                      : `${format(getEventStartDate(event), timePattern(timeFormat), { locale })} ${event.title || ''}`}
+                  </Text>
+                </View>
+              );
+            })}
             {overflow > 0 && (
               <Text style={styles.overflowText}>+{overflow}</Text>
             )}
@@ -134,7 +180,7 @@ function MonthViewInner({
       {showWeekNumbers ? (
         rows.map((row, rowIdx) => (
           <View key={rowIdx} style={styles.weekRow}>
-            <Text style={styles.weekNumberCell}>{getWeek(row[0], { weekStartsOn })}</Text>
+            <Text style={styles.weekNumberCell}>{weekNumberFor(row[0], weekStartsOn)}</Text>
             {row.map((d, i) => renderDay(d, `${rowIdx}-${i}`, true))}
           </View>
         ))
@@ -160,7 +206,7 @@ function makeStyles(c: ThemePalette) {
     color: c.textMuted,
   },
   daysGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  weekRow: { flexDirection: 'row', alignItems: 'center' },
+  weekRow: { flexDirection: 'row', alignItems: 'flex-start' },
   weekNumberLabel: {
     width: 24,
     textAlign: 'center',
@@ -176,6 +222,7 @@ function makeStyles(c: ThemePalette) {
   },
   dayCell: { width: '14.28%', alignItems: 'center', paddingVertical: 4 },
   dayCellFlex: { width: undefined, flex: 1 },
+  dayCellTall: { minHeight: 74, paddingHorizontal: 1 },
   dayNumber: {
     width: 36,
     height: 36,
@@ -204,11 +251,20 @@ function makeStyles(c: ThemePalette) {
     height: componentSizes.eventDot,
     borderRadius: componentSizes.eventDot / 2,
   },
+  chipsCol: { width: '100%', gap: 1, marginTop: 2, alignItems: 'stretch' },
+  chip: {
+    borderRadius: radius.xs,
+    paddingHorizontal: 2,
+    paddingVertical: 1,
+  },
+  chipText: { color: c.textInverse, fontSize: 9, lineHeight: 11 },
+  chipTextCancelled: { textDecorationLine: 'line-through' },
   overflowText: {
     color: c.textMuted,
     fontSize: 9,
     lineHeight: 10,
     marginLeft: 1,
+    textAlign: 'center',
   },
   });
 }

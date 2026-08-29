@@ -115,12 +115,12 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `if (!participantId || participantId.includes('..')) throw` (`src/stores/calendar-store.ts:332-334`); a server-generated id like `a..b` cannot RSVP.
   - Fix hint: drop the `..` check.
 
-- [ ] **Invitation banner: no trust assessment, no METHOD from Content-Type / raw ICS, no inline body-part detection** — `P2` — `partial`
+- [x] **Invitation banner: no trust assessment, no METHOD from Content-Type / raw ICS, no inline body-part detection** — `P2` — `partial` — fixed in 8206893 (auth results parsed from `email.headers`)
   - What WEB does: `getInvitationTrustAssessment` (DMARC/DKIM/SPF + sender/organizer mismatch -> trusted/caution/warning banner), `getInvitationMethod` reads `method=` from the attachment/body Content-Type, then `extractMethodFromRawIcs`, then infers; `findCalendarAttachment` also walks `textBody`/`htmlBody` sub-parts (ref `lib/calendar-invitation.ts:341-446`, changelog 1.6.x "RSVP with trust assessment").
   - What RN does: `inferInvitationMethod(parsed)` only (`src/components/email/CalendarInvitationBanner.tsx:62`; `extractMethodFromRawIcs` exists at `src/lib/calendar-invitation.ts:103-106` but is unused); `findCalendarAttachment` checks `email.attachments` only (`:139-148`); no trust UI. A spoofed invitation from an unauthenticated sender looks identical to a real one, and a REPLY/CANCEL whose ICS carries no participants is treated as `unknown` and offered "Add to calendar".
   - Fix hint: port `getInvitationTrustAssessment` (RN `Email` has `authenticationResults`?; if not, add to the fetched properties) and show a coloured banner + reason; read `attachment.type` params and fall back to downloading the blob text for `METHOD:`.
 
-- [ ] **Invitation banner imports into the first writable calendar, not the default calendar, and parses against the primary account** — `P3` — `partial`
+- [x] **Invitation banner imports into the first writable calendar, not the default calendar, and parses against the primary account** — `P3` — `partial` — fixed in 3fd5f10 + 8206893
   - What WEB does: imports into the default calendar of the account that owns the email; shared-folder emails are parsed against the folder owner (#867) and multi-account lookups are routed by source account (#847) (changelog 1.9.0).
   - What RN does: `calendars.find(cal => !cal.myRights || cal.myRights.mayWrite !== false)` (`src/components/email/CalendarInvitationBanner.tsx:96`) and `parseCalendarBlob(attachment.blobId)` on `jmapClient.accountId` (`:59`, `src/api/calendar.ts:355-372`). RN shows only the active account's mailboxes, so #847/#867 are largely N/A; the "first writable" pick is wrong when a subscription calendar sorts first.
   - Fix hint: prefer `cal.isDefault && !cal.isShared`, exclude subscription/birthday calendars; pass `email.accountId` (if RN exposes shared mailboxes later) to `parseCalendarBlob`.

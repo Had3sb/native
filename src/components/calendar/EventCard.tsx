@@ -11,6 +11,7 @@ import {
   timePattern,
   type TimeFormat,
 } from '../../lib/calendar-utils';
+import { useCalendarLocale } from '../../lib/calendar-locale';
 
 interface EventCardProps {
   event: CalendarEvent;
@@ -24,19 +25,19 @@ function participantCount(event: CalendarEvent): number {
   return event.participants ? Object.keys(event.participants).length : 0;
 }
 
-function formatTimeRange(event: CalendarEvent, timeFormat?: TimeFormat): string {
-  const { start, end, allDay } = eventTimeRange(event);
-  if (allDay) return 'All day';
-  const fmt = timePattern(timeFormat);
-  return `${format(start, fmt)} – ${format(end, fmt)}`;
-}
-
 export function EventCard({ event, calendars, timeFormat, onPress, onLongPress }: EventCardProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const { locale, t } = useCalendarLocale();
   const color = getEventColor(event, calendars);
-  const time = formatTimeRange(event, timeFormat);
+  const { start, end, allDay } = eventTimeRange(event);
+  const fmt = timePattern(timeFormat);
+  const time = allDay
+    ? t('calendar.events.all_day', 'All day')
+    : `${format(start, fmt, { locale })} – ${format(end, fmt, { locale })}`;
   const count = participantCount(event);
+  const location = event.locations ? Object.values(event.locations)[0]?.name : undefined;
+  const cancelled = event.status === 'cancelled';
 
   return (
     <Pressable
@@ -47,12 +48,17 @@ export function EventCard({ event, calendars, timeFormat, onPress, onLongPress }
       <View style={[styles.colorBar, { backgroundColor: color }]} />
       <View style={styles.body}>
         <View style={styles.headerRow}>
-          <Text style={styles.title} numberOfLines={1}>
-            {event.title || 'Untitled'}
+          <Text style={[styles.title, cancelled && styles.titleCancelled]} numberOfLines={1}>
+            {event.title || t('calendar.events.no_title', '(No title)')}
           </Text>
           {event.showWithoutTime && (
             <View style={styles.allDayBadge}>
-              <Text style={styles.allDayText}>All day</Text>
+              <Text style={styles.allDayText}>{t('calendar.events.all_day', 'All day')}</Text>
+            </View>
+          )}
+          {event.status === 'tentative' && (
+            <View style={styles.allDayBadge}>
+              <Text style={styles.allDayText}>{t('calendar.detail.tentative', 'Tentative')}</Text>
             </View>
           )}
         </View>
@@ -62,18 +68,20 @@ export function EventCard({ event, calendars, timeFormat, onPress, onLongPress }
             <Text style={styles.detailText}>{time}</Text>
           </View>
         )}
-        {event.description ? (
+        {location ? (
           <View style={styles.detailRow}>
             <MapPin size={12} color={c.textMuted} />
             <Text style={styles.detailText} numberOfLines={1}>
-              {event.description}
+              {location}
             </Text>
           </View>
         ) : null}
         {count > 0 && (
           <View style={styles.detailRow}>
             <Users size={12} color={c.textMuted} />
-            <Text style={styles.detailText}>{count} participants</Text>
+            <Text style={styles.detailText}>
+              {count} {t('calendar.participants.title', 'Participants').toLowerCase()}
+            </Text>
           </View>
         )}
       </View>
@@ -103,6 +111,7 @@ function makeStyles(c: ThemePalette) {
     gap: spacing.sm,
   },
   title: { ...typography.bodyMedium, color: c.text, flex: 1 },
+  titleCancelled: { textDecorationLine: 'line-through', color: c.textMuted },
   allDayBadge: {
     backgroundColor: c.primaryBg,
     paddingHorizontal: 8,

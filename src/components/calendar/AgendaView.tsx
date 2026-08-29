@@ -1,6 +1,6 @@
 import React from 'react';
 import { SectionList, StyleSheet, Text, View } from 'react-native';
-import { addDays, format, isSameDay, isToday, isTomorrow, parseISO, startOfDay } from 'date-fns';
+import { addDays, format, isSameDay, isToday, isTomorrow, parseISO, startOfDay, type Locale } from 'date-fns';
 import { CalendarDays } from 'lucide-react-native';
 import type { Calendar, CalendarEvent } from '../../api/types';
 import { spacing, typography, type ThemePalette } from '../../theme/tokens';
@@ -12,6 +12,7 @@ import {
   type EventDayIndex,
   type TimeFormat,
 } from '../../lib/calendar-utils';
+import { useCalendarLocale } from '../../lib/calendar-locale';
 import { EventCard } from './EventCard';
 
 interface AgendaViewProps {
@@ -30,10 +31,14 @@ interface DaySection {
   data: CalendarEvent[];
 }
 
-function formatDayHeader(date: Date): string {
-  if (isToday(date)) return 'Today';
-  if (isTomorrow(date)) return 'Tomorrow';
-  return format(date, 'EEEE, MMM d');
+function formatDayHeader(
+  date: Date,
+  t: (key: string, fallback?: string) => string,
+  locale: Locale,
+): string {
+  if (isToday(date)) return t('calendar.events.today_header', 'Today');
+  if (isTomorrow(date)) return t('calendar.events.tomorrow_header', 'Tomorrow');
+  return format(date, 'EEEE, MMM d', { locale });
 }
 
 export function AgendaView({
@@ -47,6 +52,7 @@ export function AgendaView({
 }: AgendaViewProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const { locale, t } = useCalendarLocale();
   const index = React.useMemo(
     () => eventsByDay ?? buildEventDayIndex(events),
     [eventsByDay, events],
@@ -76,20 +82,22 @@ export function AgendaView({
     return [...days.values()]
       .sort((a, b) => a.getTime() - b.getTime())
       .map((day) => ({
-        title: formatDayHeader(day),
+        title: formatDayHeader(day, t, locale),
         date: day,
         // Buckets are pre-sorted by buildEventDayIndex (all-day first, then by
         // start, then title), so no extra sort is needed here.
         data: eventsOnDayFromIndex(index, day),
       }));
-  }, [fromDate, daysAhead, index]);
+  }, [fromDate, daysAhead, index, t, locale]);
 
   if (sections.length === 0) {
     return (
       <View style={styles.empty}>
         <CalendarDays size={40} color={c.surfaceActive} />
-        <Text style={styles.emptyTitle}>No upcoming events</Text>
-        <Text style={styles.emptySubtitle}>The next {daysAhead} days are clear.</Text>
+        <Text style={styles.emptyTitle}>{t('calendar.agenda.no_upcoming', 'No upcoming events')}</Text>
+        <Text style={styles.emptySubtitle}>
+          {t('calendar.agenda.days_clear', 'The next {count} days are clear.').replace('{count}', String(daysAhead))}
+        </Text>
       </View>
     );
   }
@@ -107,7 +115,7 @@ export function AgendaView({
             <Text style={[styles.sectionTitle, today && styles.sectionTitleToday]}>
               {section.title}
             </Text>
-            <Text style={styles.sectionSub}>{format(section.date, 'MMM d')}</Text>
+            <Text style={styles.sectionSub}>{format(section.date, 'MMM d', { locale })}</Text>
           </View>
         );
       }}
@@ -119,7 +127,7 @@ export function AgendaView({
       renderSectionFooter={({ section }) =>
         section.data.length === 0 ? (
           <View style={styles.emptyDayWrap}>
-            <Text style={styles.emptyDayText}>No events</Text>
+            <Text style={styles.emptyDayText}>{t('calendar.events.no_events', 'No events')}</Text>
           </View>
         ) : null
       }

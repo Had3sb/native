@@ -472,9 +472,11 @@ export function getEventColor(
  * owning JMAP account + the calendar id so it stays unique across accounts.
  */
 export function sharedCalendarColorKey(
-  cal: Pick<Calendar, 'id' | 'accountId'>,
+  cal: Pick<Calendar, 'id' | 'accountId' | 'originalId'>,
 ): string {
-  return `${cal.accountId ?? ''}|${cal.id}`;
+  // Keyed on the raw server id (like webmail) so the key doesn't depend on
+  // the store's `${accountId}:${id}` namespacing format.
+  return `${cal.accountId ?? ''}|${cal.originalId ?? cal.id}`;
 }
 
 /**

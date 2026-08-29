@@ -10,6 +10,7 @@ import { addDays, format, isSameDay, isToday, startOfWeek } from 'date-fns';
 import type { Calendar, CalendarEvent } from '../../api/types';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
+import { useCalendarLocale } from '../../lib/calendar-locale';
 import {
   buildEventDayIndex,
   buildTimedFullDayWeekSegments,
@@ -37,7 +38,7 @@ interface WeekViewProps {
   onSelectDate?: (date: Date) => void;
   onSelectEvent?: (event: CalendarEvent) => void;
   onCreateAtTime?: (date: Date) => void;
-  weekStartsOn?: 0 | 1;
+  weekStartsOn?: 0 | 1 | 6;
   timeFormat?: '12h' | '24h';
 }
 
@@ -54,6 +55,7 @@ function WeekViewInner({
 }: WeekViewProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const { locale } = useCalendarLocale();
   const scrollRef = React.useRef<ScrollView>(null);
 
   const index = React.useMemo(
@@ -136,7 +138,7 @@ function WeekViewInner({
         style={styles.dayHeaderCell}
         onPress={() => onSelectDate?.(day)}
       >
-        <Text style={styles.dayHeaderWeekday}>{format(day, 'EEE')}</Text>
+        <Text style={styles.dayHeaderWeekday}>{format(day, 'EEE', { locale })}</Text>
         <View
           style={[
             styles.dayHeaderNumber,
@@ -280,7 +282,7 @@ function WeekViewInner({
                           </Text>
                           {height > 32 && (
                             <Text style={styles.eventBlockTime} numberOfLines={1}>
-                              {minutesToTimeLabel(startMinutes)}
+                              {minutesToTimeLabel(startMinutes, timeFormat)}
                             </Text>
                           )}
                         </Pressable>
@@ -312,10 +314,17 @@ function WeekViewInner({
 
 export const WeekView = React.memo(WeekViewInner);
 
-function minutesToTimeLabel(minutes: number): string {
+// Event-block start label; honours the 12h/24h setting like the gutter does
+// (webmail's formatSnapTime).
+function minutesToTimeLabel(minutes: number, timeFormat: '12h' | '24h'): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+  const mm = m.toString().padStart(2, '0');
+  if (timeFormat === '12h') {
+    const suffix = h < 12 ? 'AM' : 'PM';
+    return `${(h % 12) || 12}:${mm} ${suffix}`;
+  }
+  return `${h.toString().padStart(2, '0')}:${mm}`;
 }
 
 function makeStyles(c: ThemePalette) {

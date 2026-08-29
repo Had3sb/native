@@ -33,7 +33,9 @@ import {
   subMonths,
   addWeeks,
   subWeeks,
+  type Locale,
 } from 'date-fns';
+import { useCalendarLocale } from '../lib/calendar-locale';
 import { spacing, radius, typography, type ThemePalette } from '../theme/tokens';
 import { useColors } from '../theme/colors';
 import { Button } from '../components';
@@ -89,10 +91,12 @@ type PendingAction =
 const AGENDA_DAYS = 30;
 const RANGE_BUFFER_DAYS = 14;
 
+type WeekStart = 0 | 1 | 6;
+
 function rangeForView(
   viewMode: ViewMode,
   currentDate: Date,
-  weekStartsOn: 0 | 1,
+  weekStartsOn: WeekStart,
 ): { after: Date; before: Date } {
   if (viewMode === 'month') {
     const start = startOfWeek(startOfMonth(currentDate), { weekStartsOn });
@@ -113,18 +117,19 @@ function rangeForView(
 function headerTitle(
   viewMode: ViewMode,
   currentDate: Date,
-  weekStartsOn: 0 | 1,
+  weekStartsOn: WeekStart,
+  locale: Locale,
 ): string {
-  if (viewMode === 'month') return format(currentDate, 'MMMM yyyy');
+  if (viewMode === 'month') return format(currentDate, 'MMMM yyyy', { locale });
   if (viewMode === 'week') {
     const start = startOfWeek(currentDate, { weekStartsOn });
     const end = endOfWeek(currentDate, { weekStartsOn });
     if (start.getMonth() === end.getMonth()) {
-      return `${format(start, 'MMM d')} – ${format(end, 'd, yyyy')}`;
+      return `${format(start, 'MMM d', { locale })} – ${format(end, 'd, yyyy', { locale })}`;
     }
-    return `${format(start, 'MMM d')} – ${format(end, 'MMM d, yyyy')}`;
+    return `${format(start, 'MMM d', { locale })} – ${format(end, 'MMM d, yyyy', { locale })}`;
   }
-  return format(currentDate, 'MMMM yyyy');
+  return format(currentDate, 'MMMM yyyy', { locale });
 }
 
 export default function CalendarScreen() {
@@ -132,7 +137,9 @@ export default function CalendarScreen() {
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const t = useLocaleStore((s) => s.t);
   const currentUserEmails = useUserCalendarAddresses();
+  const { locale } = useCalendarLocale();
   const calendarDefaultView = useSettingsStore((s) => s.calendarDefaultView);
+  const calendarShowTimeInMonth = useSettingsStore((s) => s.calendarShowTimeInMonth);
   const calendarFirstDayOfWeek = useSettingsStore((s) => s.calendarFirstDayOfWeek);
   const calendarShowWeekNumbers = useSettingsStore((s) => s.calendarShowWeekNumbers);
   const calendarTimeFormat = useSettingsStore((s) => s.calendarTimeFormat);
@@ -626,9 +633,13 @@ export default function CalendarScreen() {
           <Menu size={20} color={c.text} />
         </Pressable>
         <View style={styles.headerLeft}>
-          <Text style={styles.headerTitle}>{headerTitle(viewMode, currentDate, calendarFirstDayOfWeek)}</Text>
+          <Text style={styles.headerTitle}>
+            {headerTitle(viewMode, currentDate, calendarFirstDayOfWeek, locale)}
+          </Text>
           <Text style={styles.headerSubtitle}>
-            {isSelectedToday ? 'Today' : format(selectedDate, 'EEE, MMM d')}
+            {isSelectedToday
+              ? t('calendar.views.today', 'Today')
+              : format(selectedDate, 'EEE, MMM d', { locale })}
           </Text>
         </View>
         <View style={styles.headerActions}>
@@ -668,7 +679,7 @@ export default function CalendarScreen() {
           <ChevronLeft size={20} color={c.text} />
         </Pressable>
         <Button variant="outline" size="sm" onPress={goToday}>
-          Today
+          {t('calendar.views.today', 'Today')}
         </Button>
         <Pressable onPress={goNext} style={styles.navBtn} hitSlop={8}>
           <ChevronRight size={20} color={c.text} />
@@ -691,6 +702,8 @@ export default function CalendarScreen() {
             calendars={calendars}
             weekStartsOn={calendarFirstDayOfWeek}
             showWeekNumbers={calendarShowWeekNumbers}
+            showTimeInMonthView={calendarShowTimeInMonth}
+            timeFormat={calendarTimeFormat}
             onSelectDate={handleSelectDate}
             onLongPressDate={openCreate}
           />
@@ -724,7 +737,9 @@ export default function CalendarScreen() {
           <View style={styles.dayDetail}>
             <View style={styles.dayDetailHeader}>
               <Text style={styles.dayDetailTitle}>
-                {isSelectedToday ? "Today's Events" : format(selectedDate, 'EEEE, MMMM d')}
+                {isSelectedToday
+                  ? t('calendar.events.today_header', 'Today')
+                  : format(selectedDate, 'EEEE, MMMM d', { locale })}
               </Text>
               {loading && <ActivityIndicator size="small" color={c.textMuted} />}
             </View>
@@ -870,6 +885,7 @@ function DayEventList({
 }) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const dayEvents = React.useMemo(
     () => eventsOnDayFromIndex(eventsByDay, date),
     [eventsByDay, date],
@@ -883,8 +899,8 @@ function DayEventList({
         }
       >
         <CalendarDays size={32} color={c.surfaceActive} />
-        <Text style={styles.emptyTitle}>No events</Text>
-        <Text style={styles.emptySubtitle}>Tap + to create one</Text>
+        <Text style={styles.emptyTitle}>{t('calendar.events.no_events', 'No events')}</Text>
+        <Text style={styles.emptySubtitle}>{t('calendar.events.tap_to_create', 'Tap + to create one')}</Text>
       </ScrollView>
     );
   }

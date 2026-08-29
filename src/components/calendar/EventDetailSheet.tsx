@@ -28,7 +28,7 @@ import {
   Video,
   X,
 } from 'lucide-react-native';
-import { format } from 'date-fns';
+import { format, type Locale } from 'date-fns';
 import type { Calendar, CalendarEvent } from '../../api/types';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
@@ -47,6 +47,7 @@ import {
   isOrganizer,
 } from '../../lib/calendar-participants';
 import { getEventEditability } from '../../lib/calendar-editability';
+import { useCalendarLocale } from '../../lib/calendar-locale';
 import { useSheetDrag } from '../../lib/use-sheet-drag';
 
 type RsvpStatus = 'accepted' | 'declined' | 'tentative';
@@ -66,47 +67,56 @@ interface EventDetailSheetProps {
   onRsvp?: (event: CalendarEvent, participantId: string, status: RsvpStatus) => void | Promise<void>;
 }
 
-function formatRange(event: CalendarEvent, timeFormat?: TimeFormat): string {
+function formatRange(event: CalendarEvent, timeFormat: TimeFormat | undefined, locale: Locale): string {
   const { start, allDay } = eventTimeRange(event);
   // All-day events store an exclusive end (next day 00:00); show the
   // inclusive last day so a one-day event doesn't read as two (#318).
   const end = allDay ? getEventDisplayEndDate(event) : eventTimeRange(event).end;
+  const opts = { locale };
   if (allDay) {
     if (
       start.getFullYear() === end.getFullYear() &&
       start.getMonth() === end.getMonth() &&
       start.getDate() === end.getDate()
     ) {
-      return format(start, 'EEEE, MMM d, yyyy');
+      return format(start, 'EEEE, MMM d, yyyy', opts);
     }
-    return `${format(start, 'MMM d')} – ${format(end, 'MMM d, yyyy')}`;
+    return `${format(start, 'MMM d', opts)} – ${format(end, 'MMM d, yyyy', opts)}`;
   }
-  const t = timePattern(timeFormat);
+  const tp = timePattern(timeFormat);
   const sameDay =
     start.getFullYear() === end.getFullYear() &&
     start.getMonth() === end.getMonth() &&
     start.getDate() === end.getDate();
   if (sameDay) {
-    return `${format(start, 'EEE, MMM d')} · ${format(start, t)} – ${format(end, t)}`;
+    return `${format(start, 'EEE, MMM d', opts)} · ${format(start, tp, opts)} – ${format(end, tp, opts)}`;
   }
-  return `${format(start, `MMM d, ${t}`)} – ${format(end, `MMM d, ${t}`)}`;
+  return `${format(start, `MMM d, ${tp}`, opts)} – ${format(end, `MMM d, ${tp}`, opts)}`;
 }
 
-function recurrenceLabel(event: CalendarEvent): string | null {
+type Translate = (key: string, fallback?: string) => string;
+
+function recurrenceLabel(event: CalendarEvent, t: Translate, locale: Locale): string | null {
   const rule = event.recurrenceRules?.[0];
   if (!rule) return null;
-  const map: Record<string, string> = {
-    daily: 'Daily',
-    weekly: 'Weekly',
-    monthly: 'Monthly',
-    yearly: 'Yearly',
+  const freq = rule.frequency.toLowerCase();
+  const unitKey: Record<string, [string, string]> = {
+    daily: ['calendar.recurrence.every_n_days', 'Every {count} days'],
+    weekly: ['calendar.recurrence.every_n_weeks', 'Every {count} weeks'],
+    monthly: ['calendar.recurrence.every_n_months', 'Every {count} months'],
+    yearly: ['calendar.recurrence.every_n_years', 'Every {count} years'],
   };
-  let label = map[rule.frequency] || rule.frequency;
-  if (rule.interval && rule.interval > 1) {
-    label = `Every ${rule.interval} ${rule.frequency}`;
+  let label: string;
+  if (rule.interval && rule.interval > 1 && unitKey[freq]) {
+    label = t(unitKey[freq][0], unitKey[freq][1]).replace('{count}', String(rule.interval));
+  } else {
+    label = t(`calendar.recurrence.${freq}`, rule.frequency);
   }
-  if (rule.until) label += ` until ${format(new Date(rule.until), 'MMM d, yyyy')}`;
-  else if (rule.count) label += ` for ${rule.count} occurrences`;
+  if (rule.until) {
+    label += ` · ${t('calendar.recurrence.until', 'Until')} ${format(new Date(rule.until), 'MMM d, yyyy', { locale })}`;
+  } else if (rule.count) {
+    label += ` · ${t('calendar.recurrence.occurrences', '{count} occurrences').replace('{count}', String(rule.count))}`;
+  }
   return label;
 }
 
@@ -123,6 +133,7 @@ export function EventDetailSheet({
   onRsvp,
 }: EventDetailSheetProps) {
   const c = useColors();
+  const { locale, t } = useCalendarLocale();
   const [rsvpBusy, setRsvpBusy] = React.useState(false);
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const slideY = React.useRef(new Animated.Value(Dimensions.get('window').height)).current;
@@ -171,8 +182,8 @@ export function EventDetailSheet({
   const color = getEventColor(event, calendars);
   const calendarId = getPrimaryCalendarId(event);
   const calendar = calendars.find((c) => c.id === calendarId);
-  const range = formatRange(event, timeFormat);
-  const recurrence = recurrenceLabel(event);
+  const range = formatRange(event, timeFormat, locale);
+  const recurrence = recurrenceLabel(event, t, locale);
   const reminders = alertsToReminders(event.alerts);
   const participants = getParticipantList(event);
   const location = event.locations ? Object.values(event.locations)[0]?.name : undefined;
@@ -231,7 +242,7 @@ export function EventDetailSheet({
               <View style={[styles.colorBar, { backgroundColor: color }]} />
               <View style={styles.headerText}>
                 <Text style={[styles.title, isCancelled && styles.titleCancelled]}>
-                  {event.title || 'Untitled'}
+                  {event.title || t('calendar.events.no_title', '(No title)')}
                 </Text>
                 {calendar && <Text style={styles.subtitle}>{calendar.name}</Text>}
               </View>
@@ -259,7 +270,7 @@ export function EventDetailSheet({
                   style={styles.joinBtn}
                   onPress={() => { void Linking.openURL(videoUri); }}
                 >
-                  <Text style={styles.joinBtnText}>Join video call</Text>
+                  <Text style={styles.joinBtnText}>{t('calendar.detail.open_link', 'Open link')}</Text>
                 </Pressable>
               </View>
             ) : null}
@@ -291,10 +302,10 @@ export function EventDetailSheet({
 
             {canRsvp && (
               <View style={styles.rsvpBlock}>
-                <Text style={styles.rsvpPrompt}>Going?</Text>
+                <Text style={styles.rsvpPrompt}>{t('calendar.participants.rsvp_label', 'Your response')}</Text>
                 <View style={styles.rsvpButtons}>
                   <RsvpButton
-                    label="Yes"
+                    label={t('calendar.participants.accepted', 'Accepted')}
                     icon={<Check size={16} color={myStatus === 'accepted' ? c.textInverse : c.success} />}
                     active={myStatus === 'accepted'}
                     activeColor={c.success}
@@ -302,7 +313,7 @@ export function EventDetailSheet({
                     onPress={() => doRsvp('accepted')}
                   />
                   <RsvpButton
-                    label="Maybe"
+                    label={t('calendar.participants.tentative', 'Tentative')}
                     icon={<HelpCircle size={16} color={myStatus === 'tentative' ? c.textInverse : c.warning} />}
                     active={myStatus === 'tentative'}
                     activeColor={c.warning}
@@ -310,7 +321,7 @@ export function EventDetailSheet({
                     onPress={() => doRsvp('tentative')}
                   />
                   <RsvpButton
-                    label="No"
+                    label={t('calendar.participants.declined', 'Declined')}
                     icon={<X size={16} color={myStatus === 'declined' ? c.textInverse : c.error} />}
                     active={myStatus === 'declined'}
                     activeColor={c.error}
@@ -326,7 +337,7 @@ export function EventDetailSheet({
                 <View style={styles.participantsHeader}>
                   <Users size={16} color={c.textMuted} />
                   <Text style={styles.participantsHeaderText}>
-                    {participants.length} participants
+                    {participants.length} {t('calendar.participants.title', 'Participants').toLowerCase()}
                   </Text>
                 </View>
                 {participants.map((p) => (
@@ -342,11 +353,13 @@ export function EventDetailSheet({
                     <Text style={styles.participantName} numberOfLines={1}>
                       {p.name || p.email || 'Unknown'}
                       {p.isOrganizer ? (
-                        <Text style={styles.participantOrganizer}> (organizer)</Text>
+                        <Text style={styles.participantOrganizer}>
+                          {' '}({t('calendar.participants.organizer', 'Organizer').toLowerCase()})
+                        </Text>
                       ) : null}
                     </Text>
                     <Text style={styles.participantStatus}>
-                      {p.isOrganizer ? '' : statusLabel(p.status)}
+                      {p.isOrganizer ? '' : statusLabel(p.status, t)}
                     </Text>
                   </View>
                 ))}
@@ -359,21 +372,21 @@ export function EventDetailSheet({
               {onEdit && canEdit && (
                 <ActionButton
                   icon={<Pencil size={18} color={c.text} />}
-                  label="Edit"
+                  label={t('calendar.participants.edit', 'Edit')}
                   onPress={() => onEdit(event)}
                 />
               )}
               {onDuplicate && (
                 <ActionButton
                   icon={<Copy size={18} color={c.text} />}
-                  label="Duplicate"
+                  label={t('calendar.events.duplicate', 'Duplicate')}
                   onPress={() => onDuplicate(event)}
                 />
               )}
               {onDelete && canEdit && (
                 <ActionButton
                   icon={<Trash2 size={18} color={c.error} />}
-                  label="Delete"
+                  label={t('calendar.management.delete', 'Delete')}
                   onPress={() => onDelete(event)}
                   destructive
                 />
@@ -482,16 +495,16 @@ function statusColor(c: ThemePalette, status?: string): string {
   }
 }
 
-function statusLabel(status?: string): string {
+function statusLabel(status: string | undefined, t: Translate): string {
   switch (status) {
     case 'accepted':
-      return 'Going';
+      return t('calendar.participants.accepted', 'Accepted');
     case 'declined':
-      return 'Declined';
+      return t('calendar.participants.declined', 'Declined');
     case 'tentative':
-      return 'Maybe';
+      return t('calendar.participants.tentative', 'Tentative');
     case 'needs-action':
-      return 'No reply';
+      return t('calendar.participants.needs_action', 'Needs action');
     default:
       return status || '';
   }

@@ -42,9 +42,12 @@ import {
   getEventEndDate,
   getEventStartDate,
   getPrimaryCalendarId,
+  timePattern,
 } from '../../lib/calendar-utils';
 import { getEffectiveTimeZone } from '../../lib/calendar-timezone';
+import { useSettingsStore } from '../../stores/settings-store';
 import { canCreateEventsIn } from '../../lib/calendar-editability';
+import { useCalendarLocale } from '../../lib/calendar-locale';
 import {
   alertsToReminders,
   remindersToAlerts,
@@ -65,13 +68,13 @@ import { RecurrenceEditor } from './RecurrenceEditor';
 
 type RecurrenceOption = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom';
 
-const RECURRENCE_OPTIONS: { value: RecurrenceOption; label: string }[] = [
-  { value: 'none', label: 'Does not repeat' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
-  { value: 'yearly', label: 'Yearly' },
-  { value: 'custom', label: 'Custom…' },
+const RECURRENCE_OPTIONS: { value: RecurrenceOption; key: string; fallback: string }[] = [
+  { value: 'none', key: 'calendar.recurrence.none', fallback: 'Does not repeat' },
+  { value: 'daily', key: 'calendar.recurrence.daily', fallback: 'Daily' },
+  { value: 'weekly', key: 'calendar.recurrence.weekly', fallback: 'Weekly' },
+  { value: 'monthly', key: 'calendar.recurrence.monthly', fallback: 'Monthly' },
+  { value: 'yearly', key: 'calendar.recurrence.yearly', fallback: 'Yearly' },
+  { value: 'custom', key: 'calendar.recurrence.custom', fallback: 'Custom…' },
 ];
 
 interface EventModalProps {
@@ -172,6 +175,9 @@ export function EventModal({
 }: EventModalProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const { locale, t } = useCalendarLocale();
+  const timeFormat = useSettingsStore((s) => s.calendarTimeFormat);
+  const timeLabelPattern = timePattern(timeFormat);
   const isEdit = !!event;
 
   const [title, setTitle] = React.useState('');
@@ -363,10 +369,13 @@ export function EventModal({
       return true;
     });
   }, [calendars, calendarId, event, isSubscriptionCalendar]);
+  const recurrenceOption = RECURRENCE_OPTIONS.find((o) => o.value === recurrence);
   const recurrenceLabel =
     recurrence === 'custom'
-      ? (customRule && buildRecurrenceSummary(customRule)) || 'Custom'
-      : RECURRENCE_OPTIONS.find((o) => o.value === recurrence)?.label || 'None';
+      ? (customRule && buildRecurrenceSummary(customRule)) || t('calendar.recurrence.custom', 'Custom…')
+      : recurrenceOption
+        ? t(recurrenceOption.key, recurrenceOption.fallback)
+        : t('calendar.recurrence.none', 'Does not repeat');
 
   const addReminder = (minutesBefore: number) => {
     setReminderPickerOpen(false);
@@ -395,7 +404,9 @@ export function EventModal({
           <Pressable onPress={onClose} hitSlop={8} style={styles.headerBtn}>
             <X size={20} color={c.text} />
           </Pressable>
-          <Text style={styles.headerTitle}>{isEdit ? 'Edit event' : 'New event'}</Text>
+          <Text style={styles.headerTitle}>
+            {isEdit ? t('calendar.events.edit', 'Edit event') : t('calendar.events.new_event', 'New event')}
+          </Text>
           <Button
             variant="default"
             size="sm"
@@ -403,7 +414,7 @@ export function EventModal({
             disabled={!title.trim() || !calendarId}
             loading={saving}
           >
-            Save
+            {t('calendar.form.save', 'Save')}
           </Button>
         </View>
 
@@ -415,14 +426,14 @@ export function EventModal({
           <TextInput
             value={title}
             onChangeText={setTitle}
-            placeholder="Title"
+            placeholder={t('calendar.form.title', 'Title')}
             placeholderTextColor={c.textMuted}
             style={styles.titleInput}
           />
 
           <Section
             icon={<CalendarIcon size={16} color={c.textMuted} />}
-            label="Calendar"
+            label={t('calendar.form.calendar_select', 'Calendar')}
           >
             <Pressable
               style={styles.fieldButton}
@@ -438,7 +449,7 @@ export function EventModal({
                   />
                 )}
                 <Text style={styles.fieldText}>
-                  {selectedCalendar?.name || 'Pick a calendar'}
+                  {selectedCalendar?.name || t('calendar.form.calendar_select', 'Calendar')}
                 </Text>
               </View>
             </Pressable>
@@ -469,9 +480,9 @@ export function EventModal({
             )}
           </Section>
 
-          <Section icon={<Clock size={16} color={c.textMuted} />} label="Time">
+          <Section icon={<Clock size={16} color={c.textMuted} />} label={t('calendar.form.time', 'Time')}>
             <View style={styles.allDayRow}>
-              <Text style={styles.fieldText}>All-day</Text>
+              <Text style={styles.fieldText}>{t('calendar.form.all_day_event', 'All-day event')}</Text>
               <Switch
                 value={allDay}
                 onValueChange={setAllDay}
@@ -481,47 +492,47 @@ export function EventModal({
             </View>
 
             <View style={styles.dateRow}>
-              <Text style={styles.dateLabel}>Starts</Text>
+              <Text style={styles.dateLabel}>{t('calendar.form.start_date', 'Start date')}</Text>
               <View style={styles.datePickers}>
                 <Pressable
                   style={styles.dateBtn}
                   onPress={() => setShowStartDate(true)}
                 >
-                  <Text style={styles.dateText}>{format(start, 'EEE, MMM d')}</Text>
+                  <Text style={styles.dateText}>{format(start, 'EEE, MMM d', { locale })}</Text>
                 </Pressable>
                 {!allDay && (
                   <Pressable
                     style={styles.dateBtn}
                     onPress={() => setShowStartTime(true)}
                   >
-                    <Text style={styles.dateText}>{format(start, 'HH:mm')}</Text>
+                    <Text style={styles.dateText}>{format(start, timeLabelPattern, { locale })}</Text>
                   </Pressable>
                 )}
               </View>
             </View>
 
             <View style={styles.dateRow}>
-              <Text style={styles.dateLabel}>Ends</Text>
+              <Text style={styles.dateLabel}>{t('calendar.form.end_date', 'End date')}</Text>
               <View style={styles.datePickers}>
                 <Pressable
                   style={styles.dateBtn}
                   onPress={() => setShowEndDate(true)}
                 >
-                  <Text style={styles.dateText}>{format(end, 'EEE, MMM d')}</Text>
+                  <Text style={styles.dateText}>{format(end, 'EEE, MMM d', { locale })}</Text>
                 </Pressable>
                 {!allDay && (
                   <Pressable
                     style={styles.dateBtn}
                     onPress={() => setShowEndTime(true)}
                   >
-                    <Text style={styles.dateText}>{format(end, 'HH:mm')}</Text>
+                    <Text style={styles.dateText}>{format(end, timeLabelPattern, { locale })}</Text>
                   </Pressable>
                 )}
               </View>
             </View>
           </Section>
 
-          <Section icon={<Repeat size={16} color={c.textMuted} />} label="Repeat">
+          <Section icon={<Repeat size={16} color={c.textMuted} />} label={t('calendar.recurrence.title', 'Recurrence')}>
             <Pressable
               style={styles.fieldButton}
               onPress={() => setRecurrenceOpen((v) => !v)}
@@ -548,7 +559,7 @@ export function EventModal({
                       setRecurrenceEditorOpen(false);
                     }}
                   >
-                    <Text style={styles.popoverRowText}>{opt.label}</Text>
+                    <Text style={styles.popoverRowText}>{t(opt.key, opt.fallback)}</Text>
                   </Pressable>
                 ))}
               </View>
@@ -567,12 +578,12 @@ export function EventModal({
             )}
             {recurrence === 'custom' && customRule && !recurrenceEditorOpen && (
               <Pressable style={styles.addRow} onPress={() => setRecurrenceEditorOpen(true)}>
-                <Text style={styles.addRowText}>Edit custom recurrence</Text>
+                <Text style={styles.addRowText}>{t('calendar.recurrence.edit_custom', 'Edit custom recurrence')}</Text>
               </Pressable>
             )}
           </Section>
 
-          <Section icon={<Bell size={16} color={c.textMuted} />} label="Reminders">
+          <Section icon={<Bell size={16} color={c.textMuted} />} label={t('calendar.alerts.title', 'Reminders')}>
             {reminders.length > 0 && (
               <View style={{ gap: spacing.xs }}>
                 {reminders.map((r) => (
@@ -596,7 +607,7 @@ export function EventModal({
               >
                 <Plus size={16} color={c.primary} />
                 <Text style={styles.addRowText}>
-                  {reminders.length === 0 ? 'Add reminder' : 'Add another reminder'}
+                  {t('calendar.alerts.add', 'Add reminder')}
                 </Text>
               </Pressable>
             )}
@@ -615,17 +626,17 @@ export function EventModal({
             )}
           </Section>
 
-          <Section icon={<MapPin size={16} color={c.textMuted} />} label="Location">
+          <Section icon={<MapPin size={16} color={c.textMuted} />} label={t('calendar.form.location', 'Location')}>
             <TextInput
               value={location}
               onChangeText={setLocation}
-              placeholder="Place or address"
+              placeholder={t('calendar.form.location_placeholder', 'Place or address')}
               placeholderTextColor={c.textMuted}
               style={styles.fieldButton}
             />
           </Section>
 
-          <Section icon={<Video size={16} color={c.textMuted} />} label="Video call">
+          <Section icon={<Video size={16} color={c.textMuted} />} label={t('calendar.form.meeting_link', 'Meeting link')}>
             <TextInput
               value={videoUrl}
               onChangeText={setVideoUrl}
@@ -640,12 +651,12 @@ export function EventModal({
 
           <Section
             icon={<AlignLeft size={16} color={c.textMuted} />}
-            label="Description"
+            label={t('calendar.form.description', 'Description')}
           >
             <TextInput
               value={description}
               onChangeText={setDescription}
-              placeholder="Notes, agenda…"
+              placeholder={t('calendar.form.description_placeholder', 'Notes, agenda…')}
               placeholderTextColor={c.textMuted}
               multiline
               style={styles.descriptionInput}
@@ -654,7 +665,7 @@ export function EventModal({
 
           <Section
             icon={<Users size={16} color={c.textMuted} />}
-            label="Participants"
+            label={t('calendar.participants.title', 'Participants')}
           >
             <ParticipantInput
               attendees={attendees}
@@ -674,7 +685,7 @@ export function EventModal({
               onPress={handleDelete}
             >
               <Trash2 size={16} color={c.error} />
-              <Text style={styles.deleteBtnText}>Delete event</Text>
+              <Text style={styles.deleteBtnText}>{t('calendar.events.delete', 'Delete event')}</Text>
             </Pressable>
           )}
         </ScrollView>

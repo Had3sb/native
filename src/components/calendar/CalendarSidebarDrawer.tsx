@@ -21,6 +21,7 @@ import { useAnimDuration } from '../../theme/dynamic';
 import { CALENDAR_COLOR_PALETTE, getCalendarColor } from '../../lib/calendar-utils';
 import { BIRTHDAY_CALENDAR_ID } from '../../lib/birthday-calendar';
 import { isWritableCalendar } from '../../lib/calendar-editability';
+import { useLocaleStore } from '../../stores/locale-store';
 
 interface CalendarSidebarDrawerProps {
   visible: boolean;
@@ -69,6 +70,7 @@ export function CalendarSidebarDrawer({
   const overlayOpacity = React.useRef(new Animated.Value(0)).current;
   const openDuration = useAnimDuration(240);
   const closeDuration = useAnimDuration(200);
+  const t = useLocaleStore((s) => s.t);
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -145,24 +147,24 @@ export function CalendarSidebarDrawer({
             <Pressable onPress={onClose} style={styles.headerClose} hitSlop={8}>
               <X size={20} color={c.text} />
             </Pressable>
-            <Text style={styles.headerTitle}>Calendars</Text>
+            <Text style={styles.headerTitle}>{t('calendar.my_calendars', 'Calendars')}</Text>
           </View>
 
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
             {calendars.length === 0 && (
-              <Text style={styles.empty}>No calendars yet.</Text>
+              <Text style={styles.empty}>{t('calendar.drawer.no_calendars', 'No calendars yet.')}</Text>
             )}
 
             {myCalendars.length > 0 && (
-              <Section title="My calendars" calendars={myCalendars} {...sectionProps} />
+              <Section title={t('calendar.drawer.my_calendars', 'My calendars')} calendars={myCalendars} {...sectionProps} />
             )}
 
             {sharedCalendars.length > 0 && (
-              <Section title="Shared with me" calendars={sharedCalendars} {...sectionProps} />
+              <Section title={t('calendar.drawer.shared_with_me', 'Shared with me')} calendars={sharedCalendars} {...sectionProps} />
             )}
 
             {subscribed.length > 0 && (
-              <Section title="Subscribed" calendars={subscribed} {...sectionProps} />
+              <Section title={t('calendar.drawer.subscribed', 'Subscribed')} calendars={subscribed} {...sectionProps} />
             )}
 
             {(onImport || onManageSubscriptions || onCreate) && (
@@ -173,7 +175,7 @@ export function CalendarSidebarDrawer({
                     style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
                   >
                     <Plus size={18} color={c.textSecondary} />
-                    <Text style={styles.actionText}>New calendar</Text>
+                    <Text style={styles.actionText}>{t('calendar.management.new_calendar', 'New calendar')}</Text>
                   </Pressable>
                 )}
                 {onManageSubscriptions && (
@@ -182,7 +184,7 @@ export function CalendarSidebarDrawer({
                     style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
                   >
                     <Rss size={18} color={c.textSecondary} />
-                    <Text style={styles.actionText}>Subscriptions</Text>
+                    <Text style={styles.actionText}>{t('calendar.subscription.section_title', 'iCal Subscriptions')}</Text>
                   </Pressable>
                 )}
                 {onImport && (
@@ -191,7 +193,7 @@ export function CalendarSidebarDrawer({
                     style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
                   >
                     <Upload size={18} color={c.textSecondary} />
-                    <Text style={styles.actionText}>Import from file</Text>
+                    <Text style={styles.actionText}>{t('calendar.import.title', 'Import Calendar')}</Text>
                   </Pressable>
                 )}
               </View>
@@ -236,6 +238,7 @@ function Section({
 }) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
@@ -291,7 +294,7 @@ function Section({
                     style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
                   >
                     <Star size={16} color={c.textSecondary} />
-                    <Text style={styles.panelRowText}>Set as default calendar</Text>
+                    <Text style={styles.panelRowText}>{t('calendar.management.set_default', 'Set as default')}</Text>
                   </Pressable>
                 )}
                 {canRename && (
@@ -300,7 +303,7 @@ function Section({
                     style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
                   >
                     <Pencil size={16} color={c.textSecondary} />
-                    <Text style={styles.panelRowText}>Edit name and description</Text>
+                    <Text style={styles.panelRowText}>{t('calendar.management.edit', 'Edit')}</Text>
                   </Pressable>
                 )}
                 {canRecolor && (
@@ -329,7 +332,7 @@ function Section({
                         style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
                       >
                         <Shuffle size={16} color={c.textSecondary} />
-                        <Text style={styles.panelRowText}>Random color</Text>
+                        <Text style={styles.panelRowText}>{t('calendar.management.random_color', 'New random color')}</Text>
                       </Pressable>
                     )}
                   </>
@@ -340,7 +343,7 @@ function Section({
                     style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
                   >
                     <Share2 size={16} color={c.textSecondary} />
-                    <Text style={styles.panelRowText}>Share…</Text>
+                    <Text style={styles.panelRowText}>{t('calendar.management.share', 'Share calendar')}</Text>
                   </Pressable>
                 )}
                 {canClear && (
@@ -349,7 +352,7 @@ function Section({
                     style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
                   >
                     <Eraser size={16} color={c.textSecondary} />
-                    <Text style={styles.panelRowText}>Remove all events</Text>
+                    <Text style={styles.panelRowText}>{t('calendar.management.clear_events', 'Clear events')}</Text>
                   </Pressable>
                 )}
                 {canDelete && (
@@ -358,7 +361,7 @@ function Section({
                     style={({ pressed }) => [styles.panelRow, pressed && styles.rowPressed]}
                   >
                     <Trash2 size={16} color={c.error} />
-                    <Text style={[styles.panelRowText, { color: c.error }]}>Delete calendar</Text>
+                    <Text style={[styles.panelRowText, { color: c.error }]}>{t('calendar.management.delete', 'Delete')}</Text>
                   </Pressable>
                 )}
               </View>

@@ -3,6 +3,7 @@ import { Modal, View, Text, Pressable, StyleSheet } from 'react-native';
 import { Repeat, Trash2 } from 'lucide-react-native';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
+import { useLocaleStore } from '../../stores/locale-store';
 import { Button } from '..';
 
 export type RecurrenceEditScope = 'this' | 'this_and_future' | 'all';
@@ -14,10 +15,10 @@ interface RecurrenceScopeDialogProps {
   onClose: () => void;
 }
 
-const OPTIONS: { value: RecurrenceEditScope; label: string }[] = [
-  { value: 'this', label: 'This event' },
-  { value: 'this_and_future', label: 'This and following events' },
-  { value: 'all', label: 'All events' },
+const OPTIONS: { value: RecurrenceEditScope; key: string; fallback: string }[] = [
+  { value: 'this', key: 'calendar.recurrence_scope.this_event', fallback: 'This event only' },
+  { value: 'this_and_future', key: 'calendar.recurrence_scope.this_and_future', fallback: 'This and following events' },
+  { value: 'all', key: 'calendar.recurrence_scope.all_events', fallback: 'All events' },
 ];
 
 export function RecurrenceScopeDialog({
@@ -28,6 +29,7 @@ export function RecurrenceScopeDialog({
 }: RecurrenceScopeDialogProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [selected, setSelected] = React.useState<RecurrenceEditScope>('this');
   const isDelete = actionType === 'delete';
 
@@ -49,10 +51,15 @@ export function RecurrenceScopeDialog({
             </View>
             <View style={styles.headerText}>
               <Text style={styles.title}>
-                {isDelete ? 'Delete recurring event' : 'Edit recurring event'}
+                {isDelete
+                  ? t('calendar.recurrence_scope.delete_title', 'Delete recurring event')
+                  : t('calendar.recurrence_scope.edit_title', 'Edit recurring event')}
               </Text>
               <Text style={styles.description}>
-                Choose which occurrences to {isDelete ? 'delete' : 'change'}.
+                {t(
+                  'calendar.recurrence_scope.description',
+                  'This is a recurring event. Which events would you like to modify?',
+                )}
               </Text>
             </View>
           </View>
@@ -69,7 +76,7 @@ export function RecurrenceScopeDialog({
                   <View style={[styles.radio, active && styles.radioActive]}>
                     {active && <View style={styles.radioDot} />}
                   </View>
-                  <Text style={styles.optionLabel}>{opt.label}</Text>
+                  <Text style={styles.optionLabel}>{t(opt.key, opt.fallback)}</Text>
                 </Pressable>
               );
             })}
@@ -77,14 +84,16 @@ export function RecurrenceScopeDialog({
 
           <View style={styles.footer}>
             <Button variant="outline" size="sm" onPress={onClose}>
-              Cancel
+              {t('calendar.recurrence_scope.cancel', 'Cancel')}
             </Button>
             <Button
               variant={isDelete ? 'destructive' : 'default'}
               size="sm"
               onPress={() => onSelect(selected)}
             >
-              {isDelete ? 'Delete' : 'Save'}
+              {isDelete
+                ? t('calendar.recurrence_scope.delete', 'Delete')
+                : t('calendar.recurrence_scope.save', 'Save')}
             </Button>
           </View>
         </View>
