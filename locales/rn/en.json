@@ -195,6 +195,7 @@
     "delete_permanently_title": "Delete permanently?",
     "export_failed": "Export failed",
     "forwarded": "Forwarded",
+    "load_failed": "Failed to load email",
     "preview": {
       "open_external": "Open in app",
       "pdf_external": "PDFs open in your PDF viewer on this device.",
