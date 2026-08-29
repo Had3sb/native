@@ -2,24 +2,29 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable, ActivityIndicator, Linking } from 'react-native';
 import {
   CalendarPlus, Check, HelpCircle, X, MapPin, Video, Clock, CalendarDays, AlertTriangle,
+  ShieldCheck, ShieldAlert, ChevronDown,
 } from 'lucide-react-native';
 import { format, parseISO } from 'date-fns';
-import type { Email, CalendarEvent } from '../../api/types';
+import type { Calendar, Email, CalendarEvent } from '../../api/types';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
-import { parseCalendarBlob } from '../../api/calendar';
+import { fetchCalendarBlobText, parseCalendarBlob } from '../../api/calendar';
 import { useCalendarStore } from '../../stores/calendar-store';
 import { useSettingsStore } from '../../stores/settings-store';
+import { useLocaleStore } from '../../stores/locale-store';
 import {
   findCalendarAttachment,
   findParticipantByEmail,
+  getInvitationMethod,
+  getInvitationTrustAssessment,
   getOrganizerName,
   buildReplyTo,
-  inferInvitationMethod,
   type InvitationMethod,
+  type InvitationTrustAssessment,
 } from '../../lib/calendar-invitation';
 import { useUserCalendarAddresses } from '../../lib/calendar-user-addresses';
 import { canCreateEventsIn } from '../../lib/calendar-editability';
+import { getCalendarColor, timePattern } from '../../lib/calendar-utils';
 import { useCalendarSubscriptionsStore } from '../../stores/calendar-subscriptions-store';
 
 type BannerState = 'loading' | 'parsed' | 'done' | 'error';
@@ -27,13 +32,38 @@ type RsvpStatus = 'accepted' | 'tentative' | 'declined';
 
 interface Props {
   email: Email;
+  // Account the email lives in (a shared mailbox's owner); the .ics blob is
+  // parsed against it. Undefined for the user's own mailboxes.
+  jmapAccountId?: string;
 }
 
-export function CalendarInvitationBanner({ email }: Props) {
+const TRUST_REASON_KEYS: Record<NonNullable<InvitationTrustAssessment['reason']>, [string, string]> = {
+  sender_mismatch_unverified: [
+    'calendar.invitation.trust_sender_mismatch_unverified',
+    'The sender does not match the organizer and the message is not authenticated.',
+  ],
+  authentication_failed: [
+    'calendar.invitation.trust_authentication_failed',
+    'This message failed sender authentication (SPF/DKIM/DMARC).',
+  ],
+  sender_mismatch: [
+    'calendar.invitation.trust_sender_mismatch',
+    'The sender differs from the event organizer.',
+  ],
+  authentication_missing: [
+    'calendar.invitation.trust_authentication_missing',
+    'The sender could not be verified.',
+  ],
+};
+
+export function CalendarInvitationBanner({ email, jmapAccountId }: Props) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const enabled = useSettingsStore((s) => s.calendarInvitationParsingEnabled);
+  const timeFormat = useSettingsStore((s) => s.calendarTimeFormat);
   const calendars = useCalendarStore((s) => s.calendars);
+  const storeEvents = useCalendarStore((s) => s.events);
   const subscriptions = useCalendarSubscriptionsStore((s) => s.subscriptions);
   const importEvents = useCalendarStore((s) => s.importEvents);
   const rsvpEvent = useCalendarStore((s) => s.rsvpEvent);
@@ -49,6 +79,8 @@ export function CalendarInvitationBanner({ email }: Props) {
   const [rsvpStatus, setRsvpStatus] = React.useState<RsvpStatus | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [calendarId, setCalendarId] = React.useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -56,7 +88,7 @@ export function CalendarInvitationBanner({ email }: Props) {
     setState('loading');
     (async () => {
       try {
-        const events = await parseCalendarBlob(attachment.blobId);
+        const events = await parseCalendarBlob(attachment.blobId, jmapAccountId);
         if (cancelled) return;
         if (events.length === 0) {
           setState('error');
@@ -64,14 +96,45 @@ export function CalendarInvitationBanner({ email }: Props) {
         }
         const parsed = events[0];
         setEvent(parsed);
-        setMethod(inferInvitationMethod(parsed));
+        // Explicit method (Content-Type params) first; JMAP usually strips
+        // them, so fall back to the raw ICS METHOD line before guessing.
+        let detected = getInvitationMethod(parsed, { email, attachment });
+        if (detected === 'unknown') {
+          const raw = await fetchCalendarBlobText(attachment.blobId, jmapAccountId);
+          if (cancelled) return;
+          detected = getInvitationMethod(parsed, { email, attachment, rawIcs: raw });
+        }
+        setMethod(detected);
         setState('parsed');
       } catch {
         if (!cancelled) setState('error');
       }
     })();
     return () => { cancelled = true; };
-  }, [attachment, enabled]);
+  }, [attachment, enabled, email, jmapAccountId]);
+
+  // Import into the account's default calendar; never into a shared calendar,
+  // an iCal subscription (the next feed sync would delete the event) or a
+  // read-only one. The user can still pick another writable calendar.
+  const candidates = React.useMemo(() => {
+    const isSubscriptionCalendar = (id: string) => subscriptions.some((s) => s.calendarId === id);
+    return calendars.filter((cal) => !cal.isShared && canCreateEventsIn(cal, isSubscriptionCalendar));
+  }, [calendars, subscriptions]);
+  const targetCalendar: Calendar | undefined =
+    candidates.find((cal) => cal.id === calendarId)
+    ?? candidates.find((cal) => cal.isDefault)
+    ?? candidates[0];
+
+  // Already imported? Look for the UID among the loaded events.
+  const existing = React.useMemo(() => {
+    if (!event?.uid) return null;
+    return storeEvents.find((e) => e.uid === event.uid) ?? null;
+  }, [storeEvents, event?.uid]);
+
+  const trust = React.useMemo(
+    () => (event ? getInvitationTrustAssessment(event, email, method) : null),
+    [event, email, method],
+  );
 
   if (!attachment || !enabled || state === 'error') return null;
 
@@ -79,7 +142,7 @@ export function CalendarInvitationBanner({ email }: Props) {
     return (
       <View style={styles.banner}>
         <ActivityIndicator size="small" color={c.primary} />
-        <Text style={styles.loadingText}>Reading invitation…</Text>
+        <Text style={styles.loadingText}>{t('calendar.invitation.reading', 'Reading invitation…')}</Text>
       </View>
     );
   }
@@ -90,31 +153,27 @@ export function CalendarInvitationBanner({ email }: Props) {
   const dateLabel = startDate && !isNaN(startDate.getTime())
     ? (event.showWithoutTime
         ? format(startDate, 'EEEE, MMM d, yyyy')
-        : format(startDate, 'EEE, MMM d · HH:mm'))
+        : format(startDate, `EEE, MMM d · ${timePattern(timeFormat)}`))
     : null;
   const organizer = getOrganizerName(event);
   const location = event.locations ? Object.values(event.locations)[0]?.name : undefined;
   const videoUri = event.virtualLocations ? Object.values(event.virtualLocations)[0]?.uri : undefined;
-  const me = findParticipantByEmail(event, currentUserEmails);
+  const me = findParticipantByEmail(existing ?? event, currentUserEmails);
   const canRsvp = method !== 'cancel' && method !== 'reply' && !!me;
-
-  // Import into the account's default calendar; never into a shared calendar,
-  // an iCal subscription (the next feed sync would delete the event) or a
-  // read-only one. Fall back to the first calendar events may be created in.
-  const isSubscriptionCalendar = (id: string) =>
-    subscriptions.some((s) => s.calendarId === id);
-  const candidates = calendars.filter(
-    (cal) => !cal.isShared && canCreateEventsIn(cal, isSubscriptionCalendar),
-  );
-  const writableCalendar = candidates.find((cal) => cal.isDefault) ?? candidates[0];
+  const myExistingStatus = existing && me ? existing.participants?.[me.id]?.participationStatus : undefined;
+  const currentStatus: RsvpStatus | null =
+    rsvpStatus
+    ?? (myExistingStatus === 'accepted' || myExistingStatus === 'tentative' || myExistingStatus === 'declined'
+      ? myExistingStatus
+      : null);
 
   const ensureImportedAndRsvp = async (status: RsvpStatus) => {
-    if (busy || !writableCalendar) return;
+    if (busy || !targetCalendar) return;
     setBusy(true);
     setNotice(null);
     try {
       // Make sure the event exists in a local calendar (dedupes by UID).
-      await importEvents([event], writableCalendar.id);
+      if (!existing) await importEvents([event], targetCalendar.id);
       // Re-read from the store to get the server-assigned id + participant.
       const stored = useCalendarStore.getState().events.find((e) => e.uid === event.uid);
       const participant = stored
@@ -123,44 +182,72 @@ export function CalendarInvitationBanner({ email }: Props) {
       if (stored && participant) {
         await rsvpEvent(stored.id, participant.id, status, buildReplyTo(event));
         setRsvpStatus(status);
-        setNotice('Response sent');
+        setNotice(t('calendar.invitation.response_sent', 'Response sent'));
       } else {
-        setNotice('Added to calendar');
+        setNotice(t('calendar.invitation.added', 'Added to calendar'));
       }
       setState('done');
     } catch {
-      setNotice('Could not send your response');
+      setNotice(t('calendar.invitation.response_error', 'Could not send your response'));
     } finally {
       setBusy(false);
     }
   };
 
   const handleImport = async () => {
-    if (busy || !writableCalendar) return;
+    if (busy || !targetCalendar) return;
     setBusy(true);
     setNotice(null);
     try {
-      const count = await importEvents([event], writableCalendar.id);
-      setNotice(count > 0 ? 'Added to calendar' : 'Already in your calendar');
+      const count = await importEvents([event], targetCalendar.id);
+      setNotice(
+        count > 0
+          ? t('calendar.invitation.added', 'Added to calendar')
+          : t('calendar.invitation.already_in_calendar', 'Already in your calendar'),
+      );
       setState('done');
     } catch {
-      setNotice('Could not add the event');
+      setNotice(t('calendar.invitation.add_error', 'Could not add the event'));
     } finally {
       setBusy(false);
     }
   };
 
+  const trustColor = trust?.level === 'warning' ? c.error : trust?.level === 'caution' ? c.warning : c.success;
+
   return (
-    <View style={styles.banner}>
+    <View style={[styles.banner, trust?.level === 'warning' && styles.bannerWarning]}>
       <View style={styles.headerRow}>
         <View style={styles.iconBadge}>
           <CalendarDays size={18} color={c.primary} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.title} numberOfLines={2}>{event.title || 'Calendar invitation'}</Text>
-          {method === 'cancel' && <Text style={styles.cancelled}>This event was cancelled</Text>}
+          <Text style={styles.title} numberOfLines={2}>
+            {event.title || t('calendar.invitation.title', 'Calendar invitation')}
+          </Text>
+          {method === 'cancel' && (
+            <Text style={styles.cancelled}>{t('calendar.invitation.cancelled', 'This event was cancelled')}</Text>
+          )}
+          {method === 'reply' && (
+            <Text style={styles.subtitle}>{t('calendar.invitation.reply', 'A participant replied to this invitation')}</Text>
+          )}
         </View>
       </View>
+
+      {trust && (
+        <View style={[styles.trustRow, { borderColor: trustColor }]}>
+          {trust.level === 'trusted' ? (
+            <ShieldCheck size={14} color={trustColor} />
+          ) : (
+            <ShieldAlert size={14} color={trustColor} />
+          )}
+          <Text style={[styles.trustText, { color: trustColor }]} numberOfLines={3}>
+            {trust.reason
+              ? t(TRUST_REASON_KEYS[trust.reason][0], TRUST_REASON_KEYS[trust.reason][1])
+              : t('calendar.invitation.trust_verified', 'Sender verified')}
+          </Text>
+        </View>
+      )}
 
       {dateLabel && (
         <Row icon={<Clock size={15} color={c.textMuted} />} text={dateLabel} styles={styles} />
@@ -171,12 +258,49 @@ export function CalendarInvitationBanner({ email }: Props) {
       {videoUri ? (
         <Pressable style={styles.detailRow} onPress={() => { void Linking.openURL(videoUri); }}>
           <Video size={15} color={c.textMuted} />
-          <Text style={[styles.detailText, { color: c.primary }]} numberOfLines={1}>Join video call</Text>
+          <Text style={[styles.detailText, { color: c.primary }]} numberOfLines={1}>
+            {t('calendar.invitation.join_video', 'Join video call')}
+          </Text>
         </Pressable>
       ) : null}
       {organizer ? (
-        <Row icon={<CalendarPlus size={15} color={c.textMuted} />} text={`Organizer: ${organizer}`} styles={styles} />
+        <Row
+          icon={<CalendarPlus size={15} color={c.textMuted} />}
+          text={`${t('calendar.invitation.organizer', 'Organizer')}: ${organizer}`}
+          styles={styles}
+        />
       ) : null}
+      {existing && state !== 'done' && (
+        <Row
+          icon={<Check size={15} color={c.success} />}
+          text={t('calendar.invitation.already_in_calendar', 'Already in your calendar')}
+          styles={styles}
+        />
+      )}
+
+      {state !== 'done' && !existing && targetCalendar && candidates.length > 1 && (
+        <View>
+          <Pressable style={styles.calendarPicker} onPress={() => setPickerOpen((v) => !v)}>
+            <View style={[styles.calendarSwatch, { backgroundColor: getCalendarColor(targetCalendar) }]} />
+            <Text style={styles.calendarPickerText} numberOfLines={1}>{targetCalendar.name}</Text>
+            <ChevronDown size={14} color={c.textMuted} />
+          </Pressable>
+          {pickerOpen && (
+            <View style={styles.calendarList}>
+              {candidates.map((cal) => (
+                <Pressable
+                  key={cal.id}
+                  style={[styles.calendarRow, cal.id === targetCalendar.id && styles.calendarRowActive]}
+                  onPress={() => { setCalendarId(cal.id); setPickerOpen(false); }}
+                >
+                  <View style={[styles.calendarSwatch, { backgroundColor: getCalendarColor(cal) }]} />
+                  <Text style={styles.calendarPickerText} numberOfLines={1}>{cal.name}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </View>
+      )}
 
       {notice && <Text style={styles.notice}>{notice}</Text>}
 
@@ -184,37 +308,37 @@ export function CalendarInvitationBanner({ email }: Props) {
         <View style={styles.actions}>
           {canRsvp ? (
             <>
-              <RsvpBtn label="Yes" active={rsvpStatus === 'accepted'} activeColor={c.success}
-                icon={<Check size={15} color={rsvpStatus === 'accepted' ? c.textInverse : c.success} />}
+              <RsvpBtn label={t('calendar.invitation.accept', 'Yes')} active={currentStatus === 'accepted'} activeColor={c.success}
+                icon={<Check size={15} color={currentStatus === 'accepted' ? c.textInverse : c.success} />}
                 disabled={busy} onPress={() => ensureImportedAndRsvp('accepted')} c={c} styles={styles} />
-              <RsvpBtn label="Maybe" active={rsvpStatus === 'tentative'} activeColor={c.warning}
-                icon={<HelpCircle size={15} color={rsvpStatus === 'tentative' ? c.textInverse : c.warning} />}
+              <RsvpBtn label={t('calendar.invitation.tentative', 'Maybe')} active={currentStatus === 'tentative'} activeColor={c.warning}
+                icon={<HelpCircle size={15} color={currentStatus === 'tentative' ? c.textInverse : c.warning} />}
                 disabled={busy} onPress={() => ensureImportedAndRsvp('tentative')} c={c} styles={styles} />
-              <RsvpBtn label="No" active={rsvpStatus === 'declined'} activeColor={c.error}
-                icon={<X size={15} color={rsvpStatus === 'declined' ? c.textInverse : c.error} />}
+              <RsvpBtn label={t('calendar.invitation.decline', 'No')} active={currentStatus === 'declined'} activeColor={c.error}
+                icon={<X size={15} color={currentStatus === 'declined' ? c.textInverse : c.error} />}
                 disabled={busy} onPress={() => ensureImportedAndRsvp('declined')} c={c} styles={styles} />
             </>
-          ) : (
+          ) : !existing && method !== 'reply' ? (
             <Pressable
-              style={[styles.importBtn, busy && { opacity: 0.5 }]}
+              style={[styles.importBtn, (busy || !targetCalendar) && { opacity: 0.5 }]}
               onPress={() => { void handleImport(); }}
-              disabled={busy}
+              disabled={busy || !targetCalendar}
             >
               {busy ? (
                 <ActivityIndicator size="small" color={c.primaryForeground} />
               ) : (
                 <CalendarPlus size={16} color={c.primaryForeground} />
               )}
-              <Text style={styles.importBtnText}>Add to calendar</Text>
+              <Text style={styles.importBtnText}>{t('calendar.invitation.add_to_calendar', 'Add to calendar')}</Text>
             </Pressable>
-          )}
+          ) : null}
         </View>
       )}
 
-      {!writableCalendar && state !== 'done' && (
+      {!targetCalendar && state !== 'done' && (
         <View style={styles.warnRow}>
           <AlertTriangle size={14} color={c.warning} />
-          <Text style={styles.warnText}>No writable calendar available</Text>
+          <Text style={styles.warnText}>{t('calendar.invitation.no_writable_calendar', 'No writable calendar available')}</Text>
         </View>
       )}
     </View>
@@ -276,6 +400,7 @@ function makeStyles(c: ThemePalette) {
       backgroundColor: c.surface,
       gap: spacing.xs,
     },
+    bannerWarning: { borderColor: c.errorBorder, backgroundColor: c.errorBg },
     loadingText: { ...typography.caption, color: c.textMuted },
     headerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs },
     iconBadge: {
@@ -283,9 +408,51 @@ function makeStyles(c: ThemePalette) {
       backgroundColor: c.primaryBg, alignItems: 'center', justifyContent: 'center',
     },
     title: { ...typography.bodySemibold, color: c.text },
+    subtitle: { ...typography.caption, color: c.textMuted, marginTop: 2 },
     cancelled: { ...typography.caption, color: c.error, marginTop: 2 },
+    trustRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 4,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      marginBottom: spacing.xs,
+    },
+    trustText: { ...typography.caption, flex: 1 },
     detailRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 2 },
     detailText: { flex: 1, ...typography.caption, color: c.textSecondary },
+    calendarPicker: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 6,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: c.border,
+      backgroundColor: c.background,
+      marginTop: spacing.xs,
+    },
+    calendarPickerText: { ...typography.caption, color: c.text, flex: 1 },
+    calendarSwatch: { width: 10, height: 10, borderRadius: 5 },
+    calendarList: {
+      marginTop: 4,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: radius.sm,
+      backgroundColor: c.background,
+      overflow: 'hidden',
+    },
+    calendarRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.sm,
+    },
+    calendarRowActive: { backgroundColor: c.primaryBg },
     notice: { ...typography.captionMedium, color: c.primary, marginTop: spacing.xs },
     actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
     rsvpBtn: {

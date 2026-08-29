@@ -863,7 +863,7 @@ function EmailPane({
       {attachmentPosition === 'below-header' && renderAttachments()}
 
       {/* Calendar invitation (auto-detected .ics) */}
-      <CalendarInvitationBanner email={email} />
+      <CalendarInvitationBanner email={email} jmapAccountId={jmapAccountId} />
 
       {/* Body */}
       <View style={styles.bodyBlock}>

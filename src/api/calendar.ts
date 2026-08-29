@@ -467,8 +467,13 @@ export async function rsvpEvent(
 }
 
 // Parse an uploaded .ics blob into one or more JSCalendar events (server-side).
-export async function parseCalendarBlob(blobId: string): Promise<Partial<CalendarEvent>[]> {
-  const accountId = jmapClient.accountId;
+// `targetAccountId` routes the parse to the account that owns the blob (an
+// email in a shared mailbox lives in the sharer's account).
+export async function parseCalendarBlob(
+  blobId: string,
+  targetAccountId?: string,
+): Promise<Partial<CalendarEvent>[]> {
+  const accountId = targetAccountId || jmapClient.accountId;
   const res = await jmapClient.request(
     [['CalendarEvent/parse', { accountId, blobIds: [blobId] }, '0']],
     USING,
@@ -484,6 +489,31 @@ export async function parseCalendarBlob(blobId: string): Promise<Partial<Calenda
   if (!parsed) return [];
   const list = Array.isArray(parsed) ? parsed : [parsed];
   return list.map(normalizeRecurrenceProperties);
+}
+
+// Download the raw text of a calendar blob (the .ics itself) so the iTIP
+// METHOD line can be read — JMAP strips the `method=` Content-Type parameter.
+// Best-effort: returns null when the download fails.
+export async function fetchCalendarBlobText(
+  blobId: string,
+  targetAccountId?: string,
+): Promise<string | null> {
+  try {
+    await jmapClient.ensureFreshToken();
+    // Lazy: blob/client-cert pull in native Expo modules, which the pure
+    // JMAP layer (and its node tests) must not load eagerly.
+    const [{ getDownloadUrl }, { secureFetch }] = await Promise.all([
+      import('./blob'),
+      import('../lib/client-cert'),
+    ]);
+    const url = getDownloadUrl(blobId, 'invite.ics', 'text/calendar', targetAccountId);
+    const res = await secureFetch(url, { headers: { Authorization: jmapClient.authHeader } });
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text.length > 2 * 1024 * 1024 ? null : text;
+  } catch {
+    return null;
+  }
 }
 
 export async function createCalendar(

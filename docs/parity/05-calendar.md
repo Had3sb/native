@@ -132,12 +132,12 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Calendars
 
-- [ ] **No calendar management UI: create, rename, colour, description, delete, clear events, copy CalDAV URL** — `P2` — `missing`
+- [x] **No calendar management UI: create, rename, colour, description, delete, clear events, copy CalDAV URL** — `P2` — `missing` — fixed in dae5700 (no CalDAV URL copy: RN has no DAV base URL)
   - What WEB does: sidebar context menu + settings section with create (with kind picker), edit name/colour/description, clear all events (unlink-aware), delete, share, copy URL (ref `components/calendar/calendar-sidebar-panel.tsx:328-395`, `components/settings/calendar-management-settings.tsx`, `stores/calendar-store.ts:1028-1206`).
   - What RN does: `createCalendar` exists in the store but is only reachable through the subscription sheet (`src/stores/calendar-store.ts:378-382`, `src/stores/calendar-subscriptions-store.ts:82-84`); there is no `updateCalendar`/`removeCalendar`/`clearCalendarEvents` API or UI (`src/api/calendar.ts` has `deleteCalendar` at 417 but nothing calls it for own calendars). Long-press only offers set-default and shared-calendar recolour (`src/components/calendar/CalendarSidebarDrawer.tsx:208-211`).
   - Fix hint: add `Calendar/set` update + destroy (`onDestroyRemoveEvents`) to `src/api/calendar.ts`, expose in the store, and add "New calendar" + long-press "Rename / Colour / Delete / Clear" in the drawer. Deleting must be blocked for `isDefault` and shared calendars like WEB.
 
-- [ ] **Own-calendar colour cannot be changed (only shared calendars are recolourable)** — `P3` — `partial`
+- [x] **Own-calendar colour cannot be changed (only shared calendars are recolourable)** — `P3` — `partial` — fixed in dae5700
   - What WEB does: colour picker writes `Calendar/set { color }` for own calendars and a local override for shared ones (ref `calendar-sidebar-panel.tsx:330, 366`, `lib/shared-calendar-colors.ts:33-40`).
   - What RN does: `canRecolor = !!onSetColor && !!cal.isShared` (`CalendarSidebarDrawer.tsx:209`).
   - Fix hint: for `!cal.isShared` call the new `updateCalendar(id, { color })`.
@@ -167,7 +167,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `getCalendars` and `fetchEvents` try every calendar-capable session account each time and swallow errors (`src/api/calendar.ts:140-186`, `src/stores/calendar-store.ts:194-204`).
   - Fix hint: keep a module-level `Set` of denied account ids, reset on reconnect.
 
-- [ ] **Calendar sharing (JMAP `shareWith`) not available for calendars** — `P2` — `missing`
+- [x] **Calendar sharing (JMAP `shareWith`) not available for calendars** — `P2` — `missing` — fixed in dae5700
   - What WEB does: `shareCalendar` via `Calendar/set shareWith/<principal>` with a principal picker and share indicators (ref `stores/calendar-store.ts:1078-1100`, `lib/jmap/client.ts:4921`, changelog 1.6.x "JMAP sharing for calendars and address books", #244, #257).
   - What RN does: sharing exists only for Files (`src/api/files.ts:229-241`, `src/components/files/ShareSheet.tsx`); nothing for calendars (also likely nothing for address books — that belongs to the contacts audit).
   - Fix hint: reuse `ShareSheet` + the principal picker with a `Calendar/set` `shareWith/{principalId}` patch; request `shareWith`/`myRights` in `Calendar/get` properties.
@@ -236,12 +236,12 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `importEvents` skips existing UIDs and batch-creates `{ ...parsed, calendarIds }` untouched (`src/stores/calendar-store.ts:352-376`, `src/api/calendar.ts:278-297`). Whether Stalwart rejects computed properties on create depends on the parse output; WEB chose to whitelist after hitting failures ("Deduplicate UIDs during iCal import to prevent mass failures").
   - Fix hint: port WEB's `prepared` mapping (`stores/calendar-store.ts:885-957`) and the link-by-`calendarIds` branch.
 
-- [ ] **iCal subscriptions: no per-account scoping, no edit, no auto-refresh/interval, no rollback, `webcals://`, basic-auth URLs** — `P2` — `partial`
+- [x] **iCal subscriptions: no per-account scoping, no edit, no auto-refresh/interval, no rollback, `webcals://`, basic-auth URLs** — `P2` — `partial` — fixed in dae5700
   - What WEB does: subscriptions carry `accountId` and are skipped for other accounts (`stores/calendar-store.ts:1360-1363, 1468-1472`), editable name/colour/url/interval (`:1294-1329`), refreshed every 5 min per interval (`components/calendar/calendar-app.tsx:320-324`), rolled back when the first fetch fails (`:1274-1289`), `webcals?://` normalised (`:1240`), basic auth in the URL supported server-side (#275), stale events unlinked rather than deleted when also in another calendar (`:1401-1427`).
   - What RN does: `calendar-subscriptions-store` persists `{ id, name, url, color, calendarId }` globally (`src/stores/calendar-subscriptions-store.ts:16-24, 162-166`) — after switching accounts the list still shows and `syncSubscription` imports into a calendar id of the other account (or a colliding raw id); `syncAll` is never called (`:155-160`); no edit UI (`ICalSubscriptionSheet.tsx`); a failed first sync leaves the empty calendar + sub with `lastError` (`:82-116`); only `webcal://` is rewritten (`:38-40`); `fetch('https://user:pass@host')` throws in RN's WHATWG fetch so #275 URLs fail; stale events are deleted outright (`:58-74`).
   - Fix hint: add `accountId: jmapClient.accountId` to each sub and filter by it; call `syncAll` on calendar mount + `AppState` foreground with a per-sub interval; add an edit sheet; on first-sync failure delete the calendar; regex `/^webcals?:\/\//i`; parse credentials out of the URL into an `Authorization` header.
 
-- [ ] **Subscription feeds are fetched on-device (security note, not a gap)** — `P3` — `partial`
+- [x] **Subscription feeds are fetched on-device (security note, not a gap)** — `P3` — `partial` — fixed in dae5700 (10 MB cap)
   - What WEB does: `/api/fetch-ical` server-side with an SSRF guard, DNS pinning and redirect validation (GHSA-24w9, changelog 1.9.2).
   - What RN does: `fetch(url)` from the phone (`src/stores/calendar-subscriptions-store.ts:42-53`). No server is exposed, so the SSRF class does not apply; the device can be pointed at LAN hosts, which is the user's own network. Redirects are followed by `fetch` without validation (fine). N/A for the advisory; worth a 10 MB size cap and a `text/calendar`-ish content check (already checks `BEGIN:VCALENDAR`).
   - Fix hint: optional size cap.
