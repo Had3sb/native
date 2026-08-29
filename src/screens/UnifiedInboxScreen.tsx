@@ -69,6 +69,11 @@ export default function UnifiedInboxScreen({ navigation }: Props) {
             await switchAccount(email.sourceAccountId);
             if (useAuthStore.getState().activeAccountId !== email.sourceAccountId) return;
           }
+          // Page over the rows of the same account the user is looking at
+          // (ids are only unique per JMAP account, so never mix accounts).
+          const emailIds = emails
+            .filter((e) => e.sourceAccountId === email.sourceAccountId && e.jmapAccountId === email.jmapAccountId)
+            .map((e) => e.id);
           navigation.navigate('EmailThread', {
             emailId: email.id,
             threadId: email.threadId,
@@ -76,13 +81,14 @@ export default function UnifiedInboxScreen({ navigation }: Props) {
             // Group/shared messages live under another JMAP account in the
             // same session; pass it so the thread opens against the right one.
             jmapAccountId: email.isShared ? email.jmapAccountId : undefined,
+            emailIds,
           });
         } finally {
           setOpening(false);
         }
       })();
     },
-    [opening, switchAccount, navigation],
+    [opening, switchAccount, navigation, emails],
   );
 
   const errorCount = Object.keys(errors).length;

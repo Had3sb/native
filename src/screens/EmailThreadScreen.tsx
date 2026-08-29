@@ -82,7 +82,22 @@ export default function EmailThreadScreen({ route, navigation }: Props) {
   const archiveEmailAction = useEmailStore((s) => s.archiveEmail);
   const mailboxes = useEmailStore((s) => s.mailboxes);
   const currentMailboxId = useEmailStore((s) => s.currentMailboxId);
-  const emails = useEmailStore((s) => s.emails);
+  const storeEmails = useEmailStore((s) => s.emails);
+  // The list the pager pages over. A message opened from the active folder
+  // pages over that folder; one opened from another list (unified inbox,
+  // contact activity) pages over the ids that list handed us, and a message
+  // that is in neither (e.g. a group-inbox message not in the folder page)
+  // gets a one-element list — otherwise the pager would render `emails[0]`
+  // while the toolbar acted on the tapped message.
+  const emails = React.useMemo<Email[]>(() => {
+    const { emailIds, emailId, threadId } = route.params;
+    if (emailIds && emailIds.length > 0) {
+      const byId = jmapAccountId ? null : new Map(storeEmails.map((e) => [e.id, e]));
+      return emailIds.map((id) => byId?.get(id) ?? ({ id, threadId } as Email));
+    }
+    if (!jmapAccountId && storeEmails.some((e) => e.id === emailId)) return storeEmails;
+    return [{ id: emailId, threadId } as Email];
+  }, [storeEmails, route.params, jmapAccountId]);
 
   // The JMAP account the open message belongs to: the route param when the
   // unified inbox opened a group message, otherwise the account behind the
