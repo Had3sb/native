@@ -543,8 +543,7 @@ export default function ComposeScreen({ route, navigation }: Props) {
       // Quick reply "More options" hands the typed text over as prefillBody;
       // it goes above the quote.
       const typed = prefillBody
-        ? `<div>${escapeHtml(prefillBody).replace(/?
-/g, '<br>')}</div>`
+        ? `<div>${escapeHtml(prefillBody).replace(/\r?\n/g, '<br>')}</div>`
         : '';
       return typed + buildInitialHtml(mode, {
         from: { name: replyTo.from.name, email: replyTo.from.email },
