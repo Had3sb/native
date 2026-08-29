@@ -35,9 +35,13 @@ import {
   matchesContactSearch,
 } from '../lib/contact-utils';
 import { getIdentities } from '../api/identity';
-import { sendEmail, type OutgoingAttachment } from '../api/email';
-import { jmapClient } from '../api/jmap-client';
-import { uploadBlob } from '../api/blob';
+import { sendEmail, patchKeywordsForEmails, type OutgoingAttachment } from '../api/email';
+import { jmapClient, RequestTimeoutError } from '../api/jmap-client';
+import { uploadBlob, uploadBytes } from '../api/blob';
+import { buildReplyRecipients, type ReplySource } from '../lib/reply-recipients';
+import { buildReplySubject, buildForwardSubject } from '../lib/subject-prefix';
+import { computeReplyThreadingHeaders } from '../lib/email-threading';
+import { escapeHtml } from '../lib/email-html';
 import { buildInitialHtml, htmlToPlainText, rewriteInlineImages } from '../lib/compose-html';
 import { stripDangerousTags } from '../lib/email-html';
 import type { EmailAddress, Identity, ContactCard } from '../api/types';
@@ -261,13 +265,23 @@ export default function ComposeScreen({ route, navigation }: Props) {
   // need to add it on top — pad by whichever is larger.
   const bottomPad = Math.max(kbObstruction, insets.bottom);
   const replyTo = route.params?.replyTo;
+  const draft = route.params?.draft;
   const mode = route.params?.mode ?? 'compose';
   const prefillTo = route.params?.prefillTo;
+  const prefillCc = route.params?.prefillCc;
+  const prefillSubject = route.params?.prefillSubject;
+  const prefillBody = route.params?.prefillBody;
   const mailboxes = useEmailStore((s) => s.mailboxes);
   // Always the user's own Sent — composing on behalf of a shared account
   // isn't supported, so a group account's Sent must never be picked up here.
   const sentMailbox = React.useMemo(
     () => ownMailboxes(mailboxes).find((m) => m.role === 'sent'),
+    [mailboxes],
+  );
+  // The message is created in Drafts and moved to Sent by the submission's
+  // onSuccessUpdateEmail, so a failed send never leaves a fake sent copy (#188).
+  const draftsMailbox = React.useMemo(
+    () => ownMailboxes(mailboxes).find((m) => m.role === 'drafts'),
     [mailboxes],
   );
 
@@ -288,70 +302,129 @@ export default function ComposeScreen({ route, navigation }: Props) {
   const attachmentReminderKeywords = useSettingsStore((s) => s.attachmentReminderKeywords);
   const sendDelaySeconds = useSettingsStore((s) => s.sendDelaySeconds);
 
-  const initialTo = React.useMemo<Recipient[]>(() => {
-    if (!replyTo) {
-      if (prefillTo && prefillTo.length > 0) {
-        return prefillTo
-          .filter((r) => !!r.email)
-          .map((r) => ({ name: r.name ?? '', email: r.email }));
-      }
-      return [];
+  // Every address that is "us": the login, the account's primary address and
+  // every identity. Reply-all must not send the user a copy, and replying to
+  // a self-sent message continues to its original recipients (#703).
+  const ownEmails = React.useMemo(() => {
+    const out = new Set<string>();
+    const active = useAccountStore.getState().getActiveAccount();
+    for (const e of [active?.email, active?.username, jmapClient.username]) {
+      if (e && e.includes('@')) out.add(e);
     }
-    if (mode === 'forward') return [];
-    const base: Recipient[] = replyTo.from.email
-      ? [{ name: replyTo.from.name ?? '', email: replyTo.from.email }]
-      : [];
-    if (mode === 'replyAll' && replyTo.to) {
-      for (const r of replyTo.to) {
-        if (r.email && !base.some((b) => b.email === r.email)) {
-          base.push({ name: r.name ?? '', email: r.email });
-        }
-      }
-    }
-    return base;
-  }, [replyTo, mode, prefillTo]);
+    for (const i of identities) if (i.email) out.add(i.email);
+    return Array.from(out);
+  }, [identities]);
 
-  const initialCc = React.useMemo<Recipient[]>(() => {
-    if (mode !== 'replyAll' || !replyTo?.cc) return [];
-    return replyTo.cc
-      .filter((r) => !!r.email)
-      .map((r) => ({ name: r.name ?? '', email: r.email }));
-  }, [replyTo, mode]);
-
-  const initialSubject = React.useMemo(() => {
-    if (!replyTo) return '';
-    const s = replyTo.subject ?? '';
-    if (mode === 'forward') {
-      return /^fwd?:/i.test(s) ? s : `Fwd: ${s}`;
-    }
-    return /^re:/i.test(s) ? s : `Re: ${s}`;
-  }, [replyTo, mode]);
-
-  const initialBodyHtml = React.useMemo(
-    () => buildInitialHtml(mode, replyTo
+  const replySource = React.useMemo<ReplySource | undefined>(
+    () => (replyTo
       ? {
-          from: { name: replyTo.from.name, email: replyTo.from.email },
+          from: replyTo.from.email ? [replyTo.from] : [],
+          replyToAddresses: replyTo.replyToAddresses,
           to: replyTo.to,
           cc: replyTo.cc,
-          subject: replyTo.subject,
-          body: replyTo.body,
-          receivedAt: replyTo.receivedAt,
         }
-      : null,
-      { timeFormat, locale, unknownLabel: t('common.unknown', 'Unknown') },
-    ),
-    [mode, replyTo, timeFormat, locale, t],
+      : undefined),
+    [replyTo],
   );
+
+  const toRecipientList = (list: Array<{ name?: string; email?: string }> | undefined): Recipient[] =>
+    (list ?? [])
+      .filter((r): r is { name?: string; email: string } => !!r.email)
+      .map((r) => ({ name: r.name ?? '', email: r.email }));
+
+  const initialTo = React.useMemo<Recipient[]>(() => {
+    if (draft) return toRecipientList(draft.to);
+    if (!replyTo) return toRecipientList(prefillTo);
+    if (mode === 'forward') return [];
+    return toRecipientList(
+      buildReplyRecipients(replySource, mode === 'replyAll' ? 'replyAll' : 'reply', ownEmails).to,
+    );
+    // Seeds state once; identity-based refinement happens in the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyTo, draft, mode, prefillTo]);
+
+  const initialCc = React.useMemo<Recipient[]>(() => {
+    if (draft) return toRecipientList(draft.cc);
+    if (!replyTo) return toRecipientList(prefillCc);
+    if (mode !== 'replyAll') return [];
+    return toRecipientList(buildReplyRecipients(replySource, 'replyAll', ownEmails).cc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyTo, draft, mode, prefillCc]);
+
+  const initialBcc = React.useMemo<Recipient[]>(
+    () => (draft ? toRecipientList(draft.bcc) : toRecipientList(route.params?.prefillBcc)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [draft],
+  );
+
+  const initialSubject = React.useMemo(() => {
+    if (draft) return draft.subject ?? '';
+    if (!replyTo) return prefillSubject ?? '';
+    // Strip stacked / foreign-language prefixes (AW:, WG:, Re[2]:) before
+    // adding the locale's own so the chain doesn't grow on every hop.
+    if (mode === 'forward') {
+      return buildForwardSubject(replyTo.subject, t('email_composer.prefix.forward', 'Fwd:'));
+    }
+    return buildReplySubject(replyTo.subject, t('email_composer.prefix.reply', 'Re:'));
+  }, [replyTo, draft, mode, prefillSubject, t]);
+
+  const initialBodyHtml = React.useMemo(
+    () => {
+      if (draft) {
+        if (draft.htmlBody) return stripDangerousTags(draft.htmlBody);
+        if (draft.textBody) return `<div>${escapeHtml(draft.textBody).replace(/\r?\n/g, '<br>')}</div>`;
+        return '<p><br></p>';
+      }
+      if (!replyTo) {
+        return prefillBody
+          ? `<div>${escapeHtml(prefillBody).replace(/\r?\n/g, '<br>')}</div><p><br></p>`
+          : '<p><br></p>';
+      }
+      return buildInitialHtml(mode, {
+        from: { name: replyTo.from.name, email: replyTo.from.email },
+        to: replyTo.to,
+        cc: replyTo.cc,
+        subject: replyTo.subject,
+        body: replyTo.body,
+        htmlBody: replyTo.htmlBody,
+        receivedAt: replyTo.sentAt ?? replyTo.receivedAt,
+      }, { timeFormat, locale, unknownLabel: t('common.unknown', 'Unknown') });
+    },
+    [mode, replyTo, draft, prefillBody, timeFormat, locale, t],
+  );
+
+  // Attachments carried over from the original (forward) or the re-opened
+  // draft. Blobs are account-scoped: a message in a shared/group account has
+  // to be re-uploaded into the user's own account before it can be sent.
+  const seedAttachments = replyTo?.attachments ?? draft?.attachments;
+  const seedOwnerAccountId = replyTo?.jmapAccountId ?? draft?.jmapAccountId;
+  const initialAttachments = React.useMemo<AttachmentEntry[]>(() => {
+    if (!seedAttachments?.length) return [];
+    return seedAttachments
+      .filter((a) => !!a.blobId)
+      .map((a) => ({
+        localId: `seed-${a.blobId}`,
+        name: a.name || 'attachment',
+        type: a.type || 'application/octet-stream',
+        size: a.size ?? 0,
+        uri: '',
+        inline: false,
+        blobId: seedOwnerAccountId ? undefined : a.blobId,
+        uploading: !!seedOwnerAccountId,
+      }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [toRecipients, setToRecipients] = React.useState<Recipient[]>(initialTo);
   const [ccRecipients, setCcRecipients] = React.useState<Recipient[]>(initialCc);
-  const [ccVisible, setCcVisible] = React.useState(initialCc.length > 0);
+  const [bccRecipients, setBccRecipients] = React.useState<Recipient[]>(initialBcc);
+  const [ccVisible, setCcVisible] = React.useState(initialCc.length > 0 || initialBcc.length > 0);
   const [toInput, setToInput] = React.useState('');
   const [ccInput, setCcInput] = React.useState('');
   const [subject, setSubject] = React.useState(initialSubject);
   const [bodyHtml, setBodyHtml] = React.useState(initialBodyHtml);
   const [activeField, setActiveField] = React.useState<'to' | 'cc' | null>(null);
-  const [attachments, setAttachments] = React.useState<AttachmentEntry[]>([]);
+  const [attachments, setAttachments] = React.useState<AttachmentEntry[]>(initialAttachments);
   const [selState, setSelState] = React.useState<RichTextSelectionState>({
     bold: false, italic: false, underline: false, strikeThrough: false,
     ul: false, ol: false, blockquote: false, h1: false, h2: false,
@@ -416,6 +489,59 @@ export default function ComposeScreen({ route, navigation }: Props) {
       }
     })();
     return () => { cancelled = true; };
+  }, []);
+
+  // Once the identities are known, recompute the reply recipients so every
+  // own alias is dropped from a reply-all (the initial seed only knew the
+  // login address). Skipped when the user already edited the fields.
+  const recipientsRefinedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (recipientsRefinedRef.current || identities.length === 0) return;
+    if (!replyTo || mode === 'forward') return;
+    recipientsRefinedRef.current = true;
+    const sameList = (a: Recipient[], b: Recipient[]) =>
+      a.length === b.length && a.every((r, i) => r.email === b[i].email);
+    if (!sameList(toRecipients, initialTo) || !sameList(ccRecipients, initialCc)) return;
+    const { to, cc } = buildReplyRecipients(
+      replySource,
+      mode === 'replyAll' ? 'replyAll' : 'reply',
+      ownEmails,
+    );
+    const nextTo = toRecipientList(to);
+    const nextCc = toRecipientList(cc);
+    if (!sameList(nextTo, toRecipients)) setToRecipients(nextTo);
+    if (!sameList(nextCc, ccRecipients)) {
+      setCcRecipients(nextCc);
+      if (nextCc.length > 0) setCcVisible(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identities]);
+
+  // Re-upload attachments that live in another account's blob store (forward
+  // from a shared folder) into the user's own account.
+  React.useEffect(() => {
+    if (!seedOwnerAccountId || !seedAttachments?.length) return;
+    let cancelled = false;
+    void (async () => {
+      for (const a of seedAttachments) {
+        if (!a.blobId) continue;
+        const localId = `seed-${a.blobId}`;
+        try {
+          const buf = await jmapClient.fetchBlobArrayBuffer(a.blobId, a.name, a.type, seedOwnerAccountId);
+          const up = await uploadBytes(new Uint8Array(buf), a.type || 'application/octet-stream');
+          if (!cancelled) updateAttachment(localId, { blobId: up.blobId, size: up.size, uploading: false });
+        } catch (e) {
+          if (!cancelled) {
+            updateAttachment(localId, {
+              uploading: false,
+              error: e instanceof Error ? e.message : 'Upload failed',
+            });
+          }
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Choose the identity once we know both the loaded identities and the reply
@@ -879,8 +1005,23 @@ export default function ComposeScreen({ route, navigation }: Props) {
     }
   };
 
+  // Synchronous re-entry guard: `sending` state only flips after two awaits
+  // below, so two quick taps could both pass `canSend` and submit twice.
+  const sendingRef = React.useRef(false);
+
   const performSend = async (holdForSeconds?: number, scheduledAt?: Date) => {
     if (!canSend || !primaryIdentity || !sentMailbox) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    try {
+      await performSendInner(holdForSeconds, scheduledAt);
+    } finally {
+      sendingRef.current = false;
+    }
+  };
+
+  const performSendInner = async (holdForSeconds?: number, scheduledAt?: Date) => {
+    if (!primaryIdentity || !sentMailbox) return;
 
     // Read the body straight from the editor DOM at send time. The `change`
     // messages that feed `bodyHtml` are async and best-effort — trusting them
@@ -938,6 +1079,21 @@ export default function ComposeScreen({ route, navigation }: Props) {
 
       const outgoing = [...inlineFromBody, ...fileAttachments];
 
+      // RFC 5322 §3.6.4: only replies continue the thread; a forward starts
+      // a new one. The original's Message-ID (never its JMAP id) seeds
+      // In-Reply-To, and References accumulates the chain (#234).
+      const threading = replyTo && mode !== 'forward'
+        ? computeReplyThreadingHeaders({ messageId: replyTo.messageId, references: replyTo.references })
+        : draft && (draft.inReplyTo?.length || draft.references?.length)
+          ? { inReplyTo: draft.inReplyTo ?? [], references: draft.references ?? draft.inReplyTo ?? [] }
+          : null;
+
+      const identityBcc = (primaryIdentity.bcc ?? []).filter((r) => !!r.email);
+      const bccAll = [
+        ...bccRecipients.map((r) => ({ name: r.name || undefined, email: r.email })),
+        ...identityBcc,
+      ];
+
       const result = await sendEmail(
         {
           from,
@@ -945,19 +1101,36 @@ export default function ComposeScreen({ route, navigation }: Props) {
           cc: finalCc.length
             ? finalCc.map((r) => ({ name: r.name || undefined, email: r.email }))
             : undefined,
+          bcc: bccAll.length ? bccAll : undefined,
+          // The identity's Reply-To rides along on every message sent with it.
+          replyTo: primaryIdentity.replyTo?.length ? primaryIdentity.replyTo : undefined,
           subject,
           // Plain-text mode: skip the HTML part entirely so receiving clients
           // render the text/plain alternative without any formatting.
           htmlBody: plainTextMode ? undefined : finalHtml,
           textBody: finalText,
           attachments: outgoing.length ? outgoing : undefined,
-          inReplyTo: replyTo?.inReplyTo,
-          references: replyTo?.references,
+          inReplyTo: threading?.inReplyTo,
+          references: threading?.references,
+          messageId: draft?.messageId?.[0],
         },
         primaryIdentity.id,
         sentMailbox.id,
         holdForSeconds,
+        { draftsMailboxId: draftsMailbox?.id, draftId: draft?.id },
       );
+      if (result.filingWarning) {
+        console.warn('[compose] post-send filing warning:', result.filingWarning);
+      }
+      // Flag the original so the list shows the reply/forward arrow; best
+      // effort - the message already left.
+      if (replyTo?.originalEmailId) {
+        void patchKeywordsForEmails(
+          [replyTo.originalEmailId],
+          { [mode === 'forward' ? '$forwarded' : '$answered']: true },
+          replyTo.jmapAccountId,
+        ).catch(() => undefined);
+      }
       // Confirm an explicit "send later" so the user knows it didn't go out
       // now. The brief undo-send delay stays silent — it's meant to be
       // invisible unless the user cancels from the Scheduled view.
@@ -973,6 +1146,18 @@ export default function ComposeScreen({ route, navigation }: Props) {
       }
       navigation.goBack();
     } catch (e) {
+      if (e instanceof RequestTimeoutError) {
+        // The request may have reached the server; a blind retry would send
+        // the message twice (#702).
+        Alert.alert(
+          t('email_composer.send_timeout_title', 'No answer from the server'),
+          t(
+            'email_composer.send_timeout_body',
+            'The message may already have gone out. Check your Sent folder before sending it again.',
+          ),
+        );
+        return;
+      }
       Alert.alert(
         t('email_composer.send_failed', 'Send failed'),
         e instanceof Error ? e.message : 'Failed to send email',

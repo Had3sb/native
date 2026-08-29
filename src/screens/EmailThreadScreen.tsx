@@ -367,16 +367,41 @@ export default function EmailThreadScreen({ route, navigation }: Props) {
     if (!email) return;
     const from = email.from?.[0];
     if (!from && mode !== 'forward') return;
+    // Quote the HTML part when there is one so layout and inline images
+    // survive (#163). RFC 8621 §4.1.4: an HTML-only message exposes the same
+    // part in `textBody` and `htmlBody`, so the text part is only a real
+    // alternative when its partId differs - otherwise `plainTextBody` would
+    // hand the composer raw HTML source (#649).
+    const htmlPart = email.htmlBody?.[0];
+    const textPart = email.textBody?.[0];
+    const htmlValue = htmlPart?.partId ? email.bodyValues?.[htmlPart.partId]?.value : undefined;
+    const htmlIsHtml = !htmlPart?.type || /text\/html/i.test(htmlPart.type);
+    const quoteHtml = htmlValue && htmlIsHtml ? htmlValue : undefined;
+    const hasDistinctText = !!textPart?.partId && textPart.partId !== htmlPart?.partId;
+    const body = !quoteHtml || hasDistinctText ? plainTextBody(email) : undefined;
     navigation.navigate('Compose', {
       mode,
       replyTo: {
         from: from ?? { email: '' },
         to: email.to,
         cc: email.cc,
+        // RFC 5322: a reply goes to Reply-To when the sender set one.
+        replyToAddresses: email.replyTo,
         subject: email.subject ?? '',
-        body: plainTextBody(email),
+        body,
+        htmlBody: quoteHtml,
         receivedAt: email.receivedAt,
-        inReplyTo: email.id,
+        sentAt: email.sentAt,
+        // Threading needs the RFC Message-ID, never the JMAP object id (#234).
+        messageId: email.messageId ?? undefined,
+        references: email.references ?? undefined,
+        // Forward carries the original attachments as blob refs; cid-embedded
+        // inline images are already part of the quoted HTML.
+        attachments: mode === 'forward'
+          ? (email.attachments ?? []).filter((a) => !(a.disposition === 'inline' && a.cid))
+          : undefined,
+        originalEmailId: email.id,
+        jmapAccountId: ownerAccountId,
       },
     });
   };
