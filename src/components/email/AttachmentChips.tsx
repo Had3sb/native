@@ -45,11 +45,21 @@ export function AttachmentChips({ email, jmapAccountId, calendarBannerShown, tne
   const t = useLocaleStore((s) => s.t);
   const hideInlineImageAttachments = useSettingsStore((s) => s.hideInlineImageAttachments);
   const mailAttachmentAction = useSettingsStore((s) => s.mailAttachmentAction);
-  const exportOpts = useSettingsStore((s) => ({
-    spaceReplacement: s.exportSpaceReplacement,
-    lowercase: s.exportLowercase,
-    stripDiacritics: s.exportStripDiacritics,
-  }));
+  // Select primitives, not a fresh object: zustand v5 compares snapshots with
+  // Object.is, so a selector returning a new object literal on every call
+  // reports a change on every render - React then re-renders until it gives
+  // up with "Maximum update depth exceeded" (it crashed the whole viewer).
+  const exportSpaceReplacement = useSettingsStore((s) => s.exportSpaceReplacement);
+  const exportLowercase = useSettingsStore((s) => s.exportLowercase);
+  const exportStripDiacritics = useSettingsStore((s) => s.exportStripDiacritics);
+  const exportOpts = React.useMemo(
+    () => ({
+      spaceReplacement: exportSpaceReplacement,
+      lowercase: exportLowercase,
+      stripDiacritics: exportStripDiacritics,
+    }),
+    [exportSpaceReplacement, exportLowercase, exportStripDiacritics],
+  );
 
   const [expanded, setExpanded] = React.useState(false);
   const [busyKey, setBusyKey] = React.useState<string | null>(null);

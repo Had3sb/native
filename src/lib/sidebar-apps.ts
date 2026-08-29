@@ -1,3 +1,4 @@
+import React from 'react';
 import { Linking } from 'react-native';
 import { useSettingsStore, type SidebarApp } from '../stores/settings-store';
 
@@ -7,7 +8,11 @@ import { useSettingsStore, type SidebarApp } from '../stores/settings-store';
  * edits them. Mirrors the webmail's navigation-rail filter on `showOnMobile`.
  */
 export function useMobileSidebarApps(): SidebarApp[] {
-  return useSettingsStore((s) => s.sidebarApps.filter((app) => app.showOnMobile));
+  // `.filter()` in the selector would allocate a new array per call, which
+  // zustand v5 reads as a changed snapshot on every render (infinite loop).
+  // Subscribe to the stored array and derive from it.
+  const apps = useSettingsStore((s) => s.sidebarApps);
+  return React.useMemo(() => apps.filter((app) => app.showOnMobile), [apps]);
 }
 
 /**
