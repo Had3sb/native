@@ -1,13 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, Pressable, TextInput, FlatList, Modal,
+  View, Text, StyleSheet, Pressable, TextInput, FlatList, Modal, Alert,
 } from 'react-native';
-import { ChevronRight, X, Plus, Trash2 } from 'lucide-react-native';
+import { ChevronRight, X, Plus, Trash2, BookUser } from 'lucide-react-native';
 import { SettingsSection, SettingItem, RadioGroup, ToggleSwitch } from './settings-section';
 import Button from '../Button';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { useSettingsStore, type ExternalContentPolicy } from '../../stores/settings-store';
+import { useContactsStore } from '../../stores/contacts-store';
+import { useHasContacts } from '../../lib/capabilities';
+
+interface TrustedRow {
+  email: string;
+  /** Kept in the local settings list. */
+  local: boolean;
+  /** Kept in the synced "Trusted Senders" address book. */
+  synced: boolean;
+}
 
 export function ContentSendersSettings() {
   const c = useColors();
@@ -19,16 +29,94 @@ export function ContentSendersSettings() {
   const trustedSenders = useSettingsStore((s) => s.trustedSenders);
   const addTrustedSender = useSettingsStore((s) => s.addTrustedSender);
   const removeTrustedSender = useSettingsStore((s) => s.removeTrustedSender);
+  const trustedSendersAddressBook = useSettingsStore((s) => s.trustedSendersAddressBook);
+  const updateSetting = useSettingsStore((s) => s.updateSetting);
   const hydrated = useSettingsStore((s) => s.hydrated);
   const hydrate = useSettingsStore((s) => s.hydrate);
 
+  const hasContacts = useHasContacts();
+  const trustedSenderEmails = useContactsStore((s) => s.trustedSenderEmails);
+  const trustedSendersLoaded = useContactsStore((s) => s.trustedSendersLoaded);
+  const loadTrustedSendersBook = useContactsStore((s) => s.loadTrustedSendersBook);
+  const addToTrustedSendersBook = useContactsStore((s) => s.addToTrustedSendersBook);
+  const removeFromTrustedSendersBook = useContactsStore((s) => s.removeFromTrustedSendersBook);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [newSender, setNewSender] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => { if (!hydrated) void hydrate(); }, [hydrated, hydrate]);
 
-  const trustedCount = trustedSenders.length;
+  // Sync to the address book once the account proves it supports contacts;
+  // the toggle below lets the user opt out again. Mirrors the webmail, where
+  // the setting starts unset (null) and flips on with the first
+  // contacts-capable session.
+  useEffect(() => {
+    if (!hydrated || !hasContacts) return;
+    if (trustedSendersAddressBook === null) updateSetting('trustedSendersAddressBook', true);
+  }, [hydrated, hasContacts, trustedSendersAddressBook, updateSetting]);
+
+  const syncEnabled = !!trustedSendersAddressBook && hasContacts;
+
+  useEffect(() => {
+    if (modalOpen && syncEnabled) void loadTrustedSendersBook();
+  }, [modalOpen, syncEnabled, loadTrustedSendersBook]);
+
+  // The settings list ∪ the synced book, so an entry trusted from the viewer
+  // (which writes both) shows once and can be removed from both.
+  const rows = React.useMemo<TrustedRow[]>(() => {
+    const map = new Map<string, TrustedRow>();
+    for (const email of trustedSenders) {
+      const key = email.toLowerCase().trim();
+      if (!key) continue;
+      map.set(key, { email: key, local: true, synced: false });
+    }
+    if (syncEnabled) {
+      for (const email of trustedSenderEmails) {
+        const key = email.toLowerCase().trim();
+        if (!key) continue;
+        const existing = map.get(key);
+        if (existing) existing.synced = true;
+        else map.set(key, { email: key, local: false, synced: true });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.email.localeCompare(b.email));
+  }, [trustedSenders, trustedSenderEmails, syncEnabled]);
+
+  const trustedCount = rows.length;
   const trustedLabel = trustedCount === 0 ? 'None' : trustedCount === 1 ? '1 sender' : `${trustedCount} senders`;
+  const syncedCount = rows.filter((r) => r.synced).length;
+
+  const handleAdd = async () => {
+    const value = newSender.trim();
+    if (!value) return;
+    setNewSender('');
+    addTrustedSender(value);
+    if (syncEnabled) {
+      setBusy(value);
+      try {
+        await addToTrustedSendersBook(value);
+      } catch (err) {
+        Alert.alert('Could not sync to address book', err instanceof Error ? err.message : 'Unknown error');
+      } finally {
+        setBusy(null);
+      }
+    }
+  };
+
+  const handleRemove = async (row: TrustedRow) => {
+    if (row.local) removeTrustedSender(row.email);
+    if (row.synced) {
+      setBusy(row.email);
+      try {
+        await removeFromTrustedSendersBook(row.email);
+      } catch (err) {
+        Alert.alert('Could not remove from address book', err instanceof Error ? err.message : 'Unknown error');
+      } finally {
+        setBusy(null);
+      }
+    }
+  };
 
   return (
     <View style={{ gap: spacing.xxxl }}>
@@ -60,7 +148,11 @@ export function ContentSendersSettings() {
 
         <SettingItem
           label="Trusted senders"
-          description="External content always loads for senders on this list."
+          description={
+            syncEnabled && syncedCount > 0
+              ? `External content always loads for senders on this list. ${syncedCount} synced via your address book.`
+              : 'External content always loads for senders on this list.'
+          }
         >
           <Pressable
             onPress={() => setModalOpen(true)}
@@ -70,6 +162,21 @@ export function ContentSendersSettings() {
             <ChevronRight size={14} color={c.textMuted} />
           </Pressable>
         </SettingItem>
+
+        {hasContacts && (
+          <SettingItem
+            label="Sync trusted senders to address book"
+            description='Keep the list in a "Trusted Senders" address book so it is shared with the webmail and your other devices.'
+          >
+            <ToggleSwitch
+              checked={!!trustedSendersAddressBook}
+              onChange={(enabled) => {
+                updateSetting('trustedSendersAddressBook', enabled);
+                if (enabled) void loadTrustedSendersBook();
+              }}
+            />
+          </SettingItem>
+        )}
       </SettingsSection>
 
       <Modal
@@ -97,22 +204,12 @@ export function ContentSendersSettings() {
                 autoCorrect={false}
                 keyboardType="email-address"
                 style={styles.input}
-                onSubmitEditing={() => {
-                  if (newSender.trim()) {
-                    addTrustedSender(newSender);
-                    setNewSender('');
-                  }
-                }}
+                onSubmitEditing={() => { void handleAdd(); }}
               />
               <Button
                 variant="default"
                 size="sm"
-                onPress={() => {
-                  if (newSender.trim()) {
-                    addTrustedSender(newSender);
-                    setNewSender('');
-                  }
-                }}
+                onPress={() => { void handleAdd(); }}
                 disabled={!newSender.trim()}
                 icon={<Plus size={14} color={c.primaryForeground} />}
               >
@@ -120,23 +217,33 @@ export function ContentSendersSettings() {
               </Button>
             </View>
 
-            {trustedSenders.length === 0 ? (
-              <Text style={styles.emptyText}>No trusted senders yet.</Text>
+            {rows.length === 0 ? (
+              <Text style={styles.emptyText}>
+                {syncEnabled && !trustedSendersLoaded
+                  ? 'Loading…'
+                  : 'No trusted senders yet.'}
+              </Text>
             ) : (
               <FlatList
-                data={trustedSenders}
-                keyExtractor={(item) => item}
+                data={rows}
+                keyExtractor={(item) => item.email}
                 style={styles.list}
                 ItemSeparatorComponent={() => <View style={styles.separator} />}
                 renderItem={({ item }) => (
                   <View style={styles.row}>
-                    <Text style={styles.rowText} numberOfLines={1}>{item}</Text>
+                    <Text style={styles.rowText} numberOfLines={1}>{item.email}</Text>
+                    {item.synced && (
+                      <View style={styles.syncedBadge} accessibilityLabel="Synced via address book">
+                        <BookUser size={12} color={c.textMuted} />
+                      </View>
+                    )}
                     <Pressable
-                      onPress={() => removeTrustedSender(item)}
+                      onPress={() => { void handleRemove(item); }}
+                      disabled={busy === item.email}
                       hitSlop={6}
                       style={({ pressed }) => [styles.removeBtn, pressed && styles.removeBtnPressed]}
                     >
-                      <Trash2 size={16} color={c.error} />
+                      <Trash2 size={16} color={busy === item.email ? c.textMuted : c.error} />
                     </Pressable>
                   </View>
                 )}
@@ -205,6 +312,13 @@ function makeStyles(c: ThemePalette) {
     paddingVertical: spacing.md,
   },
   rowText: { ...typography.body, color: c.text, flex: 1, marginRight: spacing.sm },
+  syncedBadge: {
+    width: 22, height: 22,
+    alignItems: 'center', justifyContent: 'center',
+    borderRadius: radius.full,
+    backgroundColor: c.muted,
+    marginRight: spacing.xs,
+  },
   removeBtn: { padding: 6, borderRadius: radius.sm },
   removeBtnPressed: { backgroundColor: c.muted },
   emptyText: {
