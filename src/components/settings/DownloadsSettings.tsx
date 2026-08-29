@@ -16,6 +16,7 @@ import {
   DEFAULT_ATTACHMENT_TEMPLATE,
   type EmailFilenameOptions,
 } from '../../lib/download-filename';
+import { useLocaleStore } from '../../stores/locale-store';
 
 const SAMPLE = buildSampleEmail();
 const SAMPLE_ATTACHMENT = { name: 'Rechnung 2026.pdf', type: 'application/pdf' };
@@ -24,6 +25,7 @@ export function DownloadsSettings() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const hydrated = useSettingsStore((s) => s.hydrated);
+  const t = useLocaleStore((s) => s.t);
   const hydrate = useSettingsStore((s) => s.hydrate);
   const update = useSettingsStore((s) => s.updateSetting);
 
@@ -46,8 +48,8 @@ export function DownloadsSettings() {
   return (
     <View style={{ gap: spacing.xxxl }}>
       <SettingsSection
-        title="Email Filename"
-        description="Template used when exporting a message as an .eml file."
+        title={t('settings.downloads.email_template.label', "Email (.eml) filename")}
+        description={t('settings.downloads.email_template.description_mobile', "Template used when exporting a message as an .eml file.")}
       >
         <Input
           value={emailTemplate}
@@ -60,18 +62,18 @@ export function DownloadsSettings() {
           style={styles.resetRow}
         >
           <RotateCcw size={12} color={c.mutedForeground} />
-          <Text style={styles.resetText}>Reset to default</Text>
+          <Text style={styles.resetText}>{t('settings.downloads.reset', "Restore default")}</Text>
         </Pressable>
         <View style={styles.previewBox}>
-          <Text style={styles.previewLabel}>Preview</Text>
+          <Text style={styles.previewLabel}>{t('settings.downloads.preview', "Preview:")}</Text>
           <Text style={styles.previewValue}>{emailPreview}</Text>
         </View>
         <TokenList tokens={EMAIL_TOKENS} styles={styles} />
       </SettingsSection>
 
       <SettingsSection
-        title="Attachment Filename"
-        description="Template used when saving or sharing an attachment."
+        title={t('settings.downloads.attachment_template.label', "Attachment filename")}
+        description={t('settings.downloads.attachment_template.description_mobile', "Template used when saving or sharing an attachment.")}
       >
         <Input
           value={attachmentTemplate}
@@ -84,56 +86,56 @@ export function DownloadsSettings() {
           style={styles.resetRow}
         >
           <RotateCcw size={12} color={c.mutedForeground} />
-          <Text style={styles.resetText}>Reset to default</Text>
+          <Text style={styles.resetText}>{t('settings.downloads.reset', "Restore default")}</Text>
         </Pressable>
         <View style={styles.previewBox}>
-          <Text style={styles.previewLabel}>Preview</Text>
+          <Text style={styles.previewLabel}>{t('settings.downloads.preview', "Preview:")}</Text>
           <Text style={styles.previewValue}>{attachmentPreview}</Text>
         </View>
         <TokenList tokens={ATTACHMENT_TOKENS} styles={styles} />
       </SettingsSection>
 
       <SettingsSection
-        title="Filename Transform"
-        description="Applied to every exported filename."
+        title={t('settings.downloads.transform_title', "Filename Transform")}
+        description={t('settings.downloads.transform_description', "Applied to every exported filename.")}
       >
         <View style={styles.group}>
-          <SettingItem label="Spaces" description="Replace spaces in filenames." noBorder />
+          <SettingItem label={t('settings.downloads.spaces.label', "Spaces")} description={t('settings.downloads.spaces.description', "Replace spaces in the resulting filename with another character.")} noBorder />
           <RadioGroup
             value={spaceReplacement}
             onChange={(v) => update('exportSpaceReplacement', v as SpaceReplacement)}
             options={[
-              { value: 'keep', label: 'Keep' },
-              { value: 'underscore', label: 'Underscore' },
-              { value: 'dash', label: 'Dash' },
+              { value: 'keep', label: t('settings.downloads.spaces.keep', "Keep spaces") },
+              { value: 'underscore', label: t('settings.downloads.spaces.underscore', "Replace with _") },
+              { value: 'dash', label: t('settings.downloads.spaces.dash', "Replace with -") },
             ]}
           />
         </View>
 
-        <SettingItem label="Lowercase" description="Force the whole filename to lowercase.">
+        <SettingItem label={t('settings.downloads.lowercase.label', "Lowercase")} description={t('settings.downloads.lowercase.description', "Force the entire filename to lowercase.")}>
           <ToggleSwitch checked={lowercase} onChange={(v) => update('exportLowercase', v)} />
         </SettingItem>
 
         <SettingItem
-          label="Strip Accents"
-          description="Convert accented letters to plain ASCII (ä → a)."
+          label={t('settings.downloads.strip_diacritics.label', "Strip diacritics")}
+          description={t('settings.downloads.strip_diacritics.description_mobile', "Convert accented letters to plain ASCII (ä → a).")}
         >
           <ToggleSwitch checked={stripDiacritics} onChange={(v) => update('exportStripDiacritics', v)} />
         </SettingItem>
       </SettingsSection>
 
       <SettingsSection
-        title="After Export"
-        description="What happens to a message after it was exported as .eml."
+        title={t('settings.downloads.after_export.label', "After export")}
+        description={t('settings.downloads.after_export.description', "Optionally move the email after exporting it as .eml.")}
       >
         <View style={styles.group}>
           <RadioGroup
             value={postExportAction}
             onChange={(v) => update('postExportAction', v as PostExportAction)}
             options={[
-              { value: 'keep', label: 'Keep in folder' },
-              { value: 'archive', label: 'Archive' },
-              { value: 'trash', label: 'Move to Trash' },
+              { value: 'keep', label: t('settings.downloads.after_export.keep', "Keep in mailbox") },
+              { value: 'archive', label: t('settings.downloads.after_export.archive', "Move to archive") },
+              { value: 'trash', label: t('settings.downloads.after_export.trash', "Move to trash") },
             ]}
           />
         </View>
