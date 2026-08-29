@@ -3160,7 +3160,9 @@
       "quick_add_placeholder": "Add a task...",
       "due_today": "Today",
       "due_tomorrow": "Tomorrow",
-      "overdue": "Overdue"
+      "overdue": "Overdue",
+      "add_placeholder": "Add a task…",
+      "add_time": "Add time"
     },
     "agenda": {
       "no_upcoming": "No upcoming events",

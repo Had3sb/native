@@ -141,6 +141,7 @@ export default function CalendarScreen() {
   const { locale } = useCalendarLocale();
   const calendarDefaultView = useSettingsStore((s) => s.calendarDefaultView);
   const calendarShowTimeInMonth = useSettingsStore((s) => s.calendarShowTimeInMonth);
+  const showTasksOnCalendar = useSettingsStore((s) => s.showTasksOnCalendar);
   const calendarFirstDayOfWeek = useSettingsStore((s) => s.calendarFirstDayOfWeek);
   const calendarShowWeekNumbers = useSettingsStore((s) => s.calendarShowWeekNumbers);
   const calendarTimeFormat = useSettingsStore((s) => s.calendarTimeFormat);
@@ -185,7 +186,10 @@ export default function CalendarScreen() {
   const tasks = useCalendarStore((s) => s.tasks);
   const createTask = useCalendarStore((s) => s.createTask);
   const toggleTaskComplete = useCalendarStore((s) => s.toggleTaskComplete);
+  const updateTask = useCalendarStore((s) => s.updateTask);
   const deleteTask = useCalendarStore((s) => s.deleteTask);
+  // Task to open in the tasks sheet when a task chip on the grid is tapped.
+  const [tasksInitialId, setTasksInitialId] = React.useState<string | null>(null);
   const toggleCalendarVisibility = useCalendarStore((s) => s.toggleCalendarVisibility);
   const setDefaultCalendar = useCalendarStore((s) => s.setDefaultCalendar);
   const createCalendar = useCalendarStore((s) => s.createCalendar);
@@ -251,9 +255,35 @@ export default function CalendarScreen() {
     () => (showBirthdayCalendar ? [...displayCalendars, createBirthdayCalendar()] : displayCalendars),
     [displayCalendars, showBirthdayCalendar],
   );
+  // Tasks with a due date are overlaid on the grid as chips (webmail's
+  // showTasksOnCalendar); tapping one opens the tasks sheet on that task.
+  const taskEvents = React.useMemo<CalendarEvent[]>(() => {
+    if (!enableCalendarTasks || !showTasksOnCalendar) return [];
+    const out: CalendarEvent[] = [];
+    for (const task of tasks) {
+      if (!task.due || task.progress === 'completed' || task.progress === 'cancelled') continue;
+      const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(task.due);
+      const allDay = !!task.showWithoutTime || dateOnly;
+      out.push({
+        ...task,
+        id: `task:${task.id}`,
+        start: dateOnly ? `${task.due}T00:00:00` : task.due,
+        showWithoutTime: allDay,
+        duration: allDay ? 'P1D' : 'PT30M',
+        utcStart: undefined,
+        utcEnd: undefined,
+        title: `☐ ${task.title || ''}`.trim(),
+        recurrenceRules: undefined,
+        recurrenceId: undefined,
+      });
+    }
+    return out;
+  }, [tasks, enableCalendarTasks, showTasksOnCalendar]);
   const allEvents = React.useMemo(
-    () => (birthdayEvents.length > 0 ? [...storeEvents, ...birthdayEvents] : storeEvents),
-    [storeEvents, birthdayEvents],
+    () => (birthdayEvents.length > 0 || taskEvents.length > 0
+      ? [...storeEvents, ...birthdayEvents, ...taskEvents]
+      : storeEvents),
+    [storeEvents, birthdayEvents, taskEvents],
   );
 
   // VTODO-only task lists (Todoist imports, per-project Thunderbird task
@@ -352,6 +382,16 @@ export default function CalendarScreen() {
     setModalEvent(null);
     setModalDate(date);
     setModalVisible(true);
+  }, []);
+
+  // Task chips route to the tasks sheet; everything else opens the detail sheet.
+  const handleSelectEvent = React.useCallback((event: CalendarEvent) => {
+    if (event.id.startsWith('task:')) {
+      setTasksInitialId(event.id.slice('task:'.length));
+      setTasksVisible(true);
+      return;
+    }
+    setDetailEvent(event);
   }, []);
 
   const openEditDirect = React.useCallback((event: CalendarEvent) => {
@@ -721,7 +761,7 @@ export default function CalendarScreen() {
             weekStartsOn={calendarFirstDayOfWeek}
             timeFormat={calendarTimeFormat}
             onSelectDate={handleSelectDate}
-            onSelectEvent={setDetailEvent}
+            onSelectEvent={handleSelectEvent}
             onCreateAtTime={openCreate}
           />
         )}
@@ -733,7 +773,7 @@ export default function CalendarScreen() {
             eventsByDay={eventsByDay}
             calendars={calendars}
             timeFormat={calendarTimeFormat}
-            onSelectEvent={setDetailEvent}
+            onSelectEvent={handleSelectEvent}
           />
         )}
 
@@ -752,7 +792,7 @@ export default function CalendarScreen() {
               eventsByDay={eventsByDay}
               calendars={calendars}
               timeFormat={calendarTimeFormat}
-              onSelectEvent={setDetailEvent}
+              onSelectEvent={handleSelectEvent}
               refreshing={refreshing}
               onRefresh={onRefresh}
             />
@@ -831,8 +871,11 @@ export default function CalendarScreen() {
         visible={tasksVisible}
         tasks={tasks}
         calendars={taskSheetCalendars}
-        onClose={() => setTasksVisible(false)}
+        timeFormat={calendarTimeFormat}
+        initialTaskId={tasksInitialId}
+        onClose={() => { setTasksVisible(false); setTasksInitialId(null); }}
         onCreate={createTask}
+        onUpdate={updateTask}
         onToggle={toggleTaskComplete}
         onDelete={deleteTask}
       />

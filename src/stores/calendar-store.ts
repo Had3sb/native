@@ -587,7 +587,7 @@ export const useCalendarStore = create<CalendarState>()(
       undefined,
       cal?.accountId,
     );
-    await get().refresh();
+    await get().fetchTasks();
   },
 
   updateTask: async (id, changes) => {
@@ -601,9 +601,11 @@ export const useCalendarStore = create<CalendarState>()(
     const task = get().tasks.find((t) => t.id === id);
     if (!task) return;
     const completed = task.progress === 'completed';
+    // Un-completing goes back to needs-action (not in-process), like webmail;
+    // progressUpdated records when the state changed (RFC 8984 §5.2.4).
     const next: Partial<CalendarEvent> = completed
-      ? { progress: 'in-process', percentComplete: 0 }
-      : { progress: 'completed', percentComplete: 100 };
+      ? { progress: 'needs-action', percentComplete: 0, progressUpdated: new Date().toISOString() }
+      : { progress: 'completed', percentComplete: 100, progressUpdated: new Date().toISOString() };
     await get().updateTask(id, next);
   },
 

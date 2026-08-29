@@ -17,63 +17,129 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   Calendar as CalendarIcon,
   Check,
+  Clock,
+  Flag,
   ListChecks,
   Plus,
   Trash2,
   X,
 } from 'lucide-react-native';
-import { format, parseISO } from 'date-fns';
+import { format, isBefore, isToday, parseISO, startOfDay } from 'date-fns';
 import type { Calendar, CalendarEvent } from '../../api/types';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
-import { getCalendarColor } from '../../lib/calendar-utils';
+import { getCalendarColor, timePattern, type TimeFormat } from '../../lib/calendar-utils';
 import { isWritableCalendar } from '../../lib/calendar-editability';
+import { useCalendarLocale } from '../../lib/calendar-locale';
 import { useSheetDrag } from '../../lib/use-sheet-drag';
+
+type TaskFilter = 'all' | 'pending' | 'completed' | 'overdue';
+type PriorityLevel = 'none' | 'high' | 'medium' | 'low';
 
 interface TasksSheetProps {
   visible: boolean;
   tasks: CalendarEvent[];
   calendars: Calendar[];
+  timeFormat?: TimeFormat;
+  // Task to open in the editor when the sheet appears (from a calendar chip).
+  initialTaskId?: string | null;
   onClose: () => void;
   onCreate: (task: Partial<CalendarEvent>, calendarId: string) => Promise<void> | void;
+  onUpdate?: (id: string, changes: Partial<CalendarEvent>) => Promise<void> | void;
   onToggle: (id: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
 }
 
+// RFC 8984 priority 0-9 <-> the three levels the editor offers (webmail's
+// task-modal mapping).
+export function priorityToLevel(p: number | undefined): PriorityLevel {
+  if (p === undefined) return 'none';
+  if (p >= 1 && p <= 4) return 'high';
+  if (p === 5) return 'medium';
+  if (p >= 6 && p <= 9) return 'low';
+  return 'none';
+}
+
+export function levelToPriority(l: PriorityLevel): number {
+  switch (l) {
+    case 'high': return 1;
+    case 'medium': return 5;
+    case 'low': return 9;
+    default: return 0;
+  }
+}
+
 function isCompleted(task: CalendarEvent): boolean {
-  return task.progress === 'completed';
+  return task.progress === 'completed' || task.progress === 'cancelled';
 }
 
-function dueLabel(task: CalendarEvent): string | null {
-  if (!task.due) return null;
+function isOverdue(task: CalendarEvent): boolean {
+  if (!task.due || isCompleted(task)) return false;
   const d = parseISO(task.due);
-  if (isNaN(d.getTime())) return null;
-  return format(d, 'EEE, MMM d');
+  if (isNaN(d.getTime())) return false;
+  return isBefore(d, startOfDay(new Date())) && !isToday(d);
 }
 
-// Tasks first by completion (open first), then by due date (soonest first,
-// undated last), then title.
+// Open tasks first, overdue first among them, then by due date (soonest
+// first, undated last), then by priority, then title.
 function compareTasks(a: CalendarEvent, b: CalendarEvent): number {
   const ac = isCompleted(a);
   const bc = isCompleted(b);
   if (ac !== bc) return ac ? 1 : -1;
+  const ao = isOverdue(a);
+  const bo = isOverdue(b);
+  if (ao !== bo) return ao ? -1 : 1;
   const ad = a.due ? parseISO(a.due).getTime() : Infinity;
   const bd = b.due ? parseISO(b.due).getTime() : Infinity;
   if (ad !== bd) return ad - bd;
+  const ap = a.priority || 10;
+  const bp = b.priority || 10;
+  if (ap !== bp) return ap - bp;
   return (a.title || '').localeCompare(b.title || '');
+}
+
+interface EditorState {
+  id: string | null;
+  title: string;
+  description: string;
+  due: Date | null;
+  withTime: boolean;
+  priority: PriorityLevel;
+  calendarId: string;
+}
+
+function emptyEditor(calendarId: string): EditorState {
+  return { id: null, title: '', description: '', due: null, withTime: false, priority: 'none', calendarId };
+}
+
+function editorFromTask(task: CalendarEvent, fallbackCalendarId: string): EditorState {
+  const due = task.due ? parseISO(task.due) : null;
+  return {
+    id: task.id,
+    title: task.title || '',
+    description: task.description || '',
+    due: due && !isNaN(due.getTime()) ? due : null,
+    withTime: !!task.due && !task.showWithoutTime && !/^\d{4}-\d{2}-\d{2}$/.test(task.due),
+    priority: priorityToLevel(task.priority),
+    calendarId: Object.keys(task.calendarIds || {})[0] || fallbackCalendarId,
+  };
 }
 
 export function TasksSheet({
   visible,
   tasks,
   calendars,
+  timeFormat,
+  initialTaskId,
   onClose,
   onCreate,
+  onUpdate,
   onToggle,
   onDelete,
 }: TasksSheetProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const { locale, t } = useCalendarLocale();
   const slideY = React.useRef(new Animated.Value(Dimensions.get('window').height)).current;
   const overlayOpacity = React.useRef(new Animated.Value(0)).current;
   const dragHandlers = useSheetDrag({
@@ -86,18 +152,33 @@ export function TasksSheet({
     () => calendars.filter((cal) => isWritableCalendar(cal)),
     [calendars],
   );
+  const defaultCalendarId = writableCalendars[0]?.id || '';
 
-  const [title, setTitle] = React.useState('');
-  const [calendarId, setCalendarId] = React.useState('');
-  const [due, setDue] = React.useState<Date | null>(null);
-  const [showDuePicker, setShowDuePicker] = React.useState(false);
+  const [filter, setFilter] = React.useState<TaskFilter>('all');
+  const [editor, setEditor] = React.useState<EditorState>(() => emptyEditor(defaultCalendarId));
+  const [expanded, setExpanded] = React.useState(false);
+  const [showDatePicker, setShowDatePicker] = React.useState(false);
+  const [showTimePicker, setShowTimePicker] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
-    if (visible && !calendarId && writableCalendars[0]) {
-      setCalendarId(writableCalendars[0].id);
+    if (!visible) return;
+    const initial = initialTaskId ? tasks.find((task) => task.id === initialTaskId) : undefined;
+    if (initial) {
+      setEditor(editorFromTask(initial, defaultCalendarId));
+      setExpanded(true);
+    } else {
+      setEditor(emptyEditor(defaultCalendarId));
+      setExpanded(false);
     }
-  }, [visible, calendarId, writableCalendars]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, initialTaskId]);
+
+  React.useEffect(() => {
+    if (visible && !editor.calendarId && defaultCalendarId) {
+      setEditor((e) => ({ ...e, calendarId: defaultCalendarId }));
+    }
+  }, [visible, editor.calendarId, defaultCalendarId]);
 
   React.useEffect(() => {
     if (visible) {
@@ -113,27 +194,96 @@ export function TasksSheet({
     }
   }, [visible, slideY, overlayOpacity]);
 
-  const sorted = React.useMemo(() => [...tasks].sort(compareTasks), [tasks]);
+  const filtered = React.useMemo(() => {
+    let result = tasks;
+    switch (filter) {
+      case 'pending':
+        result = result.filter((task) => !isCompleted(task));
+        break;
+      case 'completed':
+        result = result.filter((task) => task.progress === 'completed');
+        break;
+      case 'overdue':
+        result = result.filter(isOverdue);
+        break;
+    }
+    return [...result].sort(compareTasks);
+  }, [tasks, filter]);
 
-  const handleAdd = async () => {
-    const t = title.trim();
-    if (!t || !calendarId || saving) return;
+  const counts = React.useMemo(() => ({
+    all: tasks.length,
+    pending: tasks.filter((task) => !isCompleted(task)).length,
+    completed: tasks.filter((task) => task.progress === 'completed').length,
+    overdue: tasks.filter(isOverdue).length,
+  }), [tasks]);
+
+  const resetEditor = () => {
+    setEditor(emptyEditor(defaultCalendarId));
+    setExpanded(false);
+  };
+
+  const handleSave = async () => {
+    const title = editor.title.trim();
+    if (!title || !editor.calendarId || saving) return;
     setSaving(true);
     try {
-      const task: Partial<CalendarEvent> = {
-        title: t,
-        progress: 'needs-action',
+      const data: Partial<CalendarEvent> = {
+        title,
+        description: editor.description.trim(),
+        priority: levelToPriority(editor.priority),
       };
-      if (due) {
-        task.due = format(due, "yyyy-MM-dd'T'HH:mm:ss");
+      if (editor.due) {
+        if (editor.withTime) {
+          data.due = format(editor.due, "yyyy-MM-dd'T'HH:mm:ss");
+          data.showWithoutTime = false;
+        } else {
+          data.due = format(editor.due, "yyyy-MM-dd'T'00:00:00");
+          data.showWithoutTime = true;
+        }
+      } else if (editor.id) {
+        data.due = null;
       }
-      await onCreate(task, calendarId);
-      setTitle('');
-      setDue(null);
+      if (editor.id) {
+        const existing = tasks.find((task) => task.id === editor.id);
+        const currentCalendar = existing ? Object.keys(existing.calendarIds || {})[0] : undefined;
+        if (editor.calendarId && currentCalendar && editor.calendarId !== currentCalendar) {
+          data.calendarIds = { [editor.calendarId]: true };
+        }
+        await onUpdate?.(editor.id, data);
+      } else {
+        await onCreate({ ...data, progress: 'needs-action' }, editor.calendarId);
+      }
+      resetEditor();
     } finally {
       setSaving(false);
     }
   };
+
+  const dueLabel = (task: CalendarEvent): string | null => {
+    if (!task.due) return null;
+    const d = parseISO(task.due);
+    if (isNaN(d.getTime())) return null;
+    const hasTime = !task.showWithoutTime && !/^\d{4}-\d{2}-\d{2}$/.test(task.due);
+    return hasTime
+      ? format(d, `EEE, MMM d · ${timePattern(timeFormat)}`, { locale })
+      : format(d, 'EEE, MMM d', { locale });
+  };
+
+  const priorityColor = (level: PriorityLevel): string =>
+    level === 'high' ? c.error : level === 'medium' ? c.warning : level === 'low' ? c.primary : c.textMuted;
+
+  const FILTERS: { value: TaskFilter; key: string; fallback: string }[] = [
+    { value: 'all', key: 'calendar.tasks.filter_all', fallback: 'All' },
+    { value: 'pending', key: 'calendar.tasks.filter_pending', fallback: 'Pending' },
+    { value: 'completed', key: 'calendar.tasks.filter_completed', fallback: 'Completed' },
+    { value: 'overdue', key: 'calendar.tasks.filter_overdue', fallback: 'Overdue' },
+  ];
+  const PRIORITIES: { value: PriorityLevel; key: string; fallback: string }[] = [
+    { value: 'none', key: 'calendar.tasks.priority_none', fallback: 'None' },
+    { value: 'high', key: 'calendar.tasks.priority_high', fallback: 'High' },
+    { value: 'medium', key: 'calendar.tasks.priority_medium', fallback: 'Medium' },
+    { value: 'low', key: 'calendar.tasks.priority_low', fallback: 'Low' },
+  ];
 
   return (
     <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
@@ -149,7 +299,7 @@ export function TasksSheet({
             </View>
             <View style={styles.header}>
               <ListChecks size={20} color={c.text} />
-              <Text style={styles.headerTitle}>Tasks</Text>
+              <Text style={styles.headerTitle}>{t('calendar.tasks.label', 'Tasks')}</Text>
               <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={8}>
                 <X size={20} color={c.textMuted} />
               </Pressable>
@@ -158,62 +308,136 @@ export function TasksSheet({
 
           <View style={styles.addRow}>
             <TextInput
-              value={title}
-              onChangeText={setTitle}
-              placeholder="Add a task…"
+              value={editor.title}
+              onChangeText={(v) => setEditor((e) => ({ ...e, title: v }))}
+              placeholder={editor.id ? t('calendar.tasks.title_placeholder', 'Task title') : t('calendar.tasks.add_placeholder', 'Add a task…')}
               placeholderTextColor={c.textMuted}
               style={styles.addInput}
               returnKeyType="done"
-              onSubmitEditing={() => { void handleAdd(); }}
+              onFocus={() => setExpanded(true)}
+              onSubmitEditing={() => { void handleSave(); }}
             />
             <Pressable
-              onPress={() => setShowDuePicker(true)}
-              style={[styles.dueChip, due && styles.dueChipActive]}
-              hitSlop={6}
+              onPress={() => { void handleSave(); }}
+              disabled={!editor.title.trim() || !editor.calendarId || saving}
+              style={[styles.addBtn, (!editor.title.trim() || saving) && styles.addBtnDisabled]}
             >
-              <CalendarIcon size={14} color={due ? c.primary : c.textMuted} />
-              {due && <Text style={styles.dueChipText}>{format(due, 'MMM d')}</Text>}
-            </Pressable>
-            <Pressable
-              onPress={() => { void handleAdd(); }}
-              disabled={!title.trim() || !calendarId || saving}
-              style={[styles.addBtn, (!title.trim() || saving) && styles.addBtnDisabled]}
-            >
-              <Plus size={18} color={c.primaryForeground} />
+              {editor.id ? <Check size={18} color={c.primaryForeground} /> : <Plus size={18} color={c.primaryForeground} />}
             </Pressable>
           </View>
 
-          {writableCalendars.length > 1 && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.calChips}
-            >
-              {writableCalendars.map((cal) => (
+          {expanded && (
+            <View style={styles.editor}>
+              <TextInput
+                value={editor.description}
+                onChangeText={(v) => setEditor((e) => ({ ...e, description: v }))}
+                placeholder={t('calendar.tasks.description_placeholder', 'Notes')}
+                placeholderTextColor={c.textMuted}
+                style={styles.descriptionInput}
+                multiline
+              />
+              <View style={styles.editorRow}>
                 <Pressable
-                  key={cal.id}
-                  onPress={() => setCalendarId(cal.id)}
-                  style={[styles.calChip, cal.id === calendarId && styles.calChipActive]}
+                  onPress={() => setShowDatePicker(true)}
+                  style={[styles.chip, editor.due && styles.chipActive]}
                 >
-                  <View style={[styles.calSwatch, { backgroundColor: getCalendarColor(cal) }]} />
-                  <Text style={styles.calChipText} numberOfLines={1}>{cal.name}</Text>
+                  <CalendarIcon size={14} color={editor.due ? c.primary : c.textMuted} />
+                  <Text style={[styles.chipText, editor.due && styles.chipTextActive]}>
+                    {editor.due ? format(editor.due, 'MMM d', { locale }) : t('calendar.tasks.due_date', 'Due date')}
+                  </Text>
+                  {editor.due && (
+                    <Pressable
+                      hitSlop={6}
+                      onPress={() => setEditor((e) => ({ ...e, due: null, withTime: false }))}
+                    >
+                      <X size={12} color={c.textMuted} />
+                    </Pressable>
+                  )}
                 </Pressable>
-              ))}
-            </ScrollView>
+                {editor.due && (
+                  <Pressable
+                    onPress={() => setShowTimePicker(true)}
+                    style={[styles.chip, editor.withTime && styles.chipActive]}
+                  >
+                    <Clock size={14} color={editor.withTime ? c.primary : c.textMuted} />
+                    <Text style={[styles.chipText, editor.withTime && styles.chipTextActive]}>
+                      {editor.withTime
+                        ? format(editor.due, timePattern(timeFormat), { locale })
+                        : t('calendar.tasks.add_time', 'Add time')}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+              <View style={styles.editorRow}>
+                <Flag size={14} color={c.textMuted} />
+                {PRIORITIES.map((p) => {
+                  const active = editor.priority === p.value;
+                  return (
+                    <Pressable
+                      key={p.value}
+                      onPress={() => setEditor((e) => ({ ...e, priority: p.value }))}
+                      style={[styles.chip, active && { borderColor: priorityColor(p.value), backgroundColor: c.surface }]}
+                    >
+                      <Text style={[styles.chipText, active && { color: priorityColor(p.value) }]}>
+                        {t(p.key, p.fallback)}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {writableCalendars.length > 1 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.calChips}>
+                  {writableCalendars.map((cal) => (
+                    <Pressable
+                      key={cal.id}
+                      onPress={() => setEditor((e) => ({ ...e, calendarId: cal.id }))}
+                      style={[styles.calChip, cal.id === editor.calendarId && styles.calChipActive]}
+                    >
+                      <View style={[styles.calSwatch, { backgroundColor: getCalendarColor(cal) }]} />
+                      <Text style={styles.calChipText} numberOfLines={1}>{cal.name}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              )}
+              {editor.id && (
+                <Pressable onPress={resetEditor} style={styles.cancelEdit}>
+                  <Text style={styles.cancelEditText}>{t('calendar.form.cancel', 'Cancel')}</Text>
+                </Pressable>
+              )}
+            </View>
           )}
 
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
+            {FILTERS.map((f) => {
+              const active = filter === f.value;
+              return (
+                <Pressable
+                  key={f.value}
+                  onPress={() => setFilter(f.value)}
+                  style={[styles.filterChip, active && styles.filterChipActive]}
+                >
+                  <Text style={[styles.filterText, active && styles.filterTextActive]}>
+                    {t(f.key, f.fallback)} · {counts[f.value]}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+
           <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-            {sorted.length === 0 ? (
+            {filtered.length === 0 ? (
               <View style={styles.empty}>
                 <ListChecks size={32} color={c.surfaceActive} />
-                <Text style={styles.emptyText}>No tasks yet</Text>
+                <Text style={styles.emptyText}>{t('calendar.tasks.no_tasks', 'No tasks')}</Text>
               </View>
             ) : (
-              sorted.map((task) => {
+              filtered.map((task) => {
                 const completed = isCompleted(task);
+                const overdue = isOverdue(task);
                 const due = dueLabel(task);
+                const level = priorityToLevel(task.priority);
                 return (
-                  <View key={task.id} style={styles.taskRow}>
+                  <View key={task.id} style={[styles.taskRow, editor.id === task.id && styles.taskRowEditing]}>
                     <Pressable
                       onPress={() => { void onToggle(task.id); }}
                       style={[styles.checkbox, completed && styles.checkboxChecked]}
@@ -221,12 +445,27 @@ export function TasksSheet({
                     >
                       {completed && <Check size={14} color={c.primaryForeground} />}
                     </Pressable>
-                    <View style={styles.taskText}>
-                      <Text style={[styles.taskTitle, completed && styles.taskTitleDone]} numberOfLines={2}>
-                        {task.title || 'Untitled task'}
-                      </Text>
-                      {due && <Text style={styles.taskDue}>{due}</Text>}
-                    </View>
+                    <Pressable
+                      style={styles.taskText}
+                      onPress={() => {
+                        if (!onUpdate) return;
+                        setEditor(editorFromTask(task, defaultCalendarId));
+                        setExpanded(true);
+                      }}
+                    >
+                      <View style={styles.taskTitleRow}>
+                        {level !== 'none' && <Flag size={12} color={priorityColor(level)} />}
+                        <Text style={[styles.taskTitle, completed && styles.taskTitleDone]} numberOfLines={2}>
+                          {task.title || t('calendar.tasks.no_title', '(No title)')}
+                        </Text>
+                      </View>
+                      {task.description ? (
+                        <Text style={styles.taskDescription} numberOfLines={1}>{task.description}</Text>
+                      ) : null}
+                      {due && (
+                        <Text style={[styles.taskDue, overdue && styles.taskDueOverdue]}>{due}</Text>
+                      )}
+                    </Pressable>
                     <Pressable onPress={() => { void onDelete(task.id); }} hitSlop={8} style={styles.taskDelete}>
                       <Trash2 size={16} color={c.textMuted} />
                     </Pressable>
@@ -238,14 +477,38 @@ export function TasksSheet({
         </SafeAreaView>
       </Animated.View>
 
-      {showDuePicker && (
+      {showDatePicker && (
         <DateTimePicker
-          value={due ?? new Date()}
+          value={editor.due ?? new Date()}
           mode="date"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           onChange={(_, d) => {
-            setShowDuePicker(false);
-            if (d) setDue(d);
+            setShowDatePicker(false);
+            if (d) {
+              setEditor((e) => {
+                const next = new Date(e.due ?? d);
+                next.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
+                if (!e.withTime) next.setHours(0, 0, 0, 0);
+                return { ...e, due: next };
+              });
+            }
+          }}
+        />
+      )}
+      {showTimePicker && (
+        <DateTimePicker
+          value={editor.due ?? new Date()}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowTimePicker(false);
+            if (d) {
+              setEditor((e) => {
+                const next = new Date(e.due ?? d);
+                next.setHours(d.getHours(), d.getMinutes(), 0, 0);
+                return { ...e, due: next, withTime: true };
+              });
+            }
           }}
         />
       )}
@@ -262,7 +525,7 @@ function makeStyles(c: ThemePalette) {
       left: 0,
       right: 0,
       bottom: 0,
-      maxHeight: '85%',
+      maxHeight: '88%',
       backgroundColor: c.background,
       borderTopLeftRadius: radius.xl,
       borderTopRightRadius: radius.xl,
@@ -301,19 +564,6 @@ function makeStyles(c: ThemePalette) {
       paddingVertical: spacing.sm,
       backgroundColor: c.surface,
     },
-    dueChip: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      paddingHorizontal: spacing.sm,
-      height: 38,
-      borderRadius: radius.sm,
-      borderWidth: 1,
-      borderColor: c.border,
-      backgroundColor: c.surface,
-    },
-    dueChipActive: { borderColor: c.primary, backgroundColor: c.primaryBg },
-    dueChipText: { ...typography.caption, color: c.primary },
     addBtn: {
       width: 38,
       height: 38,
@@ -324,7 +574,38 @@ function makeStyles(c: ThemePalette) {
     },
     addBtnDisabled: { opacity: 0.5 },
 
-    calChips: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, gap: spacing.sm },
+    editor: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, gap: spacing.sm },
+    descriptionInput: {
+      ...typography.body,
+      color: c.text,
+      minHeight: 48,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: radius.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      backgroundColor: c.surface,
+      textAlignVertical: 'top',
+    },
+    editorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+    chip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 6,
+      borderRadius: radius.full,
+      borderWidth: 1,
+      borderColor: c.border,
+      backgroundColor: c.surface,
+    },
+    chipActive: { borderColor: c.primary, backgroundColor: c.primaryBg },
+    chipText: { ...typography.caption, color: c.textMuted },
+    chipTextActive: { color: c.primary },
+    cancelEdit: { alignSelf: 'flex-end', paddingVertical: 4 },
+    cancelEditText: { ...typography.caption, color: c.primary },
+
+    calChips: { gap: spacing.sm },
     calChip: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -340,6 +621,19 @@ function makeStyles(c: ThemePalette) {
     calSwatch: { width: 10, height: 10, borderRadius: 5 },
     calChipText: { ...typography.caption, color: c.text, flexShrink: 1 },
 
+    filters: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, gap: spacing.sm },
+    filterChip: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: 6,
+      borderRadius: radius.full,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.border,
+    },
+    filterChipActive: { backgroundColor: c.primary, borderColor: c.primary },
+    filterText: { ...typography.caption, color: c.text },
+    filterTextActive: { color: c.primaryForeground },
+
     list: { flexGrow: 0 },
     listContent: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
     empty: { alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.sm },
@@ -353,6 +647,7 @@ function makeStyles(c: ThemePalette) {
       borderBottomWidth: 1,
       borderBottomColor: c.borderLight,
     },
+    taskRowEditing: { backgroundColor: c.primaryBg },
     checkbox: {
       width: 22,
       height: 22,
@@ -364,9 +659,12 @@ function makeStyles(c: ThemePalette) {
     },
     checkboxChecked: { backgroundColor: c.primary, borderColor: c.primary },
     taskText: { flex: 1 },
-    taskTitle: { ...typography.body, color: c.text },
+    taskTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    taskTitle: { ...typography.body, color: c.text, flexShrink: 1 },
     taskTitleDone: { textDecorationLine: 'line-through', color: c.textMuted },
+    taskDescription: { ...typography.caption, color: c.textMuted, marginTop: 1 },
     taskDue: { ...typography.caption, color: c.textMuted, marginTop: 2 },
+    taskDueOverdue: { color: c.error },
     taskDelete: { padding: 4 },
   });
 }

@@ -258,7 +258,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Alerts / notifications
 
-- [ ] **Reminders never fire on mobile (no alert scheduler, no local notifications)** — `P2` — `missing`
+- [x] **Reminders never fire on mobile (no alert scheduler, no local notifications)** — `P2` — `missing` — fixed in 8e1d03c (expo-notifications local notifications scheduled from the store for the next 7 days, calendar default alerts honoured, cancelled events / completed tasks / acknowledged alerts skipped)
   - What WEB does: `useCalendarAlerts` polls every 60 s, proactively fetches the next 24 h, computes fire times from `alerts` (offset relative to start/end, absolute triggers, calendar default alerts via `useDefaultAlerts`), dedupes through a persisted acknowledged store, plays a sound and toasts; task due alerts too; cancelled events muted (#572) (ref `lib/calendar-alerts.ts:39-201`, `hooks/use-calendar-alerts.ts:21-158`, `stores/calendar-notification-store.ts`).
   - What RN does: `src/lib/calendar-alerts.ts` only converts offsets <-> reminder presets (1-103); the `calendarNotificationsEnabled`/`calendarNotificationSound` settings are shown in `NotificationSettings.tsx:52-53, 235-240` but nothing reads them; `package.json` has no `expo-notifications`. Users who set "15 minutes before" get nothing.
   - Fix hint: add `expo-notifications`, port `computeFireTime`/`getPendingAlerts`, and schedule local notifications for the next N days on every `fetchEvents` (cancel + reschedule by event id); honour `useDefaultAlerts` via `Calendar.defaultAlertsWithTime/WithoutTime` (add those to `Calendar/get` properties).
