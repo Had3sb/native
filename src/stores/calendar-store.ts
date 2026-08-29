@@ -6,6 +6,10 @@ import {
   getCalendars as fetchCalendars,
   queryEvents,
   getEvents as fetchEvents,
+  scanCalendarObjects,
+  isCalendarAccessDenied,
+  noteCalendarAccessError,
+  resetCalendarAccessDenied,
   createEvent as apiCreateEvent,
   updateEvent as apiUpdateEvent,
   deleteEvents as apiDeleteEvents,
@@ -17,6 +21,7 @@ import {
 import { jmapClient } from '../api/jmap-client';
 import { expandRecurringEvents } from '../lib/recurrence-expansion';
 import { isRecurringSeriesMember } from '../lib/recurrence-overrides';
+import { findTasksOnlyCalendarIds, isTaskLikeObject } from '../lib/calendar-component-detection';
 
 // Does the event carry attendees the server should notify over iMIP? Used to
 // decide whether to set sendSchedulingMessages on create/update/delete.
@@ -81,6 +86,9 @@ export interface CalendarState {
   hydrate: () => Promise<void>;
   fetchCalendars: () => Promise<void>;
   fetchEvents: (calendarIds: string[], after: string, before: string) => Promise<void>;
+  // Scan every calendar object (all accounts) to list tasks and find the
+  // tasks-only calendars; independent of the visible date range.
+  fetchTasks: () => Promise<void>;
   ensureRange: (after: string, before: string) => Promise<void>;
   refresh: () => Promise<void>;
   handleStateChange: (change: StateChange) => Promise<void>;
@@ -111,6 +119,10 @@ export interface CalendarState {
   setCalendarHidden: (id: string, hidden: boolean) => void;
   reset: () => void;
 }
+
+// In-flight dedupe for the two whole-account loads (see fetchCalendars).
+let calendarsInFlight: Promise<void> | null = null;
+let tasksInFlight: Promise<void> | null = null;
 
 function persistHidden(ids: string[]): void {
   void AsyncStorage.setItem(HIDDEN_CALENDARS_STORAGE_KEY, JSON.stringify(ids)).catch(
@@ -165,12 +177,22 @@ export const useCalendarStore = create<CalendarState>()(
     // a "Not authenticated" error - the refetch driven by the auth-store
     // will run this again once the session is live.
     if (!jmapClient.isConnected) return;
-    try {
-      const calendars = (await fetchCalendars()) ?? [];
-      set({ calendars });
-    } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Failed to load calendars' });
-    }
+    // First-touch gate (#907): the screen mount, ensureRange and the
+    // auth-store all kick this off at once, and on a clustered Stalwart
+    // concurrent first Calendar/* requests can each lazily create a default
+    // calendar. Share one in-flight request instead.
+    if (calendarsInFlight) return calendarsInFlight;
+    calendarsInFlight = (async () => {
+      try {
+        const calendars = (await fetchCalendars()) ?? [];
+        set({ calendars });
+      } catch (err) {
+        set({ error: err instanceof Error ? err.message : 'Failed to load calendars' });
+      } finally {
+        calendarsInFlight = null;
+      }
+    })();
+    return calendarsInFlight;
   },
 
   fetchEvents: async (calendarIds, after, before) => {
@@ -198,62 +220,99 @@ export const useCalendarStore = create<CalendarState>()(
 
       const raw: CalendarEvent[] = [];
       for (const [accountId, ids] of groups) {
+        if (accountId && isCalendarAccessDenied(accountId)) continue;
         try {
+          // The window is sent as after/before so accounts with more than
+          // 1000 objects don't silently lose events and navigating past the
+          // loaded range doesn't re-download everything.
           const eventIds = (await queryEvents(ids, after, before, accountId)) ?? [];
           if (eventIds.length === 0) continue;
           const fetched = (await fetchEvents(eventIds, accountId)) ?? [];
           raw.push(...fetched.map((e) => mapServerEventToStoreEvent(e, calendars, accountId)));
         } catch (err) {
-          // A failing shared account must not hide the user's own events.
+          // A failing shared account must not hide the user's own events;
+          // remember an access rejection so it isn't re-probed every fetch.
           if (!accountId) throw err;
+          noteCalendarAccessError(accountId, err);
         }
       }
-      // Stalwart returns both Events and Tasks from CalendarEvent/query. Events
-      // have a `start`; tasks are surfaced separately so they don't pollute the
-      // grid (they're shown in the task list with their due date instead).
-      const onlyEvents = raw.filter((e) => {
-        const t = (e as { '@type'?: string })['@type'];
-        return (t === 'Event' || t === undefined) && !!e.start;
-      });
-      const tasks = raw.filter((e) => (e as { '@type'?: string })['@type'] === 'Task');
-      // Classify VTODO-only task lists from the full (undated) object set:
-      // a calendar counts as a task list when every object in it is a Task.
-      // Anything that isn't a Task — including start-less Events — keeps the
-      // calendar in the ordinary event-calendar bucket.
-      const eventCalendarIds = new Set<string>();
-      const taskCalendarIds = new Set<string>();
-      for (const obj of raw) {
-        const isTask = (obj as { '@type'?: string })['@type'] === 'Task';
-        for (const calId of Object.keys(obj.calendarIds || {})) {
-          (isTask ? taskCalendarIds : eventCalendarIds).add(calId);
-        }
-      }
-      const taskOnlyCalendarIds = [...taskCalendarIds].filter(
-        (calId) => !eventCalendarIds.has(calId),
-      );
+      // Stalwart returns both Events and Tasks from CalendarEvent/query. Tasks
+      // (also CalDAV ones without an `@type`) are surfaced by fetchTasks so
+      // they don't pollute the grid.
+      const onlyEvents = raw.filter((e) => !isTaskLikeObject(e) && !!e.start);
       const events = expandRecurringEvents(onlyEvents, after, before);
-      set({ events, tasks, taskOnlyCalendarIds, loadedRange: { after, before }, loading: false });
+      set({ events, loadedRange: { after, before }, loading: false });
     } catch (err) {
       set({ loading: false, error: err instanceof Error ? err.message : 'Failed to load events' });
     }
   },
 
+  fetchTasks: async () => {
+    if (!jmapClient.isConnected) return;
+    if (tasksInFlight) return tasksInFlight;
+    tasksInFlight = (async () => {
+      try {
+        const calendars = get().calendars;
+        const accountIds = new Set<string | undefined>([undefined]);
+        for (const cal of calendars) if (cal.accountId) accountIds.add(cal.accountId);
+        const tasks: CalendarEvent[] = [];
+        const taskOnly: string[] = [];
+        for (const accountId of accountIds) {
+          if (accountId && isCalendarAccessDenied(accountId)) continue;
+          try {
+            const scanned = await scanCalendarObjects(accountId);
+            // Classify VTODO-only task lists from the full (undated) object
+            // set: a calendar counts as a task list when every object in it
+            // is a task. Empty calendars stay ordinary event calendars. (#28)
+            const rawIds = calendars
+              .filter((c) => (c.accountId ?? undefined) === accountId)
+              .map((c) => c.originalId || c.id);
+            for (const rawId of findTasksOnlyCalendarIds(scanned, rawIds)) {
+              const cal = calendars.find(
+                (c) => (c.originalId || c.id) === rawId && (c.accountId ?? undefined) === accountId,
+              );
+              taskOnly.push(cal?.id ?? rawId);
+            }
+            const taskIds = scanned
+              .filter((o) => isTaskLikeObject(o))
+              .map((o) => o.id as string)
+              .filter(Boolean);
+            if (taskIds.length === 0) continue;
+            const fetched = (await fetchEvents(taskIds, accountId)) ?? [];
+            tasks.push(...fetched.map((e) => mapServerEventToStoreEvent(e, calendars, accountId)));
+          } catch (err) {
+            if (!accountId) throw err;
+            noteCalendarAccessError(accountId, err);
+          }
+        }
+        set({ tasks, taskOnlyCalendarIds: taskOnly });
+      } catch (err) {
+        set({ error: err instanceof Error ? err.message : 'Failed to load tasks' });
+      } finally {
+        tasksInFlight = null;
+      }
+    })();
+    return tasksInFlight;
+  },
+
   ensureRange: async (after, before) => {
-    const { loadedRange, calendars } = get();
+    const { loadedRange } = get();
     if (loadedRange && rangeCovers(loadedRange, after, before)) return;
 
-    const target = loadedRange ? unionRange(loadedRange, after, before) : { after, before };
-    const ids = calendars.map((c) => c.id);
-    if (ids.length === 0) {
-      // Calendars haven't loaded yet - fetch them, then events.
+    // Queries are windowed now, so load exactly the requested range instead
+    // of an ever-growing union (which re-downloaded everything each time).
+    if (get().calendars.length === 0) {
+      // Calendars haven't loaded yet - fetch them (deduped), then events.
       await get().fetchCalendars();
     }
-    const calendarIdsAfter = get().calendars.map((c) => c.id);
-    if (calendarIdsAfter.length === 0) {
-      set({ loadedRange: target });
+    const calendarIds = get().calendars.map((c) => c.id);
+    if (calendarIds.length === 0) {
+      set({ loadedRange: { after, before } });
       return;
     }
-    await get().fetchEvents(calendarIdsAfter, target.after, target.before);
+    const needTasks = get().tasks.length === 0 && get().taskOnlyCalendarIds.length === 0;
+    await get().fetchEvents(calendarIds, after, before);
+    if (needTasks) void get().fetchTasks();
   },
 
   refresh: async () => {
@@ -261,7 +320,10 @@ export const useCalendarStore = create<CalendarState>()(
     if (!loadedRange) return;
     const ids = calendars.map((c) => c.id);
     if (ids.length === 0) return;
-    await get().fetchEvents(ids, loadedRange.after, loadedRange.before);
+    await Promise.all([
+      get().fetchEvents(ids, loadedRange.after, loadedRange.before),
+      get().fetchTasks(),
+    ]);
   },
 
   handleStateChange: async (change) => {
@@ -302,11 +364,28 @@ export const useCalendarStore = create<CalendarState>()(
       hasSchedulingParticipants(event) ? true : undefined,
       accountId,
     );
+    // The /set echo lacks server-computed properties (utcStart/utcEnd, the
+    // normalised recurrence rule); re-read the event so it renders at the
+    // right instant, then expand a recurring series across the loaded range
+    // instead of showing a single instance until the next refresh.
+    let full = created;
+    try {
+      const fetched = (await fetchEvents([created.id], accountId)) ?? [];
+      if (fetched[0]) full = fetched[0];
+    } catch {
+      // Keep the echo; the next refresh reconciles.
+    }
     // Map the same way fetchEvents does so the optimistic insert doesn't
     // collide with the user's own events and stays visible under the right
     // calendar filter.
-    set({ events: [...get().events, mapServerEventToStoreEvent(created, calendars, accountId)] });
-    return created;
+    const mapped = mapServerEventToStoreEvent(full, calendars, accountId);
+    const { loadedRange } = get();
+    const inserted =
+      mapped.recurrenceRules?.length && loadedRange
+        ? expandRecurringEvents([mapped], loadedRange.after, loadedRange.before)
+        : [mapped];
+    set({ events: [...get().events, ...inserted] });
+    return full;
   },
 
   updateEvent: async (id, changes) => {
@@ -506,15 +585,19 @@ export const useCalendarStore = create<CalendarState>()(
     persistHidden(next);
   },
 
-  reset: () => set({
-    calendars: [],
-    events: [],
-    tasks: [],
-    taskOnlyCalendarIds: [],
-    loadedRange: null,
-    loading: false,
-    error: null,
-  }),
+  reset: () => {
+    // A new session may grant access the old one lacked.
+    resetCalendarAccessDenied();
+    set({
+      calendars: [],
+      events: [],
+      tasks: [],
+      taskOnlyCalendarIds: [],
+      loadedRange: null,
+      loading: false,
+      error: null,
+    });
+  },
     }),
     {
       // Persist calendars + expanded events + the range they cover so the

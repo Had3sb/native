@@ -4,6 +4,10 @@ vi.mock('../../api/calendar', () => ({
   getCalendars: vi.fn(),
   queryEvents: vi.fn(),
   getEvents: vi.fn(),
+  scanCalendarObjects: vi.fn(),
+  isCalendarAccessDenied: vi.fn(() => false),
+  noteCalendarAccessError: vi.fn(() => false),
+  resetCalendarAccessDenied: vi.fn(),
   createEvent: vi.fn(),
   updateEvent: vi.fn(),
   deleteEvents: vi.fn(),
@@ -39,9 +43,11 @@ const mockCreateEvent = calendarApi.createEvent as ReturnType<typeof vi.fn>;
 const mockUpdateEvent = calendarApi.updateEvent as ReturnType<typeof vi.fn>;
 const mockDeleteEvents = calendarApi.deleteEvents as ReturnType<typeof vi.fn>;
 const mockSetDefaultCalendar = calendarApi.setDefaultCalendar as ReturnType<typeof vi.fn>;
+const mockScan = calendarApi.scanCalendarObjects as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockScan.mockResolvedValue([]);
   useCalendarStore.setState({
     calendars: [],
     events: [],
@@ -132,39 +138,83 @@ describe('calendar-store', () => {
       expect(stored[0].accountId).toBe('acc-2');
     });
 
-    it('classifies calendars whose contents are all Tasks as task lists (#28)', async () => {
+    it('keeps tasks (also CalDAV ones without @type) out of the event grid', async () => {
+      mockQueryEvents.mockResolvedValue(['t1', 'e1', 't2']);
+      mockGetEvents.mockResolvedValue([
+        { id: 't1', '@type': 'Task', title: 'Buy milk', calendarIds: { 'cal-1': true } },
+        { id: 'e1', '@type': 'Event', start: '2026-03-15T10:00:00', calendarIds: { 'cal-1': true } },
+        { id: 't2', title: 'Thunderbird todo', due: '2026-03-16T00:00:00', start: '2026-03-15T10:00:00', calendarIds: { 'cal-1': true } },
+      ]);
+
+      await useCalendarStore.getState().fetchEvents(['cal-1'], '2026-03-01', '2026-03-31');
+
+      expect(useCalendarStore.getState().events.map((e) => e.id)).toEqual(['e1']);
+    });
+  });
+
+  describe('fetchTasks', () => {
+    it('classifies calendars whose contents are all tasks as task lists (#28)', async () => {
       // VTODO-only CalDAV collections (Todoist imports, Thunderbird task
       // lists) must be flagged so the drawer can keep them out of the
       // calendar list. Mixed calendars, calendars with start-less Events,
-      // and empty calendars all stay ordinary calendars.
-      mockQueryEvents.mockResolvedValue(['t1', 'e1', 't2', 'startless']);
-      mockGetEvents.mockResolvedValue([
-        { id: 't1', '@type': 'Task', title: 'Buy milk', calendarIds: { 'cal-tasks': true } },
-        { id: 'e1', '@type': 'Event', start: '2026-03-15T10:00:00', calendarIds: { 'cal-mixed': true } },
-        { id: 't2', '@type': 'Task', title: 'Ship it', calendarIds: { 'cal-mixed': true } },
+      // and empty calendars all stay ordinary calendars. Tasks created by
+      // external CalDAV clients may lack `@type` and are detected by their
+      // task-only keys.
+      useCalendarStore.setState({
+        calendars: [
+          { id: 'cal-tasks' }, { id: 'cal-mixed' }, { id: 'cal-startless' }, { id: 'cal-empty' },
+        ] as any,
+      });
+      mockScan.mockResolvedValue([
+        { id: 't1', '@type': 'Task', calendarIds: { 'cal-tasks': true } },
+        { id: 't3', due: '2026-03-16T00:00:00', calendarIds: { 'cal-tasks': true } },
+        { id: 'e1', '@type': 'Event', calendarIds: { 'cal-mixed': true } },
+        { id: 't2', '@type': 'Task', calendarIds: { 'cal-mixed': true } },
         { id: 'startless', '@type': 'Event', calendarIds: { 'cal-startless': true } },
       ]);
+      mockGetEvents.mockImplementation(async (ids: string[]) => ids.map((id) => ({ id, title: id })));
 
-      await useCalendarStore.getState().fetchEvents(
-        ['cal-tasks', 'cal-mixed', 'cal-startless', 'cal-empty'],
-        '2026-03-01',
-        '2026-03-31',
-      );
+      await useCalendarStore.getState().fetchTasks();
 
       expect(useCalendarStore.getState().taskOnlyCalendarIds).toEqual(['cal-tasks']);
-      expect(useCalendarStore.getState().tasks.map((t) => t.id)).toEqual(['t1', 't2']);
+      expect(mockGetEvents).toHaveBeenCalledWith(['t1', 't3', 't2'], undefined);
+      expect(useCalendarStore.getState().tasks.map((t) => t.id)).toEqual(['t1', 't3', 't2']);
     });
 
-    it('reclassifies task lists on refetch instead of accumulating stale ids', async () => {
-      useCalendarStore.setState({ taskOnlyCalendarIds: ['cal-old'] });
-      mockQueryEvents.mockResolvedValue(['e1']);
-      mockGetEvents.mockResolvedValue([
-        { id: 'e1', '@type': 'Event', start: '2026-03-15T10:00:00', calendarIds: { 'cal-old': true } },
+    it('reclassifies task lists on rescan instead of accumulating stale ids', async () => {
+      useCalendarStore.setState({
+        calendars: [{ id: 'cal-old' }] as any,
+        taskOnlyCalendarIds: ['cal-old'],
+      });
+      mockScan.mockResolvedValue([
+        { id: 'e1', '@type': 'Event', calendarIds: { 'cal-old': true } },
       ]);
 
-      await useCalendarStore.getState().fetchEvents(['cal-old'], '2026-03-01', '2026-03-31');
+      await useCalendarStore.getState().fetchTasks();
 
       expect(useCalendarStore.getState().taskOnlyCalendarIds).toEqual([]);
+      expect(useCalendarStore.getState().tasks).toEqual([]);
+    });
+
+    it('maps shared-account task lists onto namespaced store ids', async () => {
+      useCalendarStore.setState({
+        calendars: [
+          { id: 'cal-1' },
+          { id: 'acc-2:todo', originalId: 'todo', accountId: 'acc-2', isShared: true },
+        ] as any,
+      });
+      mockScan.mockImplementation(async (accountId?: string) =>
+        accountId === 'acc-2' ? [{ id: 't1', '@type': 'Task', calendarIds: { todo: true } }] : [],
+      );
+      mockGetEvents.mockImplementation(async (ids: string[], accountId?: string) =>
+        accountId === 'acc-2' ? [{ id: 't1', title: 'Shared todo', calendarIds: { todo: true } }] : [],
+      );
+
+      await useCalendarStore.getState().fetchTasks();
+
+      expect(useCalendarStore.getState().taskOnlyCalendarIds).toEqual(['acc-2:todo']);
+      expect(useCalendarStore.getState().tasks[0].id).toBe('acc-2:t1');
+      expect(useCalendarStore.getState().tasks[0].calendarIds).toEqual({ 'acc-2:todo': true });
     });
 
     it('routes queries by account when own and shared calendars share a raw id', async () => {
@@ -229,7 +279,9 @@ describe('calendar-store', () => {
       expect(mockQueryEvents).not.toHaveBeenCalled();
     });
 
-    it('should expand the loaded range when requested window extends it', async () => {
+    it('should load exactly the requested window when it is not covered', async () => {
+      // Queries are date-windowed, so moving past the loaded range fetches
+      // the new window instead of an ever-growing union of everything seen.
       useCalendarStore.setState({
         calendars: [{ id: 'cal-1' } as any],
         loadedRange: { after: '2026-03-01', before: '2026-03-31' },
@@ -238,7 +290,24 @@ describe('calendar-store', () => {
 
       await useCalendarStore.getState().ensureRange('2026-04-01', '2026-04-30');
 
-      expect(mockQueryEvents).toHaveBeenCalledWith(['cal-1'], '2026-03-01', '2026-04-30', undefined);
+      expect(mockQueryEvents).toHaveBeenCalledWith(['cal-1'], '2026-04-01', '2026-04-30', undefined);
+      expect(useCalendarStore.getState().loadedRange).toEqual({ after: '2026-04-01', before: '2026-04-30' });
+    });
+
+    it('dedupes concurrent first-touch calendar fetches (#907)', async () => {
+      let resolveCalendars: (v: unknown) => void = () => {};
+      mockGetCalendars.mockImplementation(
+        () => new Promise((resolve) => { resolveCalendars = resolve; }),
+      );
+      mockQueryEvents.mockResolvedValue([]);
+
+      const a = useCalendarStore.getState().fetchCalendars();
+      const b = useCalendarStore.getState().ensureRange('2026-03-01', '2026-03-31');
+      resolveCalendars([{ id: 'cal-1', name: 'Personal' }]);
+      await Promise.all([a, b]);
+
+      expect(mockGetCalendars).toHaveBeenCalledTimes(1);
+      expect(mockQueryEvents).toHaveBeenCalledWith(['cal-1'], '2026-03-01', '2026-03-31', undefined);
     });
 
     it('should fetch calendars first when none are loaded', async () => {
@@ -350,6 +419,36 @@ describe('calendar-store', () => {
 
       expect(result).toEqual(created);
       expect(useCalendarStore.getState().events).toHaveLength(2);
+    });
+
+    it('re-reads the created event and expands a recurring series across the loaded range', async () => {
+      useCalendarStore.setState({
+        events: [],
+        loadedRange: { after: '2026-03-01T00:00:00Z', before: '2026-03-10T00:00:00Z' },
+      });
+      mockCreateEvent.mockResolvedValue({ id: 'ev-new', title: 'Standup', start: '2026-03-02T09:00:00' });
+      mockGetEvents.mockResolvedValue([{
+        id: 'ev-new',
+        uid: 'u',
+        title: 'Standup',
+        start: '2026-03-02T09:00:00',
+        utcStart: '2026-03-02T08:00:00Z',
+        utcEnd: '2026-03-02T08:30:00Z',
+        duration: 'PT30M',
+        calendarIds: { 'cal-1': true },
+        recurrenceRules: [{ frequency: 'daily', count: 3 }],
+      }]);
+
+      const result = await useCalendarStore.getState().createEvent(
+        { title: 'Standup', start: '2026-03-02T09:00:00' },
+        'cal-1',
+      );
+
+      expect(mockGetEvents).toHaveBeenCalledWith(['ev-new'], undefined);
+      expect(result.utcStart).toBe('2026-03-02T08:00:00Z');
+      const events = useCalendarStore.getState().events;
+      expect(events).toHaveLength(3);
+      expect(events.every((e) => e.originalId === 'ev-new' && !!e.recurrenceId)).toBe(true);
     });
   });
 

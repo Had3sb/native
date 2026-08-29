@@ -53,22 +53,22 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `handleSave` never sets `timeZone` (`src/components/calendar/EventModal.tsx:262-281`) and `createEvent` does not add one (`src/api/calendar.ts:248-275`). Stalwart stores a floating DTSTART; attendees in other zones, CalDAV clients, and the user after travelling see wrong times; iMIP invites sent for such events are ambiguous.
   - Fix hint: set `timeZone: allDay ? null : Intl.DateTimeFormat().resolvedOptions().timeZone` (reuse `getUserTimeZone` from `src/api/calendar.ts:15`); once a custom time-zone setting exists (see below) use that.
 
-- [ ] **Changing the calendar in the edit modal is ignored (cannot move an event between calendars)** — `P2` — `rn-only-bug`
+- [x] **Changing the calendar in the edit modal is ignored (cannot move an event between calendars)** — `P2` — `rn-only-bug` — fixed in 161baf1 + 3fd5f10 (cross-account moves are not offered)
   - What WEB does: `calendarIds: { [calendarId]: true }` is part of the saved patch and the store remaps store ids to server ids (ref `components/calendar/event-modal.tsx:503`, `stores/calendar-store.ts:706-715`).
   - What RN does: `EventModal.handleSave` passes `calendarId` as the second argument, but `CalendarScreen.handleSave` only uses it on create (`src/screens/CalendarScreen.tsx:365-374`); the picker in edit mode is a no-op.
   - Fix hint: on update include `calendarIds: { [cal.originalId || calendarId]: true }` in the patch; for shared calendars the owning account differs, so either block cross-account moves or delete + recreate.
 
-- [ ] **Edit-modal calendar picker offers the Birthdays calendar, iCal-subscription calendars and read-only shared calendars (#762)** — `P2` — `bugfix-parity`
+- [x] **Edit-modal calendar picker offers the Birthdays calendar, iCal-subscription calendars and read-only shared calendars (#762)** — `P2` — `bugfix-parity` — fixed in 3fd5f10
   - What WEB does: `canCreateEventsIn` excludes subscription calendars and calendars without `mayWriteAll`/`mayWriteOwn` (ref `lib/calendar-editability.ts:20-24`, changelog 1.9.0 #762).
   - What RN does: `EventModal` receives `eventCalendars`, which still contains the virtual birthday calendar (`src/screens/CalendarScreen.tsx:213-216, 227-231, 544-552`) and all shared calendars regardless of rights; picking Birthdays yields a server error, picking a subscription calendar lets the next feed sync delete the event (`src/stores/calendar-subscriptions-store.ts:58-74`).
   - Fix hint: filter with a RN `canCreateEventsIn(cal, isSubscriptionCalendar)` (subscriptions from `useCalendarSubscriptionsStore`), exclude `BIRTHDAY_CALENDAR_ID`.
 
-- [ ] **No rights-first editability (edit/delete offered on read-only and RSVP-only events)** — `P2` — `missing`
+- [x] **No rights-first editability (edit/delete offered on read-only and RSVP-only events)** — `P2` — `missing` — fixed in 3fd5f10
   - What WEB does: `getEventEditability` gates on calendar `myRights` first (`mayWriteAll`, `mayWriteOwn` + owner, `mayRSVP` + participant), subscription calendars are read-only, and the popover shows edit/delete vs. RSVP-only accordingly (ref `lib/calendar-editability.ts:47-76`, `components/calendar/event-detail-popover.tsx:161-171, 540-575`, changelog 1.9.0 "Rights-first event editability, including alias organizers").
   - What RN does: `EventDetailSheet` always renders Edit/Delete (`src/components/calendar/EventDetailSheet.tsx:328-351`); the only read-only guard is the birthday calendar (`src/screens/CalendarScreen.tsx:313-316`). The server rejects the write, but the user sees a generic error.
   - Fix hint: port `calendar-editability.ts`; pass `calendarsById`, the user's addresses (identities + aliases) and `isSubscriptionCalendar` into the sheet; hide Edit/Delete for `read-only`, show only RSVP for `rsvp-only`.
 
-- [ ] **`myRights.mayWrite` (non-existent JMAP property) used for writability everywhere** — `P2` — `rn-only-bug`
+- [x] **`myRights.mayWrite` (non-existent JMAP property) used for writability everywhere** — `P2` — `rn-only-bug` — fixed in 3fd5f10
   - What WEB does: uses `mayWriteAll`/`mayWriteOwn`/`mayDelete` from RFC-style `CalendarRights` (ref `lib/calendar-editability.ts:20-24`, `components/calendar/calendar-sidebar-panel.tsx:328-334`).
   - What RN does: `CalendarRights.mayWrite` is documented as a "legacy short flag" (`src/api/types.ts:~507`) and is what `CalendarSidebarDrawer` (`:92-98`), `TasksSheet` (`:84-87`), `ICalImportSheet` (`:51-54`) and `CalendarInvitationBanner` (`:96`) test. Stalwart never sends it, so every calendar counts as writable and the "Subscribed" section can never populate.
   - Fix hint: replace with `!r || r.mayWriteAll || r.mayWriteOwn` and drop `mayWrite` from the type.

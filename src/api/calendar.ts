@@ -1,11 +1,14 @@
 import { jmapClient } from './jmap-client';
 import { CAPABILITIES } from './types';
 import type { Calendar, CalendarEvent } from './types';
+import { getEffectiveTimeZone } from '../lib/calendar-timezone';
+import { SCAN_PROPERTIES, type ScannedCalendarObject } from '../lib/calendar-component-detection';
 
 const USING = [CAPABILITIES.CORE, CAPABILITIES.CALENDARS];
 
 /**
- * IANA time zone of the device, sent as the `timeZone` argument on
+ * IANA time zone of the user — their calendar time-zone setting when set
+ * (#755), otherwise the device's — sent as the `timeZone` argument on
  * CalendarEvent/query and CalendarEvent/get. Stalwart interprets LocalDateTime
  * filter values and computes utcStart/utcEnd for floating events in this zone,
  * defaulting to UTC when absent — which shifts range boundaries and
@@ -14,10 +17,61 @@ const USING = [CAPABILITIES.CORE, CAPABILITIES.CALENDARS];
  */
 function getUserTimeZone(): string | undefined {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+    return getEffectiveTimeZone() || undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Render an instant as the LocalDateTime ("yyyy-MM-ddTHH:mm:ss") wall-clock
+ * in `timeZone` — the form CalendarEvent/query's `after`/`before` expect, and
+ * which Stalwart interprets in the query's `timeZone`. Accepts ISO strings
+ * (with or without a zone) so callers can pass `Date.toISOString()` output.
+ */
+export function toLocalDateTime(value: string | Date, timeZone?: string): string {
+  const date = typeof value === 'string' ? new Date(value) : value;
+  if (isNaN(date.getTime())) return typeof value === 'string' ? value.replace(/(\.\d+)?Z$/, '') : '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(date);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
+    const hour = get('hour') === '24' ? '00' : get('hour');
+    return `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}:${get('second')}`;
+  } catch {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+      `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+}
+
+// Shared accounts the server rejected calendar access for — probed once, then
+// skipped for the rest of the session (the session lists every account with
+// the calendars capability, including ones that only share mail with us).
+const calendarAccessDenied = new Set<string>();
+
+export function isCalendarAccessDenied(accountId: string): boolean {
+  return calendarAccessDenied.has(accountId);
+}
+
+export function resetCalendarAccessDenied(): void {
+  calendarAccessDenied.clear();
+}
+
+function isAccessDeniedError(err: unknown): boolean {
+  const type = (err as { jmapErrorType?: string } | null)?.jmapErrorType;
+  return type === 'forbidden' || type === 'accountNotFound';
+}
+
+/** Remember an access rejection for a shared account; returns true when it was one. */
+export function noteCalendarAccessError(accountId: string, err: unknown): boolean {
+  if (!isAccessDeniedError(err)) return false;
+  calendarAccessDenied.add(accountId);
+  return true;
 }
 
 /**
@@ -130,7 +184,13 @@ function methodResult<T = any>(res: any, index = 0): T {
   if (!entry) throw new Error('JMAP: empty method response');
   if (entry[0] === 'error') {
     const err = entry[1] || {};
-    throw new Error(err.description || err.type || 'JMAP method error');
+    // Keep the JMAP error type so callers can tell an expected access
+    // rejection (forbidden / accountNotFound on a shared account) apart from
+    // a genuine failure.
+    throw Object.assign(
+      new Error(err.description || err.type || 'JMAP method error'),
+      { jmapErrorType: err.type as string | undefined },
+    );
   }
   return entry[1] as T;
 }
@@ -159,6 +219,8 @@ export async function getCalendars(): Promise<Calendar[]> {
   // calendars, so each shared account is fetched best-effort.
   const shared = await Promise.all(
     sharedCalendarAccountIds().map(async (sharedAccountId) => {
+      // Don't re-probe an account the server already rejected this session.
+      if (calendarAccessDenied.has(sharedAccountId)) return [];
       try {
         const sharedRes = await jmapClient.request(
           [['Calendar/get', { accountId: sharedAccountId }, '0']],
@@ -177,7 +239,8 @@ export async function getCalendars(): Promise<Calendar[]> {
           accountId: sharedAccountId,
           isShared: true,
         }));
-      } catch {
+      } catch (err) {
+        noteCalendarAccessError(sharedAccountId, err);
         return [];
       }
     }),
@@ -185,26 +248,74 @@ export async function getCalendars(): Promise<Calendar[]> {
   return [...own, ...shared.flat()];
 }
 
+/**
+ * Query event ids in a date window. `after`/`before` are instants (ISO, as
+ * from `Date.toISOString()`) or LocalDateTime strings; they're sent as
+ * LocalDateTime in the query's `timeZone` so Stalwart interprets the bounds
+ * in the user's zone. Calendars are restricted via the singular `inCalendar`
+ * condition (the plural `inCalendars` fails the whole query with
+ * unsupportedFilter on Stalwart); the range and calendar conditions are
+ * combined with an AND operator. Without bounds every object is returned.
+ */
 export async function queryEvents(
   calendarIds: string[],
-  _after: string,
-  _before: string,
+  after: string,
+  before: string,
   accountId?: string,
 ): Promise<string[]> {
-  // Stalwart rejects after/before filters on CalendarEvent/query; date
-  // filtering is done client-side. Calendars are restricted via the singular
-  // `inCalendar` condition (the plural `inCalendars` fails the whole query
-  // with unsupportedFilter on Stalwart).
   const account = accountId || jmapClient.accountId;
   const args: Record<string, unknown> = { accountId: account, limit: 1000 };
   const timeZone = getUserTimeZone();
   if (timeZone) args.timeZone = timeZone;
-  if (calendarIds.length > 0) args.filter = buildInCalendarFilter(calendarIds);
+  const conditions: Record<string, unknown>[] = [];
+  if (calendarIds.length > 0) conditions.push(buildInCalendarFilter(calendarIds));
+  const range: Record<string, string> = {};
+  if (after) range.after = toLocalDateTime(after, timeZone);
+  if (before) range.before = toLocalDateTime(before, timeZone);
+  if (Object.keys(range).length > 0) conditions.push(range);
+  if (conditions.length === 1) args.filter = conditions[0];
+  else if (conditions.length > 1) args.filter = { operator: 'AND', conditions };
   const res = await jmapClient.request(
     [['CalendarEvent/query', args, '0']],
     USING,
   );
   return methodResult<{ ids: string[] }>(res).ids ?? [];
+}
+
+/**
+ * Every calendar object of an account with just the properties needed to tell
+ * tasks from events (see lib/calendar-component-detection). Used to find
+ * tasks-only calendars and the task ids; pages through the query so accounts
+ * with more than 1000 objects are covered.
+ */
+export async function scanCalendarObjects(accountId?: string): Promise<ScannedCalendarObject[]> {
+  const account = accountId || jmapClient.accountId;
+  const pageSize = 1000;
+  const ids: string[] = [];
+  for (let position = 0; ; position += pageSize) {
+    const res = await jmapClient.request(
+      [['CalendarEvent/query', { accountId: account, position, limit: pageSize }, '0']],
+      USING,
+    );
+    const page = methodResult<{ ids: string[] }>(res).ids ?? [];
+    ids.push(...page);
+    if (page.length < pageSize) break;
+  }
+  if (ids.length === 0) return [];
+  const batchSize = jmapClient.getMaxObjectsInGet();
+  const all: ScannedCalendarObject[] = [];
+  for (let i = 0; i < ids.length; i += batchSize) {
+    const res = await jmapClient.request(
+      [['CalendarEvent/get', {
+        accountId: account,
+        ids: ids.slice(i, i + batchSize),
+        properties: SCAN_PROPERTIES,
+      }, '0']],
+      USING,
+    );
+    all.push(...(methodResult<{ list: ScannedCalendarObject[] }>(res).list ?? []));
+  }
+  return all;
 }
 
 export async function getEvents(ids: string[], accountId?: string): Promise<CalendarEvent[]> {

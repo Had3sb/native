@@ -16,7 +16,20 @@ import {
   createEvent,
   updateEvent,
   deleteEvents,
+  toLocalDateTime,
 } from '../calendar';
+
+describe('toLocalDateTime', () => {
+  it('renders an instant as wall-clock in the given zone', () => {
+    expect(toLocalDateTime('2026-03-01T00:30:00Z', 'Europe/Berlin')).toBe('2026-03-01T01:30:00');
+    expect(toLocalDateTime('2026-03-01T00:30:00Z', 'America/New_York')).toBe('2026-02-28T19:30:00');
+    expect(toLocalDateTime('2026-07-01T23:15:00.000Z', 'UTC')).toBe('2026-07-01T23:15:00');
+  });
+
+  it('passes LocalDateTime strings through', () => {
+    expect(toLocalDateTime('2026-03-01T00:00:00', 'UTC')).toMatch(/^2026-0[23]-\d{2}T\d{2}:00:00$/);
+  });
+});
 
 const mockRequest = jmapClient.request as ReturnType<typeof vi.fn>;
 
@@ -43,20 +56,47 @@ describe('calendar operations', () => {
 
   describe('queryEvents', () => {
     it('should filter via singular inCalendar conditions (Stalwart-compatible)', async () => {
-      // Stalwart rejects the draft's plural `inCalendars` filter (and
-      // after/before); calendars are restricted via singular `inCalendar`
-      // conditions and date filtering stays client-side.
+      // Stalwart rejects the draft's plural `inCalendars` filter; calendars
+      // are restricted via singular `inCalendar` conditions.
       mockRequest.mockResolvedValue({
         methodResponses: [['CalendarEvent/query', { ids: ['ev1', 'ev2'] }, '0']],
       });
 
-      const result = await queryEvents(['cal-1'], '2026-03-01T00:00:00Z', '2026-03-31T23:59:59Z');
+      const result = await queryEvents(['cal-1'], '', '');
       expect(result).toEqual(['ev1', 'ev2']);
 
       const call = mockRequest.mock.calls[0][0][0];
       expect(call[0]).toBe('CalendarEvent/query');
       expect(call[1].filter).toEqual({ inCalendar: 'cal-1' });
       expect(call[1].accountId).toBe('acc-1');
+    });
+
+    it('should send the date window as LocalDateTime after/before combined with the calendar filter', async () => {
+      mockRequest.mockResolvedValue({
+        methodResponses: [['CalendarEvent/query', { ids: [] }, '0']],
+      });
+
+      await queryEvents(['cal-1'], '2026-03-01T00:00:00Z', '2026-03-31T23:59:59Z');
+
+      const call = mockRequest.mock.calls[0][0][0];
+      expect(call[1].filter.operator).toBe('AND');
+      expect(call[1].filter.conditions[0]).toEqual({ inCalendar: 'cal-1' });
+      const range = call[1].filter.conditions[1];
+      expect(range.after).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+      expect(range.before).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+      expect(call[1].timeZone).toBeTruthy();
+    });
+
+    it('should send only the range when no calendars are given', async () => {
+      mockRequest.mockResolvedValue({
+        methodResponses: [['CalendarEvent/query', { ids: [] }, '0']],
+      });
+
+      await queryEvents([], '2026-03-01T00:00:00Z', '2026-03-31T23:59:59Z');
+
+      const call = mockRequest.mock.calls[0][0][0];
+      expect(call[1].filter.operator).toBeUndefined();
+      expect(Object.keys(call[1].filter).sort()).toEqual(['after', 'before']);
     });
 
     it('should OR multiple calendars and respect the target account', async () => {
