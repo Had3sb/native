@@ -27,6 +27,7 @@ import type { Calendar, CalendarEvent } from '../../api/types';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { getCalendarColor } from '../../lib/calendar-utils';
+import { isWritableCalendar } from '../../lib/calendar-editability';
 import { useSheetDrag } from '../../lib/use-sheet-drag';
 
 interface TasksSheetProps {
@@ -82,7 +83,7 @@ export function TasksSheet({
   });
 
   const writableCalendars = React.useMemo(
-    () => calendars.filter((cal) => !cal.myRights || cal.myRights.mayWrite !== false),
+    () => calendars.filter((cal) => isWritableCalendar(cal)),
     [calendars],
   );
 

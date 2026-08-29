@@ -46,6 +46,7 @@ import {
   getUserParticipantId,
   isOrganizer,
 } from '../../lib/calendar-participants';
+import { getEventEditability } from '../../lib/calendar-editability';
 import { useSheetDrag } from '../../lib/use-sheet-drag';
 
 type RsvpStatus = 'accepted' | 'declined' | 'tentative';
@@ -56,6 +57,8 @@ interface EventDetailSheetProps {
   timeFormat?: TimeFormat;
   // Login address + identities + aliases; finds "me" among the participants.
   currentUserEmails?: string[];
+  // Client-side iCal subscriptions are always read-only.
+  isSubscriptionCalendar?: (calendarId: string) => boolean;
   onClose: () => void;
   onEdit?: (event: CalendarEvent) => void;
   onDelete?: (event: CalendarEvent) => void;
@@ -112,6 +115,7 @@ export function EventDetailSheet({
   calendars,
   timeFormat,
   currentUserEmails = [],
+  isSubscriptionCalendar,
   onClose,
   onEdit,
   onDelete,
@@ -180,7 +184,18 @@ export function EventDetailSheet({
   // aliases) and the caller wired an onRsvp handler.
   const myParticipantId = getUserParticipantId(event, currentUserEmails);
   const userIsOrganizer = isOrganizer(event, currentUserEmails);
-  const canRsvp = Boolean(onRsvp && myParticipantId && !userIsOrganizer);
+  // Gate affordances on calendar rights first, then identity: read-only /
+  // subscription calendars never offer Edit/Delete, RSVP-only events offer
+  // just the reply buttons.
+  const editability = getEventEditability(event, {
+    calendarsById: new Map(calendars.map((cal) => [cal.id, cal])),
+    userCalendarAddresses: currentUserEmails,
+    isSubscriptionCalendar: isSubscriptionCalendar ?? (() => false),
+  });
+  const canEdit = editability === 'editable';
+  const canRsvp = Boolean(
+    onRsvp && myParticipantId && !userIsOrganizer && editability !== 'read-only',
+  );
   const myStatus = myParticipantId ? event.participants?.[myParticipantId]?.participationStatus : undefined;
 
   const doRsvp = async (status: RsvpStatus) => {
@@ -339,30 +354,32 @@ export function EventDetailSheet({
             )}
           </ScrollView>
 
-          <View style={styles.actions}>
-            {onEdit && (
-              <ActionButton
-                icon={<Pencil size={18} color={c.text} />}
-                label="Edit"
-                onPress={() => onEdit(event)}
-              />
-            )}
-            {onDuplicate && (
-              <ActionButton
-                icon={<Copy size={18} color={c.text} />}
-                label="Duplicate"
-                onPress={() => onDuplicate(event)}
-              />
-            )}
-            {onDelete && (
-              <ActionButton
-                icon={<Trash2 size={18} color={c.error} />}
-                label="Delete"
-                onPress={() => onDelete(event)}
-                destructive
-              />
-            )}
-          </View>
+          {(canEdit || onDuplicate) && (
+            <View style={styles.actions}>
+              {onEdit && canEdit && (
+                <ActionButton
+                  icon={<Pencil size={18} color={c.text} />}
+                  label="Edit"
+                  onPress={() => onEdit(event)}
+                />
+              )}
+              {onDuplicate && (
+                <ActionButton
+                  icon={<Copy size={18} color={c.text} />}
+                  label="Duplicate"
+                  onPress={() => onDuplicate(event)}
+                />
+              )}
+              {onDelete && canEdit && (
+                <ActionButton
+                  icon={<Trash2 size={18} color={c.error} />}
+                  label="Delete"
+                  onPress={() => onDelete(event)}
+                  destructive
+                />
+              )}
+            </View>
+          )}
         </SafeAreaView>
       </Animated.View>
     </Modal>

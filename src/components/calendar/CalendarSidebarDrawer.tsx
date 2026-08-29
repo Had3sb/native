@@ -18,6 +18,7 @@ import { useColors } from '../../theme/colors';
 import { useAnimDuration } from '../../theme/dynamic';
 import { CALENDAR_COLOR_PALETTE, getCalendarColor } from '../../lib/calendar-utils';
 import { BIRTHDAY_CALENDAR_ID } from '../../lib/birthday-calendar';
+import { isWritableCalendar } from '../../lib/calendar-editability';
 
 interface CalendarSidebarDrawerProps {
   visible: boolean;
@@ -90,12 +91,8 @@ export function CalendarSidebarDrawer({
   const hiddenSet = React.useMemo(() => new Set(hiddenCalendarIds), [hiddenCalendarIds]);
 
   const sharedCalendars = calendars.filter((cal) => cal.isShared);
-  const myCalendars = calendars.filter(
-    (cal) => !cal.isShared && (!cal.myRights || cal.myRights.mayWrite !== false),
-  );
-  const subscribed = calendars.filter(
-    (cal) => !cal.isShared && cal.myRights && cal.myRights.mayWrite === false,
-  );
+  const myCalendars = calendars.filter((cal) => !cal.isShared && isWritableCalendar(cal));
+  const subscribed = calendars.filter((cal) => !cal.isShared && !isWritableCalendar(cal));
 
   const sectionProps = {
     hiddenSet,

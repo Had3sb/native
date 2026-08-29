@@ -74,6 +74,7 @@ import { generateBirthdayEvents, createBirthdayCalendar, BIRTHDAY_CALENDAR_ID } 
 import { useContactsStore } from '../stores/contacts-store';
 import { useLocaleStore } from '../stores/locale-store';
 import { useUserCalendarAddresses } from '../lib/calendar-user-addresses';
+import { useCalendarSubscriptionsStore } from '../stores/calendar-subscriptions-store';
 import type { Calendar, CalendarEvent, RecurrenceRule } from '../api/types';
 
 type ViewMode = 'month' | 'week' | 'agenda';
@@ -324,9 +325,20 @@ export default function CalendarScreen() {
     setModalVisible(true);
   }, []);
 
+  // Client-side iCal subscriptions mirror a remote feed into a local
+  // calendar; edits there would be wiped by the next sync, so they're
+  // read-only targets everywhere (#762).
+  const subscriptions = useCalendarSubscriptionsStore((s) => s.subscriptions);
+  const isSubscriptionCalendar = React.useCallback(
+    (calendarId: string) => subscriptions.some((s) => s.calendarId === calendarId),
+    [subscriptions],
+  );
+
   const isReadOnlyEvent = React.useCallback(
-    (event: CalendarEvent) => !!event.calendarIds?.[BIRTHDAY_CALENDAR_ID],
-    [],
+    (event: CalendarEvent) =>
+      !!event.calendarIds?.[BIRTHDAY_CALENDAR_ID] ||
+      Object.keys(event.calendarIds ?? {}).some(isSubscriptionCalendar),
+    [isSubscriptionCalendar],
   );
 
   // Editing a series member opens the editor directly; the this/future/all
@@ -630,6 +642,7 @@ export default function CalendarScreen() {
         calendars={calendars}
         timeFormat={calendarTimeFormat}
         currentUserEmails={currentUserEmails}
+        isSubscriptionCalendar={isSubscriptionCalendar}
         onClose={() => setDetailEvent(null)}
         onEdit={handleEditFromDetail}
         onDelete={handleDeleteFromDetail}
@@ -655,6 +668,7 @@ export default function CalendarScreen() {
         calendars={eventCalendars}
         defaultDate={modalDate}
         currentUserEmails={currentUserEmails}
+        isSubscriptionCalendar={isSubscriptionCalendar}
         onSave={handleSave}
         onDelete={handleDeleteFromModal}
         onClose={() => setModalVisible(false)}

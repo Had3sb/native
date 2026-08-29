@@ -95,22 +95,22 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Invitations / scheduling
 
-- [ ] **Invitations are never sent: participants built with retired `sendTo`, no organizer, no `organizerCalendarAddress`** — `P1` — `bugfix-parity`
+- [x] **Invitations are never sent: participants built with retired `sendTo`, no organizer, no `organizerCalendarAddress`** — `P1` — `bugfix-parity` — fixed in 5dc4070
   - What WEB does: `buildParticipantMap` emits an owner-only organizer participant with `calendarAddress`, attendees with `calendarAddress` + `scheduleAgent: 'server'`, and the modal sets `organizerCalendarAddress: mailto:<user>` — without it Stalwart emits no ORGANIZER and silently skips iTIP (ref `lib/calendar-participants.ts:164-214`, `components/calendar/event-modal.tsx:573-586`, changelog 1.7.0 "Send calendar invites by setting organizerCalendarAddress", 1.7.2 #500 "Use calendarAddress, drop retired sendTo", 1.8.1 #731).
   - What RN does: `ParticipantInput.addParticipant` writes `{ email, sendTo: { imip }, roles: { attendee } }` (`src/components/calendar/ParticipantInput.tsx:71-92`), no organizer participant and no `organizerCalendarAddress` anywhere in `EventModal.handleSave` (`:262-281`). `sendSchedulingMessages: true` is passed (`src/stores/calendar-store.ts:293-297`) but Stalwart has nothing to schedule with. On Stalwart the attendee's `sendTo` is stored as an inert JSPROP.
   - Fix hint: port `buildParticipantMap` + `collectUserCalendarAddresses`; on save with attendees set `participants = buildParticipantMap({name, email: activeAccount.email}, attendees)` and `organizerCalendarAddress = mailto:<email>`; on edit keep existing participant ids and never re-add the organizer (#731).
 
-- [ ] **RSVP matches only the active account e-mail (no identities / aliases)** — `P2` — `missing`
+- [x] **RSVP matches only the active account e-mail (no identities / aliases)** — `P2` — `missing` — fixed in 5dc4070
   - What WEB does: `currentUserEmails` = identities + account aliases via `collectUserCalendarAddresses`, used for `getUserParticipantId`, organizer detection and editability (ref `lib/calendar-participants.ts:71-112`, changelog 1.9.0 "including alias organizers").
   - What RN does: `findParticipantByEmail(event, [activeEmail])` with the single login address (`src/components/calendar/EventDetailSheet.tsx:115, 173`, `src/components/email/CalendarInvitationBanner.tsx:98`). Invitations addressed to an alias show no RSVP buttons.
   - Fix hint: RN already loads identities for the composer; collect their emails (+ aliases from `x:Account/get` if available) and pass the array.
 
-- [ ] **RSVP writes `replyTo` instead of repairing `organizerCalendarAddress`** — `P3` — `partial`
+- [x] **RSVP writes `replyTo` instead of repairing `organizerCalendarAddress`** — `P3` — `partial` — fixed in 5dc4070
   - What WEB does: only when the event lacks `organizerCalendarAddress` it sets it from `replyTo.imip`; never sends `replyTo` (retired) (ref `stores/calendar-store.ts:782-789`).
   - What RN does: `rsvpEvent` sets `patch.replyTo = replyTo` whenever `buildReplyTo` returns something (`src/api/calendar.ts:344`, `src/lib/calendar-invitation.ts:74-83`). Harmless on Stalwart (ignored) but the repair path for imported invites lacking an organizer is missing, so those REPLYs are not routed.
   - Fix hint: mirror WEB: `if (replyTo?.imip && !storeEvent.organizerCalendarAddress) patch.organizerCalendarAddress = replyTo.imip`.
 
-- [ ] **Store rejects participant ids containing `..`** — `P3` — `rn-only-bug`
+- [x] **Store rejects participant ids containing `..`** — `P3` — `rn-only-bug` — fixed in 5dc4070
   - What WEB does: participant ids are opaque and RFC 6901-escaped; only empty ids are rejected (ref `stores/calendar-store.ts:763-770`).
   - What RN does: `if (!participantId || participantId.includes('..')) throw` (`src/stores/calendar-store.ts:332-334`); a server-generated id like `a..b` cannot RSVP.
   - Fix hint: drop the `..` check.
@@ -214,7 +214,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `event.description` rendered with `<MapPin/>` (`src/components/calendar/EventCard.tsx:65-72`); `locations` is not read.
   - Fix hint: show `Object.values(event.locations)[0]?.name` with MapPin; drop or move the description.
 
-- [ ] **Detail sheet shows exclusive end date for all-day events (#318 off-by-one)** — `P2` — `rn-only-bug`
+- [x] **Detail sheet shows exclusive end date for all-day events (#318 off-by-one)** — `P2` — `rn-only-bug` — fixed in 5dc4070
   - What WEB does: multi-day all-day events show the inclusive end date (changelog 1.6.x #318, `getEventDisplayEndDate`).
   - What RN does: `formatRange` uses `eventTimeRange` -> `getEventEndDate` (exclusive), so a single-day all-day event on Mar 1 prints "Mar 1 – Mar 2" and a two-day one "Mar 1 – Mar 3" (`src/components/calendar/EventDetailSheet.tsx:63-74`, `src/lib/calendar-utils.ts:84-90`).
   - Fix hint: for `allDay` use `getEventDisplayEndDate(event)` before comparing/formatting.

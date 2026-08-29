@@ -19,7 +19,6 @@ export function createBirthdayCalendar(name = 'Birthdays'): Calendar {
       mayReadItems: true,
       mayWriteAll: false,
       mayWriteOwn: false,
-      mayWrite: false,
       mayDelete: false,
       mayRSVP: false,
     },

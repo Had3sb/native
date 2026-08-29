@@ -19,6 +19,8 @@ import {
   type InvitationMethod,
 } from '../../lib/calendar-invitation';
 import { useUserCalendarAddresses } from '../../lib/calendar-user-addresses';
+import { canCreateEventsIn } from '../../lib/calendar-editability';
+import { useCalendarSubscriptionsStore } from '../../stores/calendar-subscriptions-store';
 
 type BannerState = 'loading' | 'parsed' | 'done' | 'error';
 type RsvpStatus = 'accepted' | 'tentative' | 'declined';
@@ -32,6 +34,7 @@ export function CalendarInvitationBanner({ email }: Props) {
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const enabled = useSettingsStore((s) => s.calendarInvitationParsingEnabled);
   const calendars = useCalendarStore((s) => s.calendars);
+  const subscriptions = useCalendarSubscriptionsStore((s) => s.subscriptions);
   const importEvents = useCalendarStore((s) => s.importEvents);
   const rsvpEvent = useCalendarStore((s) => s.rsvpEvent);
   // Login address + identities + aliases, so invitations addressed to an
@@ -95,7 +98,15 @@ export function CalendarInvitationBanner({ email }: Props) {
   const me = findParticipantByEmail(event, currentUserEmails);
   const canRsvp = method !== 'cancel' && method !== 'reply' && !!me;
 
-  const writableCalendar = calendars.find((cal) => !cal.myRights || cal.myRights.mayWrite !== false);
+  // Import into the account's default calendar; never into a shared calendar,
+  // an iCal subscription (the next feed sync would delete the event) or a
+  // read-only one. Fall back to the first calendar events may be created in.
+  const isSubscriptionCalendar = (id: string) =>
+    subscriptions.some((s) => s.calendarId === id);
+  const candidates = calendars.filter(
+    (cal) => !cal.isShared && canCreateEventsIn(cal, isSubscriptionCalendar),
+  );
+  const writableCalendar = candidates.find((cal) => cal.isDefault) ?? candidates[0];
 
   const ensureImportedAndRsvp = async (status: RsvpStatus) => {
     if (busy || !writableCalendar) return;

@@ -44,6 +44,7 @@ import {
   getPrimaryCalendarId,
 } from '../../lib/calendar-utils';
 import { getEffectiveTimeZone } from '../../lib/calendar-timezone';
+import { canCreateEventsIn } from '../../lib/calendar-editability';
 import {
   alertsToReminders,
   remindersToAlerts,
@@ -82,6 +83,8 @@ interface EventModalProps {
   // Login address + identities + aliases; the first one is the organizer
   // address of invitations sent from this editor.
   currentUserEmails?: string[];
+  // Client-side iCal subscriptions are read-only targets (#762).
+  isSubscriptionCalendar?: (calendarId: string) => boolean;
   onSave: (data: Partial<CalendarEvent>, calendarId: string) => void | Promise<void>;
   onDelete?: (event: CalendarEvent) => void;
   onClose: () => void;
@@ -162,6 +165,7 @@ export function EventModal({
   defaultDate,
   defaultCalendarId,
   currentUserEmails = [],
+  isSubscriptionCalendar,
   onSave,
   onDelete,
   onClose,
@@ -177,9 +181,11 @@ export function EventModal({
   const [end, setEnd] = React.useState<Date>(() => addHours(nextHalfHour(defaultDate ?? new Date()), 1));
   // New events land in the explicitly requested calendar, else the account's
   // default calendar, else the first one.
+  // Never default new events into a subscription / read-only calendar (#762).
   const fallbackCalendarId =
     defaultCalendarId
-    || calendars.find((cal) => cal.isDefault && !cal.isShared)?.id
+    || calendars.find((cal) => cal.isDefault && !cal.isShared && canCreateEventsIn(cal, isSubscriptionCalendar))?.id
+    || calendars.find((cal) => canCreateEventsIn(cal, isSubscriptionCalendar))?.id
     || calendars[0]?.id
     || '';
   const [calendarId, setCalendarId] = React.useState<string>(fallbackCalendarId);
@@ -227,12 +233,7 @@ export function EventModal({
       setAllDay(false);
       setStart(d);
       setEnd(addHours(d, 1));
-      setCalendarId(
-        defaultCalendarId
-        || calendars.find((cal) => cal.isDefault && !cal.isShared)?.id
-        || calendars[0]?.id
-        || '',
-      );
+      setCalendarId(fallbackCalendarId);
       setAttendees([]);
       setRecurrence('none');
       setCustomRule(null);
@@ -241,7 +242,7 @@ export function EventModal({
       setLocation('');
       setVideoUrl('');
     }
-  }, [visible, event, defaultDate, defaultCalendarId, calendars, currentUserEmails]);
+  }, [visible, event, defaultDate, fallbackCalendarId, calendars, currentUserEmails]);
 
   React.useEffect(() => {
     if (allDay) {
@@ -349,6 +350,19 @@ export function EventModal({
   };
 
   const selectedCalendar = calendars.find((c) => c.id === calendarId);
+  // Calendars offered as create/move targets: writable, non-subscription, in
+  // the same account as the event being edited (a cross-account move would
+  // need delete + recreate), plus the event's current calendar so an
+  // in-place edit never blanks the picker (#762).
+  const selectableCalendars = React.useMemo(() => {
+    const eventAccount = event ? (event.accountId ?? null) : null;
+    return calendars.filter((c) => {
+      if (c.id === calendarId) return true;
+      if (!canCreateEventsIn(c, isSubscriptionCalendar)) return false;
+      if (event && (c.accountId ?? null) !== eventAccount) return false;
+      return true;
+    });
+  }, [calendars, calendarId, event, isSubscriptionCalendar]);
   const recurrenceLabel =
     recurrence === 'custom'
       ? (customRule && buildRecurrenceSummary(customRule)) || 'Custom'
@@ -430,7 +444,7 @@ export function EventModal({
             </Pressable>
             {calendarOpen && (
               <View style={styles.popover}>
-                {calendars.map((c) => (
+                {selectableCalendars.map((c) => (
                   <Pressable
                     key={c.id}
                     style={[

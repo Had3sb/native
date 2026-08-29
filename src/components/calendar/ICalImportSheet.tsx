@@ -12,6 +12,7 @@ import Button from '../Button';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { getCalendarColor } from '../../lib/calendar-utils';
+import { isWritableCalendar } from '../../lib/calendar-editability';
 
 // expo-document-picker is loaded lazily on first use; its native module is not
 // linked into every build (matches the FilesScreen / ContactImportSheet flow).
@@ -49,7 +50,7 @@ export function ICalImportSheet({ visible, onClose, calendars, onImport, onImpor
   const insets = useSafeAreaInsets();
 
   const writable = React.useMemo(
-    () => calendars.filter((cal) => !cal.myRights || cal.myRights.mayWrite !== false),
+    () => calendars.filter((cal) => isWritableCalendar(cal)),
     [calendars],
   );
 

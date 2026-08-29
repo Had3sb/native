@@ -532,8 +532,6 @@ export interface CalendarRights {
   mayRSVP?: boolean;
   mayShare?: boolean;
   mayDelete?: boolean;
-  // Legacy short flag still read by the sidebar drawer.
-  mayWrite?: boolean;
 }
 
 export interface Calendar {
