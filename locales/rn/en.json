@@ -115,7 +115,8 @@
     "swipe_move": "Move",
     "swipe_spam": "Spam",
     "total": "total",
-    "undo_failed": "Undo failed"
+    "undo_failed": "Undo failed",
+    "no_emails_in": "No emails in {folder}"
   },
   "email_viewer": {
     "color_tag": {

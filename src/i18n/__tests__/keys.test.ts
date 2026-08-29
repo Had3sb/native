@@ -70,6 +70,11 @@ describe('translation coverage', () => {
   });
 
   it('every other locale is a subset of English', () => {
+    // The vendored webmail catalog, without the RN-only overlay (which only
+    // exists for English and is served to every locale through the fallback).
+    const baseEn = flatten(
+      JSON.parse(readFileSync(join(SRC_ROOT, '..', 'locales', 'en', 'common.json'), 'utf8')) as Record<string, unknown>,
+    );
     for (const { code } of SUPPORTED_LOCALES) {
       if (code === 'en') continue;
       const keys = flatten(getDictionary(code as LocaleCode));
@@ -77,7 +82,7 @@ describe('translation coverage', () => {
       expect(extra, `${code} has keys English lacks`).toEqual([]);
       // Catalogs are near-complete translations; a locale with fewer than
       // 90% of the English keys is a sign of a broken vendored file.
-      expect(keys.size).toBeGreaterThan(en.size * 0.9);
+      expect(keys.size).toBeGreaterThan(baseEn.size * 0.9);
     }
   });
 });
