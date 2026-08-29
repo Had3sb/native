@@ -136,67 +136,67 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
 
 ### Push notifications
 
-- [ ] **RN subscribes to `Email` and `Mailbox` state changes, not just `EmailDelivery`** — `P2` — `bugfix-parity`
+- [x] **RN subscribes to `Email` and `Mailbox` state changes, not just `EmailDelivery`** — fixed in 00faceb — `P2` — `bugfix-parity`
   - What WEB does: `PUSH_TYPES = ['EmailDelivery']` because `Email` fires on every mutation and produced spurious notifications (`lib/web-push.ts:39-44`; changelog 1.5.x "Scope new-mail notifications to genuine inbox deliveries").
   - What RN does: `PUSH_TYPES = ['Email', 'EmailDelivery', 'Mailbox']` (`RN: src/lib/push-notifications.ts:104`). Every read/flag/move/draft on any client wakes the device through FCM and runs the headless task.
   - Fix hint: change to `['EmailDelivery']` and bump the subscription (the refresh path only patches `expires`, `:411-429`; add a `types` mismatch check like WEB `:369-383` so existing subscriptions get corrected).
 
-- [ ] **"Newest unread in Inbox" heuristic notifies the wrong message** — `P2` — `rn-only-bug`
+- [x] **"Newest unread in Inbox" heuristic notifies the wrong message** — fixed in 00faceb — `P2` — `rn-only-bug`
   - What WEB does: the service worker uses the `emailIds` the relay forwards (EmailPush) or, on StateChange, asks `/api/push/preview?accountId=&emailId=` (`app/api/push/preview/route.ts:88-119`).
   - What RN does: `processAccountForPush` queries `notKeyword:$seen` in Inbox, limit 1, and notifies it unless it equals `lastNotified` (`RN: src/lib/push-background-task.ts:151-164`). Because RN also subscribes to `Email` changes, reading the newest unread message on another device triggers a push, the query now returns the *next older* unread message, which was never `lastNotified`, so the user gets a notification for old mail. Two messages arriving in one push yield one notification; mail Sieve-filed outside Inbox never notifies; the relay's `emailIds` (`repos/relay/src/payload.ts`, `fcm.ts` data.emailIds) are ignored.
   - Fix hint: parse `data.emailIds` (JSON string) and `data.kind`; when present, `Email/get` those ids directly and post one notification per id (or a grouped one); fall back to the Inbox query only for legacy `jmap-state-change` payloads, and there compare against a stored set of seen ids rather than a single `lastNotified`.
 
-- [ ] **Per-account matching of the FCM payload never matches** — `P2` — `rn-only-bug`
+- [x] **Per-account matching of the FCM payload never matches** — fixed in 00faceb — `P2` — `rn-only-bug` — local id → JMAP id map in push:jmapAccountIds:v1 (+AccountEntry.jmapAccountId), accountLabel fallback
   - What WEB does: SW reads `accountId` from the payload's `changed` map (`app/api/push/preview/route.ts:90-99`).
   - What RN does: `identifyAccountFromFcmData` scans payload values for a locally stored `deviceClientId` (`RN: src/lib/push-background-task.ts:67-87`), but the relay sends `kind, accountLabel, accountId, emailIds, changed` (`repos/relay/src/fcm.ts` message.data) - never the subscription id. Result: every push processes every logged-in account serially inside a 30 s headless budget (`BulwarkPushTaskService.kt` timeout), loading each account's JMAP session.
   - Fix hint: the relay's `accountId` is the JMAP primary account id; persist each account's JMAP account id in `AccountEntry` (`RN: src/stores/account-store.ts:7-19` has none) or in the push registry (`push:accountIds:v1` → map local id → jmap id) at setup time, and match on that. `accountLabel` (= username) is a weaker second key.
 
-- [ ] **No `emailPush` delivery filter (spam still wakes the device)** — `P2` — `bugfix-parity`
+- [x] **No `emailPush` delivery filter (spam still wakes the device)** — fixed in 00faceb — `P2` — `bugfix-parity`
   - What WEB does: when the session advertises `urn:ietf:params:jmap:emailpush` (Stalwart ≥ 0.16.16) the subscription carries a per-account filter `notKeyword:$junk AND inMailboxOtherThan:[junk ids]` (`lib/web-push.ts:53-108,491-497`, commit 63fa2d2d) and re-syncs it in the background on every page load (`:668-688`, `components/push-notification-prompt.tsx:119-126`, 1.9.2).
   - What RN does: `createPushSubscription` has no `emailPush` parameter (`RN: src/api/push.ts:23-57`); the Inbox-only query hides junk from the notification but the wake-up and JMAP round-trip still happen for every spam delivery.
   - Fix hint: port `buildEmailPushConfig` + `serverSupportsEmailPush` (session capabilities are in `jmapClient.currentSession.capabilities`), add `emailPush` to `createPushSubscription`/`updatePushSubscription`, and extend `refreshSubscriptionExpires` to patch `types`/`emailPush` when they differ.
 
-- [ ] **No device list, per-device revoke, or force-recreate (#841)** — `P2` — `missing`
+- [x] **No device list, per-device revoke, or force-recreate (#841)** — fixed in f6f26f7 — `P2` — `missing`
   - What WEB does: Notifications tab lists every `PushSubscription` on the account with relay liveness and "this device" marker, lets the user revoke any of them, and "Re-register" destroys and recreates the subscription so revoked shared-mailbox access stops fanning out (`lib/web-push.ts:565-639`, `:143,457-461`; `components/settings/notification-settings.tsx:169-193,251-303`; changelog 1.8.x).
   - What RN does: "Re-register" calls `setupPushNotifications` which reuses the stored subscription and only refreshes `expires` (`RN: src/lib/push-notifications.ts:345-352`); no list/revoke UI.
   - Fix hint: add `forceRecreate` to `PushSetupParams`, and a `listPushDevices`/`revokePushDevice` pair (JMAP `PushSubscription/get` + relay `/api/push/active/:id` + `DELETE /api/push/register/:id`) rendered under the relay card.
 
-- [ ] **Relay URL is a free-text field instead of an admin-curated list; `DEFAULT_RELAY_BASE_URL` not overridable** — `P3` — `partial`
+- [ ] **Relay URL is a free-text field instead of an admin-curated list; `DEFAULT_RELAY_BASE_URL` not overridable** — `P3` — `partial` — https now required (isValidRelayUrl, 00faceb); deferred: per-account relay storage / discovery
   - What WEB does: user picks from `resolvePushRelayOptions(policy)` (default + admin list + legacy), never types a URL; admin can lock it (`lib/push-relays.ts:39-80`, `notification-settings.tsx:226-241`).
   - What RN does: `TextInput` with any `https?://` accepted (`RN: NotificationSettings.tsx:174-184`), stored device-wide in AsyncStorage (`push-notifications.ts:160-175`) so two accounts on different servers share one relay.
   - Fix hint: keep free text (there is no policy source in RN) but store the relay per account alongside `push:accountIds:v1`, and let `.well-known`/login-time discovery optionally seed it. Not blocking.
 
-- [ ] **Re-register error path is opaque (native #45)** — `P2` — `bug`
+- [x] **Re-register error path is opaque (native #45)** — fixed in 00faceb — `P2` — `bug` — PushSetupError{phase}, relay body in message, guarded getToken, per-account teardown keeps the FCM token; no device repro yet
   - What WEB does: surfaces `WebPushUnsupportedError` separately and reports precise relay/JMAP failures; reaps only relay-confirmed-dead leftovers (`lib/web-push.ts:466-489`).
   - What RN does: `setupPushNotificationsInner` calls `native.getToken()` directly (not the guarded `getFcmToken`) so a Firebase rejection (`fcm_token_failed`, typical on de-Googled devices or right after `deleteToken()` during Disable) bubbles up raw; `registerWithRelay` throws `Relay register failed: <status>` without the body (`RN: src/lib/push-notifications.ts:312-313,215-217`); `pollVerificationCode` times out after 75 s with the same message for every cause (`:268`). The UI shows `error.message` verbatim (`NotificationSettings.tsx:95-99`). Disable then immediately Enable also races: `teardownPushNotificationsForAccount` deletes the FCM token when it was the last account (`:477-481`) and the next `getToken()` may be rejected until Firebase re-registers.
   - Fix hint: read the relay response body into the error, distinguish "no Google Play services" (map to the UnifiedPush finding), skip `deleteToken()` unless the user disables push for all accounts, and log each phase (`token`, `relay`, `jmap create`, `verify`) so the settings pane can show which step failed. Needs a repro on the reporter's device to confirm the exact failure.
 
-- [ ] **iOS push missing entirely** — `P2` — `missing`
+- [ ] **iOS push missing entirely** — `P2` — `missing` — deferred: needs an APNs transport in the relay + iOS token module; the settings pane now states Android-only
   - What WEB does: Web Push works on iOS 16.4+ once installed to the home screen (`lib/web-push.ts:157-164,394-398`).
   - What RN does: `getNative()` returns `null` off Android and setup throws "Push notifications require Android" (`RN: src/lib/push-notifications.ts:125-128,303-304`); the relay has only FCM and Web Push transports (`repos/relay/README.md` endpoints).
   - Fix hint: needs an APNs transport in the relay (`POST /api/push/register/apns` storing a device token, HTTP/2 to `api.push.apple.com` with a `.p8` key) plus an iOS native module (or `expo-notifications`) for the token and a Notification Service Extension to fetch sender/subject over JMAP. Content-blind payload stays the same.
 
-- [ ] **No non-FCM transport (UnifiedPush, native #44/#48)** — `P3` — `missing`
+- [ ] **No non-FCM transport (UnifiedPush, native #44/#48)** — `P3` — `missing` — deferred: relay must accept key-less web registrations + a UnifiedPush connector module
   - What WEB does: N/A (browser push).
   - What RN does: FCM only (`BulwarkMessagingService.kt`, `push-notifications.ts:120-128`).
   - Fix hint: UnifiedPush distributors expose an RFC 8030 endpoint, which is exactly what the relay's `/api/push/register/web` already accepts (`repos/relay/src/server.ts` handleRegisterWeb); VAPID/`keys` are optional in UnifiedPush so the relay must accept a record without `p256dh`/`auth` and send unencrypted (or only the id). Client side: `unifiedpush-react-native`/`org.unifiedpush.android.connector` receiving the message and calling the same headless task.
 
-- [ ] **No "+N more messages" grouping** — `P3` — `missing`
+- [x] **No "+N more messages" grouping** — fixed in 00faceb — `P3` — `missing`
   - What WEB does: one notification per account with the newest message as headline and a "+N more" line, tag `bulwark-mail:<accountId>`, click opens inbox when grouped (`public/sw.js:180-216`; changelog 1.8.x).
   - What RN does: one notification per message id `mail:<emailId>` with no `setGroup`/summary (`RN: BulwarkFcmModule.kt postNotification`).
   - Fix hint: set `setGroup("bulwark-mail:"+accountId)` on each notification and post a summary notification with `setGroupSummary(true)` and an `InboxStyle` listing; Android does the "+N" rendering.
 
-- [ ] **Foreground FCM message is only logged** — `P3` — `partial`
+- [x] **Foreground FCM message is only logged** — fixed in 00faceb — `P3` — `partial`
   - What WEB does: SW shows the notification regardless; in-app state refresh comes from the separate SSE channel.
   - What RN does: `addMessageListener` handler just `console.log`s (`RN: App.tsx:300-305`); since the Kotlin service skips the headless task in the foreground (`BulwarkMessagingService.kt:26-31`) no notification is posted and no store refresh happens if SSE happens to be down (SSE fallback is 5 s polling, so the gap is small).
   - Fix hint: on `fcm:message`, call `useEmailStore.getState().handleStateChange(JSON.parse(payload.data.changed))` (relay sends it) and optionally post an in-app banner.
 
-- [ ] **No push onboarding prompt** — `P3` — `missing`
+- [x] **No push onboarding prompt** — fixed in f6f26f7 — `P3` — `missing`
   - What WEB does: after the PWA install prompt, a per-account dismissable "enable notifications" card appears 1 s after login unless already enabled (`components/push-notification-prompt.tsx:128-177`; changelog 1.8.0 "Background notification onboarding").
   - What RN does: push only starts if `getStoredRelayBaseUrl()` is non-null (`RN: App.tsx:353-354`), i.e. the user must find Settings → Notifications and press Enable; nothing invites them.
   - Fix hint: on first authenticated launch, prompt once (with "don't ask again" persisted per account) and call `setupPushNotifications({ relayBaseUrl: DEFAULT_RELAY_BASE_URL })`.
 
-- [ ] **Notification sound settings are dead** — `P3` — `partial`
+- [x] **Notification sound settings are dead** — fixed in f6f26f7 — `P3` — `partial` — controls removed, channel hint shown; store keys dropped in the settings-store pass
   - What WEB does: `notificationSoundChoice` picks one of 5 sounds with preview; email/calendar sound toggles gate playback (`lib/notification-sound.ts`, `notification-settings.tsx:305-331`).
   - What RN does: `NotificationSettings.tsx:203-250` renders a sound `Select` (values `chime/ping/pop/none` that exist nowhere), a preview button without `onPress`, and email/calendar sound toggles that no code reads; the Android channel `bulwark_mail` uses the default sound and cannot change it after creation (`BulwarkMessagingService.kt:62-78`).
   - Fix hint: on Android sounds belong to channels: create one channel per sound choice (or open the system channel settings via `Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS`), and remove the toggles that cannot be honoured.
