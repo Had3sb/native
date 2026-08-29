@@ -124,12 +124,12 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `AboutDataSettings.tsx:61-66,226-244` keeps toggles in `useState` with categories (`sync`, `render`) that exist nowhere; the "Debug" tab is `implemented: false` (`SettingsScreen.tsx:111`); code uses raw `console.warn`.
   - Fix hint: persist `debugMode`/`debugCategories`, add `src/lib/debug.ts` mirroring WEB's category API, route the `[push]`, `[settings-store]`, `[updates-store]` warnings through it, and drop the dead Debug tab or implement a log viewer.
 
-- [ ] **Settings panes are hard-coded English (no i18n)** — `P2` — `partial`
+- [x] **Settings panes are hard-coded English (no i18n)** — fixed in 22697fd — `P2` — `partial` — all panes I own use t(); RN-only keys harvested into locales/rn/en.json (npm run i18n:harvest); Calendar/Contacts/ContentSenders/Filter/Vacation/Files/Folder panes belong to other agents
   - What WEB does: every settings component uses `useTranslations` with keys in `locales/*/common.json`.
   - What RN does: only `LanguageSettings.tsx` and `FilterSettings.tsx` call `t()`; the other 24 settings components plus `settings-section.tsx` have literal English strings (grep count 0 for `t(` in each). `SettingsScreen.tsx:184-187` translates group/tab labels only, and the "Experimental"/"Not implemented"/"Unavailable" badges (`:297,270-273`) are literal.
   - Fix hint: the vendored catalog already contains `settings.*` keys for almost every label (WEB keys); wrap each label/description in `t('settings.<tab>.<key>', 'fallback')`.
 
-- [ ] **Settings tabs shown regardless of server capability / admin policy** — `P3` — `partial`
+- [x] **Settings tabs shown regardless of server capability / admin policy** — fixed in 3ffcef2 — `P3` — `partial` — Sieve/Vacation gating via useHasSieve/useHasVacation (filters agent's commit)
   - What WEB does: hides Vacation/Filters when Sieve is absent, Templates/Keywords/Sidebar apps/Plugins/Themes/Debug behind admin feature flags, Security behind Stalwart features (`components/settings/settings-app.tsx:724-766`); settings can be `locked`/hidden per policy (`appearance-settings.tsx:89-119`).
   - What RN does: hides only calendar/contacts/files by capability and updates by platform (`RN: SettingsScreen.tsx:142-179`); Vacation and Filters render even without Sieve; `SettingItem` has a `locked` prop (`settings-section.tsx:68-86`) that nothing sets. Admin policy is N/A (no webmail server), but Sieve gating is not.
   - Fix hint: gate `vacation`/`filters` on `CAPABILITIES.SIEVE` in the session like WEB's `supportsSieve`/`supportsVacation`.
@@ -213,7 +213,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `RN: locales/en/common.json` last synced 2026-07-22 has 2336 keys; 640 WEB keys are absent; RN en carries 17 keys WEB lacks (hand-added `email_composer.*`) which the 14 other RN locales do not have (de/fr/ja each miss the same 16 keys), and 19 keys RN code calls (`email_composer.schedule_*`, `email_list.no_*_folder`) exist in no catalog, so the inline fallback always shows in every language.
   - Fix hint: make `sync-locales.mjs` merge instead of overwrite (keep RN-only keys under a separate `locales/rn/<lang>.json` overlay), add a key-parity test like WEB's translation coverage test, and run it in CI.
 
-- [ ] **`translate()` has no interpolation, no plurals, no rich text** — `P2` — `partial`
+- [x] **`translate()` has no interpolation, no plurals, no rich text** — fixed in 990cd84 — `P2` — `partial` — hand-rolled plurals replaced in OfflineBanner/AboutData/Layout/Identity/Templates (8deff66, 22697fd); rich text (tags) not needed by any RN string
   - What WEB does: next-intl ICU messages (`{count, plural, ...}`, `{name}` args).
   - What RN does: plain nested lookup returning the raw string (`RN: src/i18n/index.ts:54-71`); any WEB string with `{placeholder}` renders literally, and plurals are hand-rolled English (`OfflineBanner.tsx:22`, `AboutDataSettings.tsx:96,176,190`, `LayoutSettings.tsx:148-149`).
   - Fix hint: add `t(key, fallback, params)` with `{name}` substitution and a minimal ICU plural (`intl-messageformat` is small and works on Hermes), then replace the hand-rolled plurals.
@@ -240,7 +240,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: 18 files call `Animated.timing`/`LayoutAnimation` with literal durations (e.g. `UndoSnackbar.tsx:32-42`, every sheet, `SwipeableRow.tsx`); `useAnimDuration` used in 3. `AccessibilityInfo.isReduceMotionEnabled` is never consulted.
   - Fix hint: route durations through `useAnimDuration` and OR in `AccessibilityInfo.isReduceMotionEnabled()` inside `useShouldAnimate`.
 
-- [ ] **Density preview and other hard-coded dark colours break on the light theme** — `P3` — `rn-only-bug`
+- [x] **Density preview and other hard-coded dark colours break on the light theme** — fixed in 22697fd — `P3` — `rn-only-bug` — Appearance/Themes/SidebarApps/settings-section/OfflineBanner/SettingsScreen badge use tokens; Plugins pane replaced
   - What WEB does: preview uses tokens (`components/settings/appearance-settings.tsx:21-64`).
   - What RN does: `AppearanceSettings.tsx:63` paints read subjects `rgba(250,250,250,0.8)` and `:193` preview text `rgba(161,161,170,0.7)` regardless of theme, so the preview is near-invisible on light. Similar literals: `PluginsSettings.tsx:27-30`, `ThemesSettings.tsx:108`, `SidebarAppsSettings.tsx:86,238,296`, `OfflineBanner.tsx:43` (`#a16207`), `SettingsScreen.tsx:382`.
   - Fix hint: replace with `c.textSecondary`/`c.mutedForeground`/`c.warningBg` tokens.
@@ -250,7 +250,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `RN: app.config.js:33` sets `userInterfaceStyle: 'dark'`, which prebuild writes as `UIUserInterfaceStyle = Dark` in Info.plist, so `useColorScheme()` (`src/theme/colors.ts:16`, `App.tsx:220`) always returns `dark` and "System" behaves like "Dark". On Android without `expo-system-ui` (not in `package.json`) the key is ignored with a prebuild warning, so Android is probably fine. Splash background is also dark-only (`:38`).
   - Fix hint: set `userInterfaceStyle: 'automatic'` and give the splash a light variant (`splash.dark`).
 
-- [ ] **Themes tab is a stub with fake themes; `activeThemeId` never applied** — `P3` — `missing` (record as N/A for now)
+- [x] **Themes tab is a stub with fake themes; `activeThemeId` never applied** — fixed in fe45a44 — `P3` — `missing` (record as N/A for now) — Qui/Nord/Catppuccin/Solarized token sets generated from lib/builtin-themes.ts (src/theme/builtin-themes.ts); useColors() applies activeThemeId; upload button removed
   - What WEB does: 6 built-in themes (`lib/builtin-themes.ts:879-936`), zip upload, marketplace, admin forced/default theme, compiled CSS tokens, PWA theme-color meta (`stores/theme-store.ts`).
   - What RN does: `ThemesSettings.tsx:18-22` lists `Default/Qui/Sepia` (Qui exists in WEB; Sepia does not), stores `activeThemeId` that nothing reads, "Upload .zip" has no handler (`:81-83`); the tab is marked Experimental.
   - Fix hint: minimal viable subset = map WEB's built-in theme token sets (`builtin-themes.ts` light/dark `colors`) onto `ThemePalette` and let `useColors()` pick `activeThemeId`; remove the upload button. Otherwise hide the tab.
@@ -287,7 +287,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `SmimeSettings.tsx:32-33` uses empty `MOCK_KEYS`/`MOCK_CERTS`; Import buttons have no handlers (`:118-120,163-165`); three toggles persist unused prefs; the tab is labelled implemented and lives under Privacy.
   - Fix hint: mark `implemented: false` in `SettingsScreen.tsx:97` until a native crypto path exists.
 
-- [ ] **Sidebar apps: settings exist, apps never rendered; no admin defaults (#931)** — `P3` — `partial`
+- [ ] **Sidebar apps: settings exist, apps never rendered; no admin defaults (#931)** — `P3` — `partial` — deferred: useMobileSidebarApps()/openSidebarApp() in src/lib/sidebar-apps.ts (0e63d45) ready for SidebarDrawer (mail-list agent's file); admin defaults N/A
   - What WEB does: apps render in the navigation rail (`components/layout/navigation-rail.tsx:391` filters `showOnMobile`), inline iframe or new tab, `keepAppsLoaded`, drag reorder, plus operator-pinned apps merged from policy (`lib/sidebar-apps.ts:103-112`, commit 4fe5701b).
   - What RN does: `SidebarAppsSettings.tsx` adds/edits/removes entries into `sidebarApps` (`settings-store.ts:502-523`) but `SidebarDrawer.tsx` never reads them (grep: no usage outside settings); reorder handle is decorative (`:72`).
   - Fix hint: minimal viable subset = list `sidebarApps.filter(showOnMobile)` at the bottom of `SidebarDrawer`, open with `expo-web-browser` (`openMode:'tab'`) or a `react-native-webview` screen (`inline`); admin defaults are N/A without a policy source (could be read from a webmail `/api/config` if the webmail origin becomes known).
