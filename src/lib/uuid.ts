@@ -1,20 +1,18 @@
-// RFC 4122 v4 UUID generator. Prefers the platform crypto.randomUUID when
-// available (Hermes/React Native 0.81 exposes it), falling back to a
-// Math.random implementation. These IDs are only used as temporary client-side
-// keys (e.g. parsed-vCard import rows) before the server assigns real ids, so
-// the Math.random fallback's weaker entropy is acceptable.
+// RFC 4122 v4 UUID generator backed by the platform CSPRNG (expo-crypto, or
+// the web crypto global off-device). Used for contact UIDs (#644), outbox
+// entry ids and client-generated Message-IDs, so the old Math.random fallback
+// only remains as a last resort for ephemeral client-side keys when no secure
+// source exists at all.
+import { secureRandomUUID } from './random';
+
 export function generateUUID(): string {
-  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  if (c?.randomUUID) {
-    try {
-      return c.randomUUID();
-    } catch {
-      // fall through to the manual implementation
-    }
+  try {
+    return secureRandomUUID();
+  } catch {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+      const r = (Math.random() * 16) | 0;
+      const v = ch === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
   }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
-    const r = (Math.random() * 16) | 0;
-    const v = ch === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
 }

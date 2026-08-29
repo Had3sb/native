@@ -5,46 +5,16 @@
 // (x:AccountPassword/set with otpAuth.otpCode), so we never run HMAC-SHA1 on
 // device — that keeps this file dependency-free.
 
+import { randomBytes } from './random';
+
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 // 20 bytes = 160 bits, matching the webmail's `new OTPAuth.Secret({ size: 20 })`
 // and the SHA-1 HMAC block expectation of virtually every authenticator app.
 const SECRET_BYTES = 20;
 
-function randomBytes(length: number): Uint8Array {
-  const bytes = new Uint8Array(length);
-  const c = (globalThis as {
-    crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array; randomUUID?: () => string };
-  }).crypto;
-
-  // Best: a real CSPRNG (web / a polyfilled RN).
-  if (c?.getRandomValues) {
-    try {
-      c.getRandomValues(bytes);
-      return bytes;
-    } catch {
-      // fall through
-    }
-  }
-
-  // Good enough: derive bytes from crypto.randomUUID, which Hermes exposes
-  // even when getRandomValues isn't polyfilled (~122 bits of entropy each).
-  if (c?.randomUUID) {
-    try {
-      let hex = '';
-      while (hex.length < length * 2) hex += c.randomUUID().replace(/-/g, '');
-      for (let i = 0; i < length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-      return bytes;
-    } catch {
-      // fall through
-    }
-  }
-
-  // Last resort: Math.random. Same trade-off the rest of the app accepts in
-  // lib/uuid.ts and lib/oauth.ts; the secret is one-off and server-validated.
-  for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  return bytes;
-}
+// Secure random bytes come from lib/random.ts (expo-crypto CSPRNG); a
+// long-lived 2FA secret must never come from Math.random.
 
 // RFC 4648 base32, no padding — the form authenticator apps expect in the
 // `secret` query parameter.

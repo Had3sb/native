@@ -1,5 +1,6 @@
 import * as WebBrowser from 'expo-web-browser';
 import { secureFetch } from './client-cert';
+import { randomHex } from './random';
 
 // Webmail-mediated login. The app opens the webmail's normal login page with
 // extra `mobile_redirect_uri` and `mobile_state` query params. The webmail
@@ -38,12 +39,51 @@ export class HandoffCancelledError extends HandoffError {
   }
 }
 
+// The token endpoint could not be reached, or answered 5xx/429: the refresh
+// token is still good, the caller must keep the account and retry later
+// (webmail 1.7.6 "keep the session when the auth server is briefly
+// unreachable"). Only a definitive 400/401/403 is a `HandoffError`.
+export class TransientRefreshError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransientRefreshError';
+  }
+}
+
+// The state is the only guard against a forged `bulwarkmobile://` redirect
+// delivering foreign credentials, so it comes from the platform CSPRNG.
 function randomState(): string {
-  const bytes = new Uint8Array(16);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  let s = '';
-  for (const b of bytes) s += b.toString(16).padStart(2, '0');
-  return s;
+  return randomHex(16);
+}
+
+// Anything from the redirect fragment is attacker-influenced: another app can
+// register the same custom scheme. Only accept https endpoints, and only a
+// token endpoint that lives on the mail server's own host (or the webmail's).
+function isHttpsUrl(value: string | null): value is string {
+  return !!value && /^https:\/\/[^/?#\s]+/i.test(value);
+}
+
+function hostOf(url: string): string {
+  const m = url.match(/^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i);
+  return (m ? m[1] : '').toLowerCase().replace(/:\d+$/, '');
+}
+
+// Dev builds against a local Stalwart still need plain http on loopback.
+export function isLoopbackHttp(value: string): boolean {
+  const host = hostOf(value);
+  return /^http:\/\//i.test(value) && (host === 'localhost' || host === '127.0.0.1' || host === '10.0.2.2');
+}
+
+export function isAcceptableTokenEndpoint(
+  tokenEndpoint: string | null,
+  serverUrl: string,
+  webmailUrl?: string,
+): tokenEndpoint is string {
+  if (!isHttpsUrl(tokenEndpoint) && !(tokenEndpoint && isLoopbackHttp(tokenEndpoint))) return false;
+  const host = hostOf(tokenEndpoint as string);
+  if (!host) return false;
+  const allowed = [hostOf(serverUrl), webmailUrl ? hostOf(webmailUrl) : ''].filter(Boolean);
+  return allowed.some((h) => host === h || host.endsWith(`.${h}`) || h.endsWith(`.${host}`));
 }
 
 function buildHandoffUrl(webmailUrl: string, state: string): string {
@@ -88,6 +128,9 @@ export async function runWebmailHandoff(webmailUrl: string): Promise<HandoffResu
   const flow = params.get('flow');
   const serverUrl = params.get('server_url');
   if (!serverUrl) throw new HandoffError('Sign-in response missing server URL');
+  if (!isHttpsUrl(serverUrl) && !isLoopbackHttp(serverUrl)) {
+    throw new HandoffError('Sign-in response server URL must use https');
+  }
 
   if (flow === 'password') {
     const username = params.get('username');
@@ -104,6 +147,9 @@ export async function runWebmailHandoff(webmailUrl: string): Promise<HandoffResu
     const clientId = params.get('client_id');
     if (!accessToken || !tokenEndpoint || !clientId) {
       throw new HandoffError('Sign-in response missing OAuth tokens');
+    }
+    if (!isAcceptableTokenEndpoint(tokenEndpoint, serverUrl, webmailUrl)) {
+      throw new HandoffError('Sign-in response token endpoint is not trusted');
     }
     const refreshToken = params.get('refresh_token') ?? undefined;
     const expiresIn = params.get('expires_in');
@@ -193,6 +239,12 @@ export async function redeemPairingCode(webmailUrl: string, code: string): Promi
   if (!data.server_url || !data.access_token || !data.token_endpoint || !data.client_id) {
     throw new HandoffError('Pairing response missing token material');
   }
+  if (!isHttpsUrl(data.server_url) && !isLoopbackHttp(data.server_url)) {
+    throw new HandoffError('Pairing response server URL must use https');
+  }
+  if (!isAcceptableTokenEndpoint(data.token_endpoint, data.server_url, base)) {
+    throw new HandoffError('Pairing response token endpoint is not trusted');
+  }
 
   return {
     flow: 'oauth',
@@ -228,16 +280,29 @@ export async function refreshOAuthAccessToken(tokens: OAuthTokens): Promise<OAut
           refresh_token: tokens.refreshToken!,
           client_id: tokens.clientId,
         });
-        const response = await secureFetch(tokens.tokenEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            Accept: 'application/json',
-          },
-          body: body.toString(),
-        });
+        let response: Response;
+        try {
+          response = await secureFetch(tokens.tokenEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              Accept: 'application/json',
+            },
+            body: body.toString(),
+          });
+        } catch (err) {
+          throw new TransientRefreshError(
+            `Token endpoint unreachable: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
         if (!response.ok) {
-          throw new HandoffError(`Token refresh failed: ${response.status}`);
+          // 400/401/403 mean the refresh token is definitively dead. Anything
+          // else (429, 5xx, a proxy error page) is the auth server having a
+          // bad moment and must not evict the account.
+          if (response.status === 400 || response.status === 401 || response.status === 403) {
+            throw new HandoffError(`Token refresh failed: ${response.status}`);
+          }
+          throw new TransientRefreshError(`Token refresh failed: ${response.status}`);
         }
         const data = (await response.json()) as {
           access_token?: string;

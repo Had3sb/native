@@ -83,3 +83,18 @@ vi.mock('@react-native-community/netinfo', () => ({
     fetch: vi.fn(async () => ({ isConnected: true, isInternetReachable: true })),
   },
 }));
+
+// expo-crypto is a native module; lib/random.ts falls back to node's
+// webcrypto when the import fails, so just make the import resolvable.
+vi.mock('expo-crypto', () => ({
+  getRandomValues: <T extends ArrayBufferView>(a: T): T => {
+    const bytes = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    return a;
+  },
+  randomUUID: () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const r = (Math.random() * 16) | 0;
+    const v = ch === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  }),
+}));
