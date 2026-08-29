@@ -214,7 +214,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: 300 ms debounce into `setSearchQuery` → full `Email/query` + `Email/get` per pause (`src/screens/EmailListScreen.tsx:512-516`); with the `*` wildcard a single letter matches the whole mailbox.
   - Fix hint: search on `onSubmitEditing` (keep the clear button live), or debounce ≥ 600 ms with a minimum of 2 characters.
 
-- [x] **Date format: no regional date-locale setting; relative strings hard-coded** — `P3` — `partial` — fixed in PENDING-E
+- [x] **Date format: no regional date-locale setting; relative strings hard-coded** — `P3` — `partial` — fixed in 0205aa0
   - What WEB does: user-selectable regional format (`dateLocale`, changelog 1.7.7) and a preset picker (#331); strings localized.
   - What RN does: `formatListDate` follows the app locale only (`src/lib/date-format.ts:17-31`), "Just now"/"m ago" are English (`:38-41`).
   - Fix hint: localize the relative strings via `t()`; add a `dateLocale` select if parity is wanted.
@@ -229,7 +229,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: long-press enters selection (`EmailListScreen.tsx:98,425`); single-message move/tag/spam need a swipe (two configurable directions) or opening the message.
   - Fix hint: optional — selection mode already exposes most actions; add "spam" to the selection header (see above) and this is close enough.
 
-- [x] **Own → shared/group folder move (cross-account move, 1.7.2)** — `P3` — `missing` — fixed in PENDING-E
+- [x] **Own → shared/group folder move (cross-account move, 1.7.2)** — `P3` — `missing` — fixed in 0205aa0
   - What WEB does: copy+delete via `crossAccountMoveEmails`, drop into shared mailboxes allowed (`stores/email-store.ts:1980-2026`, `2169`).
   - What RN does: refuses with "Messages can only be moved within the same account" (`src/stores/email-store.ts:1183-1186`, `1396-1399`); `MoveSheet` is scoped to the same account so the message is only reachable by a future picker. `MoveSheet` also allows Drafts as a target (`MoveSheet.tsx:102-103`) which WEB excludes (`email-context-menu.tsx:163`).
   - Fix hint: exclude `role === 'drafts'` targets; cross-account move = `Email/get` blob → `Blob/upload` to the owner → `Email/import` → destroy (import helper already exists in `src/api/email.ts:423`).
@@ -280,7 +280,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
 
 ### Offline cache (RN only, sanity check)
 
-- [x] **Offline sync covers the primary account only; shared folders never cached** — `P3` — `rn-only-bug` — fixed in PENDING-E
+- [x] **Offline sync covers the primary account only; shared folders never cached** — `P3` — `rn-only-bug` — fixed in 0205aa0
   - What RN does: `runOfflineSync` discovers via `queryEmailsByFilter` which hard-codes `jmapClient.accountId` (`src/lib/offline-sync.ts:55`, `src/api/email.ts:733-747`), so opening a group-folder message offline always fails; `selectMailbox` seeding for a shared folder therefore always yields nothing (`src/stores/email-store.ts:647-666` looks up by raw id, which is correct).
   - Fix hint: iterate `jmapClient.getSharedMailAccounts()` in the sync with `accountIdOverride`, storing the account id in the cache index (`getFullEmails(ids, accountId)` already exists).
 
