@@ -98,3 +98,70 @@ vi.mock('expo-crypto', () => ({
     return v.toString(16);
   }),
 }));
+
+// React Native injects `__DEV__`; expo-modules-core reads it at import time.
+(globalThis as { __DEV__?: boolean }).__DEV__ = false;
+
+// Expo native modules reached transitively from the stores (file system,
+// haptics, clipboard, notifications, sharing, pickers). Their JS entry points
+// pull in expo-modules-core, which needs the RN runtime. Tests that exercise
+// one of them re-mock it locally with real behaviour.
+vi.mock('expo-file-system', () => ({
+  File: class { constructor(public uri: string) {} async bytes() { return new Uint8Array(); } },
+  Paths: { cache: { uri: 'file:///cache/' }, document: { uri: 'file:///documents/' } },
+  Directory: class { constructor(public uri: string) {} },
+}));
+vi.mock('expo-file-system/legacy', () => ({
+  cacheDirectory: 'file:///cache/',
+  documentDirectory: 'file:///documents/',
+  createUploadTask: vi.fn(),
+  uploadAsync: vi.fn(async () => ({ status: 200, body: '{}' })),
+  getInfoAsync: vi.fn(async () => ({ exists: false })),
+  deleteAsync: vi.fn(async () => undefined),
+  readDirectoryAsync: vi.fn(async () => []),
+  writeAsStringAsync: vi.fn(async () => undefined),
+  readAsStringAsync: vi.fn(async () => ''),
+  FileSystemUploadType: { BINARY_CONTENT: 0 },
+}));
+vi.mock('expo-haptics', () => ({
+  impactAsync: vi.fn(async () => undefined),
+  notificationAsync: vi.fn(async () => undefined),
+  selectionAsync: vi.fn(async () => undefined),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
+}));
+vi.mock('expo-clipboard', () => ({
+  setStringAsync: vi.fn(async () => true),
+  getStringAsync: vi.fn(async () => ''),
+}));
+vi.mock('expo-notifications', () => ({
+  scheduleNotificationAsync: vi.fn(async () => 'id'),
+  cancelScheduledNotificationAsync: vi.fn(async () => undefined),
+  cancelAllScheduledNotificationsAsync: vi.fn(async () => undefined),
+  getAllScheduledNotificationsAsync: vi.fn(async () => []),
+  requestPermissionsAsync: vi.fn(async () => ({ granted: true })),
+  getPermissionsAsync: vi.fn(async () => ({ granted: true })),
+  setNotificationHandler: vi.fn(),
+  setNotificationChannelAsync: vi.fn(async () => undefined),
+  AndroidImportance: { DEFAULT: 3, HIGH: 4 },
+  SchedulableTriggerInputTypes: { DATE: 'date' },
+}));
+vi.mock('expo-sharing', () => ({
+  isAvailableAsync: vi.fn(async () => false),
+  shareAsync: vi.fn(async () => undefined),
+}));
+vi.mock('expo-document-picker', () => ({
+  getDocumentAsync: vi.fn(async () => ({ canceled: true, assets: null })),
+}));
+vi.mock('expo-image-manipulator', () => ({
+  manipulateAsync: vi.fn(async (uri: string) => ({ uri, width: 0, height: 0 })),
+  SaveFormat: { JPEG: 'jpeg', PNG: 'png' },
+}));
+vi.mock('expo-intent-launcher', () => ({
+  startActivityAsync: vi.fn(async () => ({ resultCode: 0 })),
+  ActivityAction: { VIEW: 'android.intent.action.VIEW' },
+}));
+vi.mock('expo-localization', () => ({
+  getLocales: () => [{ languageCode: 'en', regionCode: 'US', languageTag: 'en-US', textDirection: 'ltr' }],
+  getCalendars: () => [{ timeZone: 'UTC', firstWeekday: 1 }],
+}));
