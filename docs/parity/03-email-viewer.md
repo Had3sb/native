@@ -12,7 +12,7 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
   - What RN does: the list collapses same-thread rows to the newest message with a count badge (`src/screens/EmailListScreen.tsx:224-238`, default `disableThreading: false` at `src/stores/settings-store.ts:266`), the row opens `EmailThreadScreen` with a single `emailId` (`App.tsx:145-151`), and the screen only ever shows that one message (`src/screens/EmailThreadScreen.tsx:113-120`, `685-840`). `getThread` exists in `src/api/email.ts:448` but is only used by a test. Older messages of a thread cannot be opened at all unless the user turns on "Disable Thread Grouping".
   - Fix hint: on open, call `getThread(threadId, ownerAccountId)` + `getFullEmails(ids)` and render a vertical list of collapsible message cards inside the pane (newest + unread expanded), reusing `EmailBodyView` per card; keep the horizontal pager for thread-to-thread navigation.
 
-- [ ] **Pager shows the wrong message (or nothing) when the opened email is not in the store list** — `P1` — `rn-only-bug`
+- [x] **Pager shows the wrong message (or nothing) when the opened email is not in the store list — fixed in c8be383** — `P1` — `rn-only-bug`
   - What WEB does: the viewer renders `selectedEmail` directly; prev/next are derived from the current list (`components/email/email-viewer.tsx:5220-5279`).
   - What RN does: the pager is a `FlatList` over `useEmailStore(s => s.emails)` and the initial index is `Math.max(0, emails.findIndex(id))` (`src/screens/EmailThreadScreen.tsx:128-133`, `535-572`). `UnifiedInboxScreen` keeps its own local list and never writes the store (`src/screens/UnifiedInboxScreen.tsx:35-50`, `61-84`), `ContactActivity` navigates with ids from a contact search (`src/components/contacts/ContactActivity.tsx:170-177`). In both cases the opened id is absent from `emails`, so the visible pane is `emails[0]` (a different mailbox's first message, or blank when the list is empty) while the toolbar/mark-read/delete act on `activeEmailId`.
   - Fix hint: when `route.params.emailId` is not in `emails`, render a single-item pager (`data=[{id: emailId}]`) and disable prev/next; or have the unified inbox / contact activity pass their own id list through route params.
@@ -26,12 +26,12 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
 
 ### Body rendering & sanitisation
 
-- [ ] **HTML-only messages are rendered (and quoted) as raw HTML source — native issue #46 "email preview shows css"** — `P1` — `bug`
+- [x] **HTML-only messages are rendered (and quoted) as raw HTML source — native issue #46 "email preview shows css" — fixed in 06742ef** — `P1` — `bug`
   - What WEB does: per RFC 8621 §4.1.4 an HTML-only message exposes the same part in `textBody` and `htmlBody`; WEB checks `hasDistinctTextBody` (different partIds) before preferring the text alternative, and routes by the part's `type` (`components/email/email-viewer.tsx:1727-1747`, `components/email/thread-conversation-view.tsx:332-346`; changelog 1.6.3 "Render HTML-only emails", "Render plain-text-only emails as text, not HTML").
   - What RN does: `extractTextBody` returns the html part's value for HTML-only mail, then `rawHtml = html && (!text || hasMeaningfulHtmlBody(html)) ? html : null` (`src/components/EmailBodyView.tsx:43-57`, `504-511`). For any HTML-only message whose markup fails `MEANINGFUL_HTML_RE` (`src/lib/email-html.ts:353-362`, e.g. a `<div>`/`<p>` body without `style=`), `rawHtml` is null and the raw source — tags, `<head>`, CSS — is shown as plain text. The same value feeds the reply quote: `plainTextBody()` (`src/screens/EmailThreadScreen.tsx:59-65`, `377`) so replies to HTML-only mail quote escaped HTML source.
   - Fix hint: compare `textBody[0].partId !== htmlBody[0].partId` (and `part.type === 'text/html'`) before treating `text` as an alternative; in `navigateCompose` pass `htmlBody` (and let `buildInitialHtml` use it) or convert with `htmlToPlainText` (`src/lib/compose-html.ts:108`) when the only body is HTML.
 
-- [ ] **`<style>` blocks are stripped from every HTML email — layout/colour loss, likely native issue #49 "Unreadable text in dark-mode emails"** — `P2` — `bugfix-parity`
+- [x] **`<style>` blocks are stripped from every HTML email — layout/colour loss, likely native issue #49 "Unreadable text in dark-mode emails" — fixed in 06742ef** — `P2` — `bugfix-parity`
   - What WEB does: iframe sanitiser keeps `<style>` (`lib/email-sanitization.ts:60-78`), and when external content is blocked it neutralises `url()`/`@import`/`@font-face` inside the sheet (`stripExternalStyleSheetCss`, `lib/email-sanitization.ts:474-509`, changelog 1.7.8 #457) while the strict iframe CSP is the network backstop (`components/email/email-viewer.tsx:2265-2267`).
   - What RN does: `FORBID_TAGS` includes `'style'` (and `svg`) so every stylesheet is removed before render (`src/lib/email-html.ts:16-28`, `50-68`). Class-based colours vanish: a newsletter with white text via `.hero { color:#fff }` on a `bgcolor` cell renders white-on-white (light) or, after the invert filter, black-on-black. Also `hasNativeDarkMode` is evaluated on the *stripped* HTML inside `wrapEmailHtml` (`src/lib/email-html.ts:226-229`) but on the raw HTML in the component (`src/components/EmailBodyView.tsx:612-613`), so for emails with `@media (prefers-color-scheme: dark)` the CSS inversion is applied but the DOM re-invert pass is skipped.
   - Fix hint: keep `<style>` (the WebView is an isolated document; CSP already has `style-src 'unsafe-inline'`), port `stripExternalStyleSheetCss` + `decodeCssEscapes` for the blocked case, and evaluate `hasNativeDarkMode` once on the same input.
@@ -41,50 +41,50 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
   - What RN does: `DARK_INVERSION` applies the `:not(:has(...))` guard to background-image containers too and includes them in the nested `filter:none` rule (`src/lib/email-html.ts:167-185`), the DOM pass only re-inverts containers without media children (`src/components/EmailBodyView.tsx:72-88`); no Word/Outlook padding, no per-message light/dark toggle (WEB toolbar Sun/Moon, `email-viewer.tsx:3199-3212`, changelog 1.6.0), no `messageSpacing`.
   - Fix hint: copy the current `darkModeCSS` block and the DOM re-invert loop verbatim into `email-html.ts` / `DARK_REINVERT_SCRIPT`; add a "View in light/dark mode" entry to the More sheet that overrides `renderAsDark` for the current message.
 
-- [ ] **External-content detection misses most tracking vectors (privacy leak)** — `P2` — `bugfix-parity`
+- [x] **External-content detection misses most tracking vectors (privacy leak) — fixed in 06742ef** — `P2` — `bugfix-parity`
   - What WEB does: `isExternalResourceUrl` strips C0/space so `"\nhttps://x"` and `h\ttps://` count; blocks `<img srcset>`, `<picture><source>`, `<video poster>`, media `src`, `background=`, inline `url()` incl. CSS escapes, `<style>` url()/@import, and forbids `<link>` in blocking mode; the banner is driven by "something was actually blocked" (`lib/email-sanitization.ts:399-406`, `511-615`, `108-150`; changelog 1.7.8).
   - What RN does: `hasRemoteContent` only matches `<img src="http…">`, `background="http…"` and `style="...url(http…)"` (`src/lib/email-html.ts:364-369`); when it returns false `shouldBlock` is false and the CSP becomes `img-src data: cid: https: http:` (`src/lib/email-html.ts:235`), so a pixel expressed as `srcset=`, `<source>`, `poster=`, `src=" https://…"` (leading whitespace/newline), or a CSS-escaped `\68ttps://` loads unconditionally under policy `ask`/`block`. `blockRemoteImageSrcs` (`316-347`) is likewise src/srcset/background/style only, and has no `data-blocked-*` restore.
   - Fix hint: make the gate policy-driven rather than detection-driven (block = strict CSP `img-src data: cid:` + `media-src`/`font-src` none whenever policy is `block`/`ask`-not-allowed and sender untrusted, like WEB's `externalBlocked`), port `isExternalResourceUrl` normalisation, add `source/video/audio/poster/link` handling, and show the banner when the strict CSP is in effect and the HTML contains any `http(s)://` resource reference.
 
-- [ ] **Blocked images leave broken-image icons / alt text; empty containers not collapsed** — `P3` — `bugfix-parity`
+- [x] **Blocked images leave broken-image icons / alt text; empty containers not collapsed — fixed in 06742ef** — `P3` — `bugfix-parity`
   - What WEB does: swaps `src` for a transparent 1x1 GIF, empties `alt`, `display:none`, and collapses empty `<td>/<div>` wrappers (`lib/email-sanitization.ts:319-320`, `537-546`, `678-704`); hides images that fail to load (`components/email/email-viewer.tsx:2393-2411`, changelog 1.7.7).
   - What RN does: sets `src=""` and `alt="[remote image blocked]"` (`src/lib/email-html.ts:319-323`), so blocked newsletters show rows of broken-image glyphs with English alt text; no failed-image hiding.
   - Fix hint: use the same transparent-GIF + `display:none` swap and port `collapseBlockedImageContainers` as a regex/DOM pass in the injected script; add an `img` `error` listener that hides the element.
 
-- [ ] **mailto: links inside the body open the OS mail handler instead of the app composer** — `P2` — `missing`
+- [x] **mailto: links inside the body open the OS mail handler instead of the app composer — fixed in 06742ef** — `P2` — `missing`
   - What WEB does: `mailto:` opens the built-in composer with parsed to/subject/body (changelog 1.8.1 "Open mailto: links in the built-in composer"; iframe click handler leaves `mailto:` to the app's protocol handling, `components/email/email-viewer.tsx:2420-2436`).
   - What RN does: `onShouldStartLoadWithRequest` hands `mailto:` to `Linking.openURL` (`src/components/EmailBodyView.tsx:715-724`), so tapping an address in an email opens Gmail/Apple Mail instead of Bulwark.
   - Fix hint: parse `mailto:` (address, `subject`, `body`, `cc`) and `navigation.navigate('Compose', { prefillTo, ... })`; the `prefillTo` param already exists (`src/screens/ComposeScreen.tsx:292-298`).
 
-- [ ] **`data:` URL navigations replace the email body** — `P3` — `rn-only-bug`
+- [x] **`data:` URL navigations replace the email body — fixed in 06742ef** — `P3` — `rn-only-bug`
   - What RN does: `onShouldStartLoadWithRequest` returns `true` for any `data:` URL (`src/components/EmailBodyView.tsx:717-719`), and `safeUri` keeps `href="data:image/…"` (`src/lib/email-html.ts:109-113`); tapping such a link navigates the WebView to the image with no way back. Only the initial `about:blank` load should be allowed.
   - Fix hint: allow `data:` only when `request.navigationType === 'other' && !request.isTopFrame`-style initial loads, otherwise return false (optionally open images externally).
 
-- [ ] **Regex sanitiser + `script-src 'unsafe-inline'`: keep the data-URI/SVG allowlist in sync with WEB** — `P3` — `partial`
+- [x] **Regex sanitiser + `script-src 'unsafe-inline'`: keep the data-URI/SVG allowlist in sync with WEB — fixed in 06742ef** — `P3` — `partial`
   - What WEB does: allows only raster `data:image/(png|jpe?g|gif|webp|bmp|avif|x-icon|vnd.microsoft.icon)` on media tags, re-checks `srcset` candidates individually, forbids SVG data URIs and `<svg>` (`lib/email-sanitization.ts:24`, `330-388`), and the iframe has no scripting at all.
   - What RN does: `safeUri` allows any `data:image/*` including `image/svg+xml` (`src/lib/email-html.ts:109-113`), `srcset` values are never scheme-checked except when blocking (`326-329`), and the page CSP must allow `'unsafe-inline'` scripts for the injected bridge (`236-245`), so a parser-differential bypass of the regex stripper would execute script in the WebView (limited blast radius: the bridge only accepts height/swipe/zoom strings).
   - Fix hint: restrict `data:` to the raster list, scheme-check every `srcset` candidate, and consider parsing with a real HTML parser (e.g. `htmlparser2`/`parse5` on the JS side) instead of regexes; document the residual risk.
 
-- [ ] **Quoted reply text is not collapsed (#480)** — `P3` — `missing`
+- [x] **Quoted reply text is not collapsed (#480) — fixed in 06742ef** — `P3` — `missing`
   - What WEB does: hides the trailing quote (Gmail/Outlook/Apple/Thunderbird/Bulwark markers, attributed `<blockquote>`, `>`-lines in plain text) behind a "•••" toggle (`lib/quote-collapse.ts:143-197`, `219-259`; changelog 1.7.8).
   - What RN does: nothing; long threads show every quoted original inline.
   - Fix hint: port `setupQuoteCollapse` into the injected WebView script (runs on the parsed DOM, uses inline styles only) and `collapsePlainTextQuotes` into `wrapPlainTextEmail`.
 
-- [ ] **Plain-text bodies are always monospace (#830)** — `P3` — `bugfix-parity`
+- [x] **Plain-text bodies are always monospace (#830) — fixed in 06742ef** — `P3` — `bugfix-parity`
   - What WEB does: renders text/plain in the app font by default with a `plainTextFont: 'sans' | 'mono'` setting (`stores/settings-store.ts:329`, `565`; `components/email/email-viewer.tsx:5050-5060`; changelog 1.9.0).
   - What RN does: `wrapPlainTextEmail` hard-codes `ui-monospace, Menlo, …` (`src/lib/email-html.ts:290`); no setting (`src/stores/settings-store.ts` has no `plainTextFont`).
   - Fix hint: add the setting (Reading settings) and switch the font-family in `wrapPlainTextEmail`.
 
 - [ ] **Plain-text linkifier only catches http(s)** — `P3` — `verified` (same as WEB `plainTextToSafeHtml`); no action.
 
-- [ ] **cid images larger than 2 MB and non-image cid parts silently show a 1x1 placeholder; octet-stream cid parts (#543) unverified** — `P3` — `partial`
+- [x] **cid images larger than 2 MB and non-image cid parts silently show a 1x1 placeholder; octet-stream cid parts (#543) unverified — fixed in 06742ef** — `P3` — `partial`
   - What WEB does: fetches every cid part as an authenticated `blob:` URL regardless of size/type; the browser sniffs `application/octet-stream` image bytes (`components/email/email-viewer.tsx:1509-1575`; changelog 1.8.1 #543).
   - What RN does: skips parts over `MAX_INLINE_IMAGE_BYTES` (`src/components/EmailBodyView.tsx:15`, `556-559`) and builds `data:${att.type || 'application/octet-stream'};base64,…` (`573`), which Chromium/WebKit may refuse to decode as an image for `application/octet-stream`.
   - Fix hint: sniff magic bytes (PNG/JPEG/GIF/WebP) to pick the MIME for the data URI; for >2 MB parts encode off the JS thread (e.g. `File.base64()` from expo-file-system after `downloadInto`) instead of dropping them.
 
 ### Header / meta
 
-- [ ] **`headers`, `messageId`, `inReplyTo`, `references` are never fetched** — `P2` — `missing` (root cause for the next five items)
+- [x] **`headers`, `messageId`, `inReplyTo`, `references` are never fetched — fixed in ccbe67c** — `P2` — `missing` (root cause for the next five items)
   - What WEB does: `Email/get` requests `messageId, inReplyTo, references, headers, bodyStructure` and parses `Authentication-Results`, `X-Spam-*`, `X-Spam-LLM` into `email.authenticationResults/spamScore/spamLLM` (`lib/jmap/client.ts:1775-1870`).
   - What RN does: `EMAIL_FULL_PROPERTIES` stops at `bodyStructure, textBody, htmlBody, bodyValues, attachments, blobId, bcc, replyTo, sentAt` (`src/api/email.ts:11-15`); the `Email` type has no `headers`/`messageId` (`src/api/types.ts:65-87`).
   - Fix hint: add the four properties to `EMAIL_FULL_PROPERTIES`, extend the type, and port `parseAuthenticationResults`/`parseSpamScore`/`extractListHeaders` (`lib/email-headers.ts`) to `src/lib/email-headers.ts`.
@@ -109,7 +109,7 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
   - What RN does: none; no `readReceiptResponse` setting.
   - Fix hint: port `lib/mdn.ts` verbatim (pure string builder), reuse `uploadBytes` (`src/api/blob.ts:67`) + `importEmailBlob` (`src/api/email.ts:423`) + an `EmailSubmission/set` helper; add the setting.
 
-- [ ] **Reply-To shown / used** — folded into the reply-recipients finding below.
+- [x] **Reply-To shown / used — fixed in 7f956d6** — folded into the reply-recipients finding below.
 
 - [ ] **Sender / recipient tap actions (popover, view/add contact, copy address)** — `P3` — `missing`
   - What WEB does: every address is a `RecipientPopover` (contact lookup, extra emails/phones, copy, email, view/add contact); tapping the avatar opens the contact sidebar or, on mobile, the contact page (`components/email/recipient-popover.tsx`, `components/email/email-viewer.tsx:1140-1170`, `3841-3866`).
@@ -128,7 +128,7 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
 
 ### Calendar invitation banner
 
-- [ ] **Invitation parsing is not routed to the owning account (#847, #867)** — `P2` — `bugfix-parity`
+- [x] **Invitation parsing is not routed to the owning account (#847, #867) — fixed in 8206893** — `P2` — `bugfix-parity`
   - What WEB does: parses/fetches the ICS through the message's source client and owner account, including directly viewed shared folders (`components/email/calendar-invitation-banner.tsx:373-388`, `412-432`; changelog 1.9.0).
   - What RN does: `parseCalendarBlob(attachment.blobId)` uses `jmapClient.accountId` (`src/components/email/CalendarInvitationBanner.tsx:54`, `src/api/calendar.ts:355-360`) even though `EmailPane` knows `jmapAccountId`; Stalwart answers `CalendarEvent/parse` with an error for a blob in another account, so invitations in group/shared mailboxes show nothing (state `error` → banner hidden).
   - Fix hint: pass `jmapAccountId` from `EmailPane` into the banner and through to `parseCalendarBlob(blobId, accountId)`.
@@ -150,7 +150,7 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
 
 ### Attachments
 
-- [ ] **Forwarding drops every attachment** — `P1` — `bug`
+- [x] **Forwarding drops every attachment — fixed in 7f956d6** — `P1` — `bug`
   - What WEB does: forward pre-populates the composer with the original's attachments by blobId (minus embedded cid images) (`components/email/email-composer.tsx:598-616`, #543).
   - What RN does: `navigateCompose('forward')` passes only from/to/cc/subject/plain body (`src/screens/EmailThreadScreen.tsx:366-382`); the `Compose.replyTo` param has no `attachments` field (`src/navigation/types.ts:7-19`) and `ComposeScreen` never seeds `attachments` from the original (`src/screens/ComposeScreen.tsx:354`). A forwarded invoice arrives without the PDF.
   - Fix hint: add `attachments?: Attachment[]` to the route param, and in `ComposeScreen` initialise `attachments` with `{blobId,name,type,size}` entries (blobs are account-scoped so no re-upload is needed; for shared-folder messages the blob belongs to the owner account — either re-upload via `getDownloadUrl(..., ownerAccountId)` + `uploadBytes`, or block forward there).
@@ -187,17 +187,17 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
 
 ### Actions from the viewer
 
-- [ ] **`In-Reply-To`/`References` are written with the JMAP email id (#234 bugfix-parity)** — `P1` — `bug`
+- [x] **`In-Reply-To`/`References` are written with the JMAP email id (#234 bugfix-parity) — fixed in 7f956d6** — `P1` — `bug`
   - What WEB does: passes the original's RFC `messageId` and `references`, stripped of brackets, as JMAP `inReplyTo`/`references` arrays (`lib/jmap/client.ts:3124-3194`; changelog 1.5.4 #234).
   - What RN does: `navigateCompose` sets `inReplyTo: email.id` (`src/screens/EmailThreadScreen.tsx:379`), and `sendEmail` writes it verbatim into `header:In-Reply-To:asText` / `header:References:asText` (`src/api/email.ts:823-826`). The outgoing header is a bare Stalwart object id, not a msg-id, so recipients' clients cannot thread the reply and `References` is never accumulated. `messageId`/`references` are not even fetched (see headers finding).
   - Fix hint: fetch `messageId`/`references`, pass `inReplyTo: email.messageId?.[0]` and `references: [...(email.references ?? []), email.messageId[0]]`, and send them as JMAP `inReplyTo`/`references` arrays (or `<…>`-wrapped `header:…:asMessageIds`).
 
-- [ ] **Reply addressing: Reply-To ignored, own addresses kept on reply-all, self-sent thread replies (#703), external Reply-To on self-sent (1.9.0)** — `P1` — `bugfix-parity`
+- [x] **Reply addressing: Reply-To ignored, own addresses kept on reply-all, self-sent thread replies (#703), external Reply-To on self-sent (1.9.0) — fixed in 7f956d6** — `P1` — `bugfix-parity`
   - What WEB does: `buildReplyRecipients` — reply goes to `Reply-To` if present else `From`; reply-all adds original To/CC minus the user's own identities (exact and `+tag`-stripped); replying to your own message continues to its original recipients; an external Reply-To on a self-sent message still wins (`lib/reply-recipients.ts:74-111`, `components/mail/mail-app.tsx:920`, `2940-2944`).
   - What RN does: `initialTo` = From (+ all original To on reply-all, including the user's own address), `initialCc` = all CC; `email.replyTo` is fetched but never passed (`src/screens/ComposeScreen.tsx:299-319`, `src/screens/EmailThreadScreen.tsx:366-382`). Replying to a newsletter with `Reply-To: support@…` mails the no-reply sender; reply-all sends the user a copy; replying to your own sent message addresses yourself.
   - Fix hint: copy `lib/reply-recipients.ts` (pure), pass `replyToAddresses: email.replyTo` in the route param and the identities' emails as `ownEmails`.
 
-- [ ] **Reply/forward quote is plain text only — HTML formatting and inline images lost (#163, #543)** — `P2` — `bugfix-parity`
+- [x] **Reply/forward quote is plain text only — HTML formatting and inline images lost (#163, #543) — fixed in 7f956d6** — `P2` — `bugfix-parity`
   - What WEB does: quotes the sanitized HTML body (with cid images re-attached inline) inside an editable quote island, localized "On … wrote:" header with `Name <email>` (`components/email/email-composer.tsx:462-500`, `lib/quote-header.ts:54-91`; changelog 1.7.1, 1.7.3, 1.8.1).
   - What RN does: `buildInitialHtml` supports `htmlBody` (`src/lib/compose-html.ts:79-83`) but the viewer only passes `body: plainTextBody(email)` (`src/screens/EmailThreadScreen.tsx:377`), and the header uses display name only (`compose-html.ts:31-35`) rather than WEB's `Name <email>` (#482).
   - Fix hint: pass `htmlBody` (sanitized via `stripDangerousTags`, cid refs rewritten to fetched data URIs or re-attached with the same `cid`) and switch `senderName` to the `Name <email>` form.
@@ -207,7 +207,7 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
   - What RN does: none.
   - Fix hint: add a More-sheet entry that opens `Compose` with `attachments: [{blobId: email.blobId, name, type: 'message/rfc822', size: email.size}]` (depends on the forward-attachments fix).
 
-- [ ] **Reply identity selection: exact match only, no `+tag` or catch-all domain override (#246)** — `P3` — `partial`
+- [x] **Reply identity selection: exact match only, no `+tag` or catch-all domain override (#246) — fixed in 5b72c4d** — `P3` — `partial`
   - What WEB does: `resolveReplyFrom` — exact, then `+tag`-stripped, then same-domain catch-all with a From override (`lib/reply-identity.ts:197-256`).
   - What RN does: `identities.find(i => i.email === candidate.email)` (`src/screens/ComposeScreen.tsx:431-437`).
   - Fix hint: port `resolveReplyFrom`; the override needs a From override in `sendEmail`.
@@ -229,7 +229,7 @@ RN has a solid single-message reader (WebView body with CSP, shrink-to-fit + pin
 
 ### Trusted senders / settings
 
-- [ ] **"Trust sender" writes to the Trusted Senders address book even when the setting is off** — `P3` — `rn-only-bug`
+- [x] **"Trust sender" writes to the Trusted Senders address book even when the setting is off — fixed in 06742ef** — `P3` — `rn-only-bug`
   - What WEB does: writes to the book only when `trustedSendersAddressBook` is on, else to the local list (`components/email/email-viewer.tsx:4646-4655`, `components/trusted-senders-modal.tsx:136-140`).
   - What RN does: always does both (`src/components/EmailBodyView.tsx:644-653`), and `addToTrustedSendersBook` creates the book on first add (`src/stores/contacts-store.ts:308-321`), so a user who left the setting off (default `false`, `src/stores/settings-store.ts:239`) still gets a server-side "Trusted Senders" address book; the settings modal then lists only the local entries (`src/components/settings/ContentSendersSettings.tsx:19-21`, `123-144`), so book-trusted senders are invisible/unremovable there.
   - Fix hint: gate the book write on the setting (or, matching WEB 1.9.0, default the setting to on for contacts-capable accounts) and show `trustedSenderEmails` in the settings modal with remove support.

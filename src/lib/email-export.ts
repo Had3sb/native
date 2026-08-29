@@ -270,9 +270,30 @@ export async function downloadAttachment(
   });
 }
 
-/** Share an already-materialised local file (zip bundles, extracted parts). */
-export async function shareLocalFile(file: File, mimeType: string, dialogTitle?: string): Promise<void> {
-  if (Platform.OS === 'android' && (await openWithViewer(file, mimeType))) return;
+/** Write bytes into the exports cache (caller shares / previews / cleans up). */
+export function writeTempFile(bytes: Uint8Array, filename: string, mimeType?: string): File {
+  void sweepStaleExportFiles();
+  const dir = exportsDir();
+  ensureDir(dir);
+  const file = new File(dir, safeAttachmentName(filename, mimeType));
+  if (file.exists) file.delete();
+  file.create();
+  file.write(bytes);
+  return file;
+}
+
+/**
+ * Share an already-materialised local file (zip bundles, extracted parts).
+ * `forceSheet` skips the Android viewer handoff and always shows the share
+ * sheet - the explicit "Share" action, as opposed to "Open".
+ */
+export async function shareLocalFile(
+  file: File,
+  mimeType: string,
+  dialogTitle?: string,
+  opts: { forceSheet?: boolean } = {},
+): Promise<void> {
+  if (!opts.forceSheet && Platform.OS === 'android' && (await openWithViewer(file, mimeType))) return;
   if (!(await Sharing.isAvailableAsync())) {
     throw new Error('Sharing is not available on this device');
   }
@@ -284,15 +305,30 @@ export async function shareLocalFile(file: File, mimeType: string, dialogTitle?:
 }
 
 /** Write bytes to the exports cache and hand them to a viewer / the share sheet. */
-export async function shareBytes(bytes: Uint8Array, filename: string, mimeType: string): Promise<void> {
-  void sweepStaleExportFiles();
-  const dir = exportsDir();
-  ensureDir(dir);
-  const file = new File(dir, safeAttachmentName(filename, mimeType));
-  if (file.exists) file.delete();
-  file.create();
-  file.write(bytes);
-  await shareLocalFile(file, mimeType, filename);
+export async function shareBytes(
+  bytes: Uint8Array,
+  filename: string,
+  mimeType: string,
+  opts: { forceSheet?: boolean } = {},
+): Promise<void> {
+  const file = writeTempFile(bytes, filename, mimeType);
+  await shareLocalFile(file, mimeType, filename, opts);
+}
+
+/** Share a blob through the share sheet only (no viewer handoff). */
+export async function shareAttachmentViaSheet(
+  blobId: string,
+  name: string | undefined,
+  type: string | undefined,
+  email?: Email | null,
+  accountId?: string,
+): Promise<void> {
+  const filename = email
+    ? attachmentDownloadFilename(email, { name, type }, attachmentFileOptions())
+    : safeAttachmentName(name, type);
+  const mimeType = type || 'application/octet-stream';
+  const downloaded = await cacheBlobFile(blobId, filename, mimeType, accountId);
+  await shareLocalFile(downloaded, mimeType, filename, { forceSheet: true });
 }
 
 async function authedBlobFetch(url: string): Promise<Response> {
@@ -323,7 +359,7 @@ export async function fetchBlobBytes(
   return new Uint8Array(await r.arrayBuffer());
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
+export function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
