@@ -176,7 +176,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: `getEmailChanges` returns `hasMoreChanges` (`src/api/email.ts:355-376`) but `refreshEmails` uses `updated`/`destroyed` once (`src/stores/email-store.ts:836-846`); after a long offline gap the truncated lists leave stale keywords on some rows until the snapshot is invalidated. (The mailbox path does drain, `email-store.ts:575-579`, `601`.)
   - Fix hint: loop while `hasMoreChanges`, or drop the snapshot and fall back to the full re-query when it is set.
 
-- [ ] **Offline cache + outbox land in Android auto-backup** — `P2` — `missing` (security)
+- [x] **Offline cache + outbox land in Android auto-backup** — `P2` — `missing` (security) — fixed in 7f9f5af
   - What WEB does: N/A (no persistent mail cache).
   - What RN does: `android:allowBackup="true"` with `@xml/secure_store_backup_rules` from the expo-secure-store plugin, which only excludes SecureStore's own prefs (`android/app/src/main/AndroidManifest.xml:16`); the AsyncStorage SQLite DB (full cached bodies `webmail:offline-cache:entry:v2:*`, outbox, settings, account registry) is backed up to the user's Google account.
   - Fix hint: add an app-owned `fullBackupContent`/`dataExtractionRules` excluding `databases/RKStorage` (AsyncStorage) or set `allowBackup=false` via an Expo config plugin.
