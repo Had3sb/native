@@ -14,6 +14,18 @@ const git = (...args) =>
 const gitInherit = (...args) =>
   execFileSync('git', args, { cwd: root, stdio: 'inherit' });
 
+// Pre-flight: the release is created with the GitHub CLI as the last step.
+// Check it is installed and logged in BEFORE anything is committed, tagged or
+// pushed - otherwise a missing login leaves a pushed tag with no release (and
+// no release workflow run), which is exactly what a re-run cannot repair.
+try {
+  execFileSync('gh', ['auth', 'status'], { cwd: root, stdio: 'ignore' });
+} catch {
+  console.error('GitHub CLI is not available or not logged in.');
+  console.error('Run `gh auth login` (or set GH_TOKEN), then re-run `npm run bump`.');
+  process.exit(1);
+}
+
 const dirty = git('status', '--porcelain');
 if (dirty) {
   console.error('Working tree is not clean. Commit or stash changes before bumping.');
@@ -54,10 +66,16 @@ gitInherit('commit', '-m', `chore: update version number to ${next}`);
 gitInherit('tag', '-a', next, '-m', next);
 gitInherit('push', '--follow-tags');
 
-execFileSync(
-  'gh',
-  ['release', 'create', next, '--title', next, '--generate-notes'],
-  { cwd: root, stdio: 'inherit' },
-);
+try {
+  execFileSync(
+    'gh',
+    ['release', 'create', next, '--title', next, '--generate-notes'],
+    { cwd: root, stdio: 'inherit' },
+  );
+} catch {
+  console.error(`The tag ${next} is pushed but the GitHub release could not be created.`);
+  console.error(`Fix the GitHub CLI login and run: gh release create ${next} --title ${next} --generate-notes`);
+  process.exit(1);
+}
 
 console.log(`Released ${next}`);
