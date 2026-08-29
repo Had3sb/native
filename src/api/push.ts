@@ -117,123 +117,40 @@ export async function destroyPushSubscription(id: string): Promise<void> {
   );
 }
 
-/**
- * Connect to the JMAP EventSource (SSE) endpoint for real-time push updates.
- * Returns a cleanup function to close the connection.
- */
-export function connectEventSource(
-  onStateChange: StateChangeHandler,
-): (() => void) | null {
-  const session = jmapClient.currentSession;
-  if (!session?.eventSourceUrl) return null;
+// ─── Live updates ────────────────────────────────────────
+// The EventSource lifecycle (reconnect with back-off, fresh bearer on every
+// connect, ping watchdog, polling fallback) lives in ./push-stream. These
+// re-exports keep the historical entry points.
 
-  const url = session.eventSourceUrl
-    .replace('{types}', '*')
-    .replace('{closeafter}', 'no')
-    .replace('{ping}', '30');
-
-  // Use native EventSource or react-native-sse
-  const EventSourceImpl = typeof EventSource !== 'undefined'
-    ? EventSource
-    : require('react-native-sse').default;
-
-  const es = new EventSourceImpl(url, {
-    headers: { Authorization: jmapClient.authHeader },
-  });
-
-  const handler = (event: any) => {
-    try {
-      const data: StateChange = JSON.parse(
-        typeof event === 'string' ? event : event.data,
-      );
-      onStateChange(data);
-    } catch {
-      // Ignore malformed events
-    }
-  };
-
-  es.addEventListener('state', handler);
-
-  return () => {
-    es.removeEventListener('state', handler);
-    es.close();
-  };
-}
-
-/**
- * Polling fallback when SSE is not available.
- * Returns a cleanup function to stop polling.
- */
-export function startPolling(
-  onStateChange: StateChangeHandler,
-  interval = 5000,
-): () => void {
-  const accountId = jmapClient.accountId;
-  const stateCache: Record<string, string> = {};
-
-  const timer = setInterval(async () => {
-    try {
-      const res = await jmapClient.request(
-        [
-          ['Mailbox/get', { accountId, ids: [] }, 'm'],
-          ['Email/get', { accountId, ids: [] }, 'e'],
-        ],
-        [CAPABILITIES.CORE, CAPABILITIES.MAIL],
-      );
-
-      const changed: Record<string, string> = {};
-      for (const [method, result] of res.methodResponses) {
-        const type = method.replace('/get', '');
-        const newState = result.state;
-        if (newState && stateCache[type] && stateCache[type] !== newState) {
-          changed[type] = newState;
-        }
-        if (newState) stateCache[type] = newState;
-      }
-
-      if (Object.keys(changed).length > 0) {
-        onStateChange({
-          '@type': 'StateChange',
-          changed: { [accountId]: changed },
-        });
-      }
-    } catch {
-      // Silently retry on next interval
-    }
-  }, interval);
-
-  return () => clearInterval(timer);
-}
+export {
+  startLiveUpdates,
+  startPolling,
+  type LiveUpdatesHandle,
+  type LiveUpdatesOptions,
+} from './push-stream';
 
 export interface StartPushOptions {
   onStateChange: StateChangeHandler;
   onError?: (error: Error) => void;
+  onFallback?: (reason: string) => void;
+  isActive?: () => boolean;
 }
 
 /**
- * Start real-time updates, preferring SSE with polling fallback. The `_client`
- * argument is unused today (the underlying event source uses the singleton
- * `jmapClient`) but is part of the call signature so the host App can pass
- * the active client reference and trigger React re-runs on account switch.
+ * Start real-time updates, preferring SSE with polling fallback. Resolves to
+ * a cleanup function; prefer `startLiveUpdates` when the handle's
+ * `reconnect()` is needed (foreground resume).
  */
-export function startPushUpdates(
+export async function startPushUpdates(
   _client: unknown,
   opts: StartPushOptions,
-): () => void {
-  const onError = opts.onError;
-  const safeOnStateChange: StateChangeHandler = (change) => {
-    try {
-      opts.onStateChange(change);
-    } catch (err) {
-      if (onError) onError(err instanceof Error ? err : new Error(String(err)));
-    }
-  };
+): Promise<() => void> {
+  const { startLiveUpdates: start } = await import('./push-stream');
   try {
-    const cleanup = connectEventSource(safeOnStateChange);
-    if (cleanup) return cleanup;
-    return startPolling(safeOnStateChange);
+    const handle = await start(opts);
+    return () => handle.close();
   } catch (err) {
-    if (onError) onError(err instanceof Error ? err : new Error(String(err)));
+    opts.onError?.(err instanceof Error ? err : new Error(String(err)));
     return () => undefined;
   }
 }

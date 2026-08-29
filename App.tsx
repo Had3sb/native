@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
@@ -7,7 +7,9 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Mail, Calendar, BookUser, HardDrive, Settings } from 'lucide-react-native';
 
-import { startPushUpdates } from './src/api/push';
+import { startLiveUpdates, type LiveUpdatesHandle } from './src/api/push-stream';
+import { jmapClient } from './src/api/jmap-client';
+import type { StateChange } from './src/api/types';
 import {
   addMessageListener,
   addNotificationTapListener,
@@ -388,45 +390,124 @@ export default function App() {
     };
   }, [client, isAuthenticated, emailNotificationsEnabled, activeAccountId]);
 
+  // Live updates (SSE with polling fallback), re-armed on every account
+  // switch and every re-established session — the singleton `client` object
+  // never changes identity, so it cannot be the dependency on its own.
+  // Backgrounding closes the stream (no socket + server pings while the app
+  // is asleep); foregrounding reconnects it and refreshes what the user is
+  // looking at, since events that happened in between are gone for good.
   React.useEffect(() => {
-    if (!isAuthenticated || !client) {
+    if (!isAuthenticated || !client || !haveLiveSession) {
       return;
     }
 
     let mounted = true;
-    let cleanup: (() => void) | null = null;
+    let handle: LiveUpdatesHandle | null = null;
+    let appActive = AppState.currentState !== 'background' && AppState.currentState !== 'inactive';
 
-    void (async () => {
+    const onStateChange = async (change: StateChange) => {
+      await Promise.all([
+        useEmailStore.getState().handleStateChange(change),
+        useContactsStore.getState().handleStateChange(change),
+        useCalendarStore.getState().handleStateChange(change),
+      ]);
+    };
+
+    const start = async () => {
       try {
-        const stopPushUpdates = await startPushUpdates(client, {
-          onStateChange: async (change) => {
-            await Promise.all([
-              useEmailStore.getState().handleStateChange(change),
-              useContactsStore.getState().handleStateChange(change),
-              useCalendarStore.getState().handleStateChange(change),
-            ]);
-          },
-          onError: (error) => {
-            console.warn(error.message);
-          },
+        const next = await startLiveUpdates({
+          onStateChange: (change) => { void onStateChange(change); },
+          onError: (error) => { console.warn('[push]', error.message); },
+          onFallback: (reason) => { console.warn('[push] falling back to polling:', reason); },
+          isActive: () => appActive,
         });
-
         if (!mounted) {
-          stopPushUpdates();
+          next.close();
           return;
         }
-
-        cleanup = stopPushUpdates;
+        handle = next;
       } catch (error) {
         console.warn(error instanceof Error ? error.message : 'Failed to start JMAP push updates');
       }
-    })();
+    };
+
+    const refreshAfterResume = () => {
+      const email = useEmailStore.getState();
+      void email.fetchMailboxes();
+      if (email.currentMailboxId) void email.refreshEmails();
+      void useOutboxStore.getState().flush();
+    };
+
+    void start();
+
+    const subscription = AppState.addEventListener('change', (state) => {
+      const nowActive = state === 'active';
+      if (nowActive === appActive) return;
+      appActive = nowActive;
+      if (!nowActive) {
+        handle?.close();
+        handle = null;
+        return;
+      }
+      // Coming back: verify the session is still alive before trusting the
+      // stream, then reconnect and catch up on what was missed.
+      void (async () => {
+        const alive = await jmapClient.ping().catch(() => false);
+        if (!mounted) return;
+        if (!alive && useNetworkStore.getState().online) {
+          const ok = await useAuthStore.getState().retrySession().catch(() => false);
+          if (!ok || !mounted) return;
+        }
+        if (!handle) await start();
+        else handle.reconnect();
+        refreshAfterResume();
+      })();
+    });
+
+    // Reconnect when the network comes back while foregrounded.
+    const unsubscribeNetwork = useNetworkStore.subscribe((state, prev) => {
+      if (state.online && !prev.online && appActive) {
+        if (handle) handle.reconnect();
+        else void start();
+      }
+    });
 
     return () => {
       mounted = false;
-      cleanup?.();
+      subscription.remove();
+      unsubscribeNetwork();
+      handle?.close();
+      handle = null;
     };
-  }, [client, isAuthenticated]);
+  }, [client, isAuthenticated, haveLiveSession, activeAccountId]);
+
+  // Foreground keep-alive: a `Core/echo` every 30 s tells us when the server
+  // is unreachable even though the device is online (NetInfo cannot), and
+  // drives the per-account connection dot.
+  React.useEffect(() => {
+    if (!isAuthenticated || !haveLiveSession || !activeAccountId) return;
+    let cancelled = false;
+    let failures = 0;
+    const timer = setInterval(() => {
+      if (AppState.currentState !== 'active') return;
+      if (!useNetworkStore.getState().online) return;
+      void jmapClient.ping().then((ok) => {
+        if (cancelled) return;
+        failures = ok ? 0 : failures + 1;
+        const account = useAccountStore.getState().getAccountById(activeAccountId);
+        if (!account) return;
+        // One missed echo can be a blip; two in a row is a lost connection.
+        const connected = failures < 2;
+        if (account.isConnected !== connected) {
+          useAccountStore.getState().updateAccount(activeAccountId, { isConnected: connected });
+        }
+      }).catch(() => undefined);
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isAuthenticated, haveLiveSession, activeAccountId]);
 
   // Skip the "Restoring session" flash for returning users: if we already
   // have a persisted active account, render the main UI immediately with
