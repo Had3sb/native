@@ -27,12 +27,12 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
   - What RN does: `describeLoginError` (`src/lib/login-errors.ts`) has no 402 (MFA), 429 or 5xx branches; `RateLimitError('Rate limited by server')` falls to the generic "Sign-in failed" with the raw message.
   - Fix hint: add branches for `402` → 2FA copy, `429`/`RateLimitError` → "try again in N s", `5xx` → "server error, try later".
 
-- [ ] **Saved-username suggestions on the login form** — `P3` — `missing`
+- [x] **Saved-username suggestions on the login form** — `P3` — `missing` — fixed in 2404717
   - What WEB does: remembers the last 5 usernames and offers them as an autocomplete (`login/page.tsx:500-517`).
   - What RN does: `EmailStep`/`PasswordStep` start empty; in add mode `ChooseStep` only offers the known server, not known usernames.
   - Fix hint: prefill/offer `accounts[].username` from the registry (and remember the last typed address in AsyncStorage) in `EmailStep`.
 
-- [ ] **Login flow strings are hard-coded English** — `P3` — `partial`
+- [x] **Login flow strings are hard-coded English** — `P3` — `partial` — fixed in 2404717
   - What WEB does: every login string is localized (`login.*` keys used throughout `login/page.tsx`).
   - What RN does: `LoginScreen.tsx`, all `src/screens/login/*.tsx`, `QrScanModal.tsx` and `login-errors.ts` use literal English while `SettingsScreen` already uses `useLocaleStore().t` (`src/screens/SettingsScreen.tsx:169-190`).
   - Fix hint: route through `t()` with `login.*` keys (the i18n audit may cover this; listed here so it is not lost).
@@ -42,7 +42,7 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
   - What RN does: hints say "Settings → Devices → Add phone" (`src/components/QrScanModal.tsx:66`) and "Settings → Devices" (`src/screens/LoginScreen.tsx:221`).
   - Fix hint: change the copy to Settings → Security → Link device.
 
-- [ ] **Client TLS certificate support is Android-only and does not cover push/SSE** — `P3` — `partial` (native issue #3)
+- [x] **Client TLS certificate support is Android-only and does not cover push/SSE** — `P3` — `partial` (native issue #3) — fixed in edc26ce (live updates fall back to polling with a cert; redirects handled in JS (6f747db); iOS implementation still deferred)
   - What WEB does: N/A (the browser negotiates mTLS).
   - What RN does: `src/lib/client-cert.ts` bridges an Android `BulwarkClientCert` module and `secureFetch` is used by the JMAP client, blob and discovery code. Gaps: iOS has no implementation (`getNative` returns null off Android, `client-cert.ts:34-45`); the JMAP SSE stream uses `EventSource` with a plain header (`src/api/push.ts:120-137`) so live updates fail behind mTLS; the system browser used for the webmail handoff cannot present the cert; the abort signal does not reach the native path (`server-discovery.ts:103-135` works around it).
   - Fix hint: document the limits in the native issue; route SSE through a native fetch-based reader or the `react-native-sse` fetch option when a cert alias is set; consider an iOS `URLSession` delegate implementation.
