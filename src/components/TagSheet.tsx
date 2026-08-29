@@ -8,6 +8,8 @@ import { spacing, radius, typography, colors as tokenColors, type ThemePalette }
 import { useColors } from '../theme/colors';
 import { useSheetDrag } from '../lib/use-sheet-drag';
 import { keywordToken, type KeywordDef } from '../stores/keywords-store';
+import { useLocaleStore } from '../stores/locale-store';
+import { getEmailTagIds } from '../lib/thread-utils';
 import type { Email } from '../api/types';
 
 interface TagSheetProps {
@@ -23,6 +25,7 @@ interface TagSheetProps {
 export function TagSheet({ visible, onClose, keywords, selectedEmails, onToggle }: TagSheetProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const insets = useSafeAreaInsets();
   const slideY = React.useRef(new Animated.Value(500)).current;
   const overlayOpacity = React.useRef(new Animated.Value(0)).current;
@@ -50,6 +53,17 @@ export function TagSheet({ visible, onClose, keywords, selectedEmails, onToggle 
     [selectedEmails],
   );
 
+  // Tags set on the selection that no local definition explains (set by the
+  // webmail or another device): listed so they can at least be removed.
+  const unknownIds = React.useMemo(() => {
+    const known = new Set(keywords.map((k) => k.id));
+    const out = new Set<string>();
+    for (const e of selectedEmails) {
+      for (const id of getEmailTagIds(e.keywords)) if (!known.has(id)) out.add(id);
+    }
+    return [...out];
+  }, [keywords, selectedEmails]);
+
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
       <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>
@@ -66,15 +80,17 @@ export function TagSheet({ visible, onClose, keywords, selectedEmails, onToggle 
             <View style={styles.handle} />
           </View>
           <View style={styles.header}>
-            <Text style={styles.title}>Tag {selectedEmails.length} selected</Text>
+            <Text style={styles.title}>
+              {t('context_menu.items_selected', `${selectedEmails.length} emails selected`, { count: selectedEmails.length })}
+            </Text>
             <Pressable onPress={onClose} hitSlop={8} style={styles.close}>
               <X size={18} color={c.textSecondary} />
             </Pressable>
           </View>
         </View>
         <ScrollView>
-          {keywords.length === 0 ? (
-            <Text style={styles.empty}>No tags defined. Add tags in Settings.</Text>
+          {keywords.length === 0 && unknownIds.length === 0 ? (
+            <Text style={styles.empty}>{t('email_list.no_tags_defined', 'No tags defined. Add tags in Settings.')}</Text>
           ) : (
             keywords.map((kw) => {
               const token = keywordToken(kw.id);
@@ -93,6 +109,22 @@ export function TagSheet({ visible, onClose, keywords, selectedEmails, onToggle 
               );
             })
           )}
+          {unknownIds.map((id) => {
+            const token = keywordToken(id);
+            const applied = allHaveToken(token);
+            return (
+              <Pressable
+                key={`unknown:${id}`}
+                onPress={() => onToggle(token, !applied)}
+                style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+              >
+                <Tag size={16} color={tokenColors.tags.gray.dot} fill={tokenColors.tags.gray.dot} />
+                <Text style={styles.rowLabel} numberOfLines={1}>{id}</Text>
+                <Text style={styles.rowHint}>{t('email_list.unknown_tag', 'not defined here')}</Text>
+                {applied && <Check size={16} color={c.primary} />}
+              </Pressable>
+            );
+          })}
         </ScrollView>
       </Animated.View>
     </Modal>
@@ -138,5 +170,6 @@ function makeStyles(c: ThemePalette) {
     },
     rowPressed: { backgroundColor: c.surfaceHover },
     rowLabel: { ...typography.body, color: c.text, flex: 1 },
+    rowHint: { ...typography.caption, color: c.textMuted },
   });
 }

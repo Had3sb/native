@@ -11,6 +11,8 @@ import { spacing, radius, typography, type ThemePalette } from '../theme/tokens'
 import { useColors } from '../theme/colors';
 import { buildMailboxTree, flattenVisible, type MailboxNode } from '../lib/mailbox-tree';
 import { useSheetDrag } from '../lib/use-sheet-drag';
+import { useLocaleStore } from '../stores/locale-store';
+import { localizeMailboxName } from '../lib/mailbox-label';
 import type { Mailbox } from '../api/types';
 
 function moveTargetIcon(role: string | null | undefined, name: string): LucideIcon {
@@ -38,6 +40,7 @@ export function MoveSheet({
 }: MoveSheetProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const insets = useSafeAreaInsets();
   const slideY = React.useRef(new Animated.Value(500)).current;
   const overlayOpacity = React.useRef(new Animated.Value(0)).current;
@@ -88,7 +91,7 @@ export function MoveSheet({
             <View style={styles.sheetHandle} />
           </View>
           <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>Move to folder</Text>
+            <Text style={styles.sheetTitle}>{t('context_menu.move_to', 'Move to folder')}</Text>
             <Pressable onPress={onClose} hitSlop={8} style={styles.sheetClose}>
               <X size={18} color={c.textSecondary} />
             </Pressable>
@@ -98,9 +101,11 @@ export function MoveSheet({
           {visibleNodes.map((node) => {
             const Icon = moveTargetIcon(node.role, node.name);
             const isCurrent = node.id === currentMailboxId;
-            // A shared account's header is a grouping row, not a folder.
+            // A shared account's header is a grouping row, not a folder, and
+            // Drafts is never a move target (the webmail excludes it too).
             const canTarget =
-              !node.isAccountNode && node.myRights?.mayAddItems !== false && !isCurrent;
+              !node.isAccountNode && node.myRights?.mayAddItems !== false && !isCurrent
+              && node.role !== 'drafts';
             return (
               <Pressable
                 key={node.id}
@@ -117,7 +122,7 @@ export function MoveSheet({
                   style={[styles.moveRowLabel, !canTarget && styles.moveRowLabelDisabled]}
                   numberOfLines={1}
                 >
-                  {node.name}
+                  {node.isAccountNode ? node.name : localizeMailboxName(node.role, node.name, t)}
                 </Text>
                 {isCurrent && <Check size={14} color={c.textMuted} />}
               </Pressable>

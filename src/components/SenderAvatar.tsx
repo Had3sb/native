@@ -15,13 +15,19 @@ interface SenderAvatarProps {
   email?: string | null;
   size?: number;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Never load a remote image (favicon) — initials only. The list passes this
+   * inside Junk unless `showAvatarsInJunk` is on (webmail 1.5.1), so a spam
+   * sender's domain is not contacted by merely listing the folder.
+   */
+  disableImages?: boolean;
 }
 
 // Mirrors the webmail `Avatar` priority for the subset available on native:
 // company favicon (if sender domain is non-personal and `senderFavicons` is on)
 // → initials over HSL-hashed color.
-export default function SenderAvatar({ name, email, size = 40, style }: SenderAvatarProps) {
-  const senderFavicons = useSettingsStore((s) => s.senderFavicons);
+export default function SenderAvatar({ name, email, size = 40, style, disableImages }: SenderAvatarProps) {
+  const senderFavicons = useSettingsStore((s) => s.senderFavicons) && !disableImages;
   const [imgError, setImgError] = React.useState(false);
 
   React.useEffect(() => {

@@ -7,7 +7,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
 
 ### Folder tree / mailboxes
 
-- [ ] **Folders whose name contains a system folder name disappear (#771)** — `P2` — `bugfix-parity`
+- [x] **Folders whose name contains a system folder name disappear (#771)** — `P2` — `bugfix-parity` — fixed in 516c9c9
   - What WEB does: dedup only drops a root folder whose name is an *exact* (trimmed, case-insensitive) match of a role folder in the same account (`lib/utils.ts:270-333`, comment cites #771; changelog 1.9.0).
   - What RN does: `deduplicate()` in `src/lib/mailbox-tree.ts:49-68` uses `lower.includes(rn) || rn.includes(lower)` — "Old Inbox", "2025 Archive", "Sent to Accounting" vanish from the drawer and the move sheet (also from `findTrashMailbox` etc. only indirectly).
   - Fix hint: replace the substring test with `r.name.trim().toLowerCase() === lower`; keep the nested/parent guards. Add a case to `src/lib/__tests__/mailbox-tree.test.ts`.
@@ -42,7 +42,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: drawer always renders the virtual "Scheduled" quick row (`src/components/SidebarDrawer.tsx:447-453`) and would also list a Stalwart `role: scheduled` mailbox as a plain folder.
   - Fix hint: skip nodes with `role === 'scheduled'` in `buildMailboxTree`/drawer when `jmapClient.hasDelayedSend()`.
 
-- [ ] **Empty folder (Trash/Junk) — with #711 pagination** — `P2` — `missing`
+- [x] **Empty folder (Trash/Junk) — with #711 pagination** — `P2` — `missing` — fixed in PENDING-B
   - What WEB does: "Empty folder" banner/button in Trash & Junk and in the folder context menu (`components/email/email-list.tsx:457-479`, `components/layout/mailbox-context-menu.tsx:213-219`); `client.emptyMailbox` loops `Email/query` + back-referenced `Email/set destroy` in batches of `min(500, maxObjectsInSet)` and never gates on `total` (`lib/jmap/client.ts:2288-2325`, changelog 1.8.1 #711); store zeroes counters (`stores/email-store.ts:3958`).
   - What RN does: nothing — the only way is select-all-on-page + delete, page by page.
   - Fix hint: add `emptyMailbox(mailboxId, accountId?)` to `src/api/email.ts` mirroring the WEB loop (stop when `found.length === 0 || destroyed === 0 || found.length < batch`), a confirm `Alert`, a button in the list header when `currentMailbox.role` is trash/junk, then `refreshEmails()` + `fetchMailboxes()` and `dropFromCache`.
@@ -52,12 +52,12 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: only per-message and batch-on-loaded-page mark read (`EmailListScreen.tsx:456-464`).
   - Fix hint: long-press on a drawer folder row → action sheet (Mark all read / Empty / Rename / Delete / New subfolder); api `markMailboxAsRead(rawId, accountId)` with the paged loop; then `fetchMailboxes()` and, if current, `refreshEmails()`.
 
-- [ ] **Retry button after a failed first load does not retry the mailbox fetch** — `P2` — `rn-only-bug`
+- [x] **Retry button after a failed first load does not retry the mailbox fetch** — `P2` — `rn-only-bug` — fixed in PENDING-B
   - What WEB does: retries mailbox fetch on first login for lazy provisioning (#217) and keeps the tree on later failures (#780).
   - What RN does: when `fetchMailboxes` fails with zero mailboxes it sets `error` (`src/stores/email-store.ts:610-612`); the list shows the error with a "Retry" that calls `refreshEmails()` (`src/screens/EmailListScreen.tsx:812`), which returns immediately because `currentMailboxId` is null (`email-store.ts:773`). The mount effect only re-runs when `mailboxes.length` changes, so the user is stuck until an app restart.
   - Fix hint: Retry should call `fetchMailboxes()` when `mailboxes.length === 0` (then the inbox-select effect kicks in); consider one automatic retry after ~2 s on first login.
 
-- [ ] **No coalescing of concurrent refreshes (maxConcurrentRequests / 429)** — `P3` — `partial`
+- [x] **No coalescing of concurrent refreshes (maxConcurrentRequests / 429)** — `P3` — `partial` — fixed in f07e039
   - What WEB does: `coalesceRefresh` shares an in-flight `fetchMailboxes`/`refreshCurrentMailbox`/tag-count run and queues at most one re-run (`stores/email-store.ts:383-425`, #780).
   - What RN does: every push event awaits `fetchMailboxes()` then `refreshEmails()` (`src/stores/email-store.ts:981-1015`); overlapping pushes, the mount effects (`EmailListScreen.tsx:554-567`) and `archiveEmail`'s follow-up `fetchMailboxes` can all run in parallel; a `RateLimitError` (`src/api/jmap-client.ts:436-440`) is only logged. The tree itself is preserved on failure (`email-store.ts:604-612`), so this is perf/noise rather than data loss.
   - Fix hint: wrap `fetchMailboxes`/`refreshEmails` bodies in a small in-flight map keyed by `activeAccountId` with a single queued re-run, like WEB's `coalesceRefresh`.
@@ -109,7 +109,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: `UnifiedInboxScreen` loads once per mount/`includeGroup` change (`:57-59`); after opening (mark read) or deleting in the thread screen and going back, the unread dot/row is stale until pull-to-refresh. No push hookup.
   - Fix hint: `useFocusEffect` → reload, or patch the local list from the thread screen result; when Unread/Starred views are added, keep the WEB retain semantics.
 
-- [ ] **Opening a unified-inbox message that is not in the active folder page shows another message's body** — `P1` — `rn-only-bug`
+- [x] **Opening a unified-inbox message that is not in the active folder page shows another message's body** — `P1` — `rn-only-bug` — fixed in c8be383
   - What WEB does: opens the clicked row object itself and fetches by source client/account (#847, `components/mail/mail-app.tsx:3111-3190`).
   - What RN does: `UnifiedInboxScreen.onOpen` switches account then navigates to `EmailThread` (`src/screens/UnifiedInboxScreen.tsx:61-86`). `EmailThreadScreen` pages over the *active folder's* `emails` (`src/screens/EmailThreadScreen.tsx:131-133`, FlatList `data={emails}` `:538`, `initialScrollIndex={Math.max(0, findIndex)}`). A group-inbox message (or any message not in the first page of the user's own inbox snapshot) is not in `emails`, so index 0 is shown: the pane renders `emails[0]` while the toolbar/`activeEmailId` (and delete/archive/spam) refer to the message that was tapped; with an empty snapshot the body area is blank. Bare-id `findIndex` also collides across accounts (Stalwart reuses id ranges, #847).
   - Fix hint: when `route.params.emailId` is not found in `emails` (or `jmapAccountId` is set), page over a one-element list `[{ id, threadId }]` instead of `emails`; compare ids together with the owning account.
@@ -120,12 +120,12 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
 
 ### List rendering and behaviour
 
-- [ ] **Sent/Drafts rows show the sender ("me") instead of the recipient (1.4.12)** — `P2` — `bugfix-parity`
+- [x] **Sent/Drafts rows show the sender ("me") instead of the recipient (1.4.12)** — `P2` — `bugfix-parity` — fixed in PENDING-B
   - What WEB does: `showRecipient = role === 'sent' || role === 'drafts'` → uses `email.to[0]` for name/avatar (`components/email/thread-list-item.tsx:128-131`, `579-583`).
   - What RN does: `getSenderName` always reads `from` (`src/screens/EmailListScreen.tsx:31-37`, row `:80-81`, avatar `:118`).
   - Fix hint: pass `currentMailbox?.role` into `EmailRow` and pick `to[0] ?? from[0]` for sent/drafts (also in `UnifiedInboxScreen` if role views are added).
 
-- [ ] **Tags are not rendered on list rows (and no tag row tint)** — `P2` — `missing`
+- [x] **Tags are not rendered on list rows (and no tag row tint)** — `P2` — `missing` — fixed in PENDING-B
   - What WEB does: `TagBadge`s per row from `getEmailTagIds` (both `$label:` and legacy `$color:`), thread rows union all messages' tags, optional row tint by first tag (`components/email/thread-list-item.tsx:152-155`, `609-611`, `lib/thread-utils.ts:187-244`, `hooks/use-tag-display.ts`).
   - What RN does: `EmailRow` shows no tags; `tagPill/tagDot/tagText` styles exist but are unused (`src/screens/EmailListScreen.tsx:1481-1495`). Tags are only visible inside the thread screen tag menu.
   - Fix hint: compute tag ids from `item.keywords` (`$label:*`, `$color:*`), look up `useKeywordsStore().keywords` for label/colour (unknown ids → grey with raw id), render pills on the subject row; add a `tintListRowsByTag` setting if desired.
@@ -135,12 +135,12 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: no tag section in `SidebarDrawer`; `EmailFilters` has no keyword field (`src/stores/email-store.ts:140-149`).
   - Fix hint: add `keyword?: string` to `EmailFilters` and a "Tags" section in the drawer; when set, `buildJmapFilter` should omit `inMailbox` (search across folders) and add `{ hasKeyword: '$label:<id>' }`; counts via one `Email/query` (calculateTotal) per tag, optional.
 
-- [ ] **Answered / forwarded status icons (1.4.8)** — `P3` — `missing`
+- [x] **Answered / forwarded status icons (1.4.8)** — `P3` — `missing` — fixed in PENDING-B
   - What WEB does: `Reply`/`Forward` icons from `$answered`/`$forwarded` (`components/email/thread-list-item.tsx:120-121`, `396-412`).
   - What RN does: none (no reference to `$answered` anywhere in `src/`).
   - Fix hint: add the two icons next to the star/paperclip in `EmailRow`.
 
-- [ ] **Pin uses `$important` instead of `$pinned`; no pinned-first order or pin icon** — `P2` — `bug`
+- [x] **Pin uses `$important` instead of `$pinned`; no pinned-first order or pin icon** — `P2` — `bug` — fixed in PENDING-B
   - What WEB does: pin toggles the `$pinned` keyword (`components/mail/mail-app.tsx:2274-2300`), rows show a `Pin` icon (`thread-list-item.tsx:119`), and the query puts `$pinned` first (`lib/jmap/client.ts:1433-1444`, `buildEmailSort` `lib/message-list-order.ts:165-195`), thread groups too (`lib/thread-utils.ts:82-100`).
   - What RN does: `togglePin` writes `$important` (`src/stores/email-store.ts:1151-1173`), `isPinned` reads `$important` (`src/screens/EmailListScreen.tsx:47-49`); no icon, no ordering. A pin set in RN is invisible in WEB and vice versa.
   - Fix hint: switch the keyword to `$pinned`; show a pin icon; optionally sort pinned to the top client-side (server sort needs the polarity probe, see next item).
@@ -150,12 +150,12 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: only `receivedAt` asc/desc via `mailSortAscending` (persisted, header toggle `src/screens/EmailListScreen.tsx:699-711`, store `setSortAscending` `src/stores/email-store.ts:1039-1053`). This satisfies the "per default" part of native issue #5 but nothing else.
   - Fix hint: port `message-list-order.ts` (pure, no deps) and pass `buildEmailSort(levels, …)` as `sort` to `queryEmails`/`getEmailQueryChanges`; probe polarity once per account like `probeKeywordSortPolarity`; add a settings screen with the presets. Keep `setSortAscending`'s snapshot invalidation for any order change.
 
-- [ ] **Threading: counts only within the loaded page, no Thread/get counts, no conversation open, representative message wrong in ascending sort** — `P2` — `partial`
+- [x] **Threading: counts only within the loaded page, no Thread/get counts, no conversation open, representative message wrong in ascending sort** — `P2` — `partial` — fixed in PENDING-B
   - What WEB does: groups by `threadId`, `emailCount` from `Thread/get` across folders (`fetchThreadEmailCounts` `stores/email-store.ts:3731-3751`, `lib/thread-utils.ts:14-72`), representative = latest email, mobile tap opens the whole conversation via `getThreadEmails` routed to the owner (#814, `components/mail/mail-app.tsx:3240-3275`), "collapse all threads".
   - What RN does: collapses same-`threadId` rows within the page and counts within the page (`src/screens/EmailListScreen.tsx:224-248`); keeps the *first* row encountered, i.e. the oldest when `mailSortAscending` is on; tapping opens only that single message (`EmailThreadScreen` pages over `emails`, no `Thread/get` anywhere).
   - Fix hint: `Thread/get` for the visible thread ids (chunked) to get real counts; pick the newest message as representative; a conversation screen belongs to the viewer area but the list should hand over `threadId` + owner account.
 
-- [ ] **Drafts do not open in the composer / no "Edit draft"** — `P2` — `missing`
+- [x] **Drafts do not open in the composer / no "Edit draft"** — `P2` — `missing` — fixed in PENDING-B
   - What WEB does: a `$draft` message opens the composer (`handleEditDraft` `components/mail/mail-app.tsx:1812`, list `onEditDraft` `components/email/email-list.tsx:47,616`, context menu `components/email/email-context-menu.tsx:225-233`); viewer shows a draft banner.
   - What RN does: tapping a draft opens the read-only `EmailThreadScreen`; `Compose` params have no draft/edit mode (`src/navigation/types.ts:7-24`), locale keys `email_viewer.draft_banner`/`edit_draft` exist but are unused.
   - Fix hint: in `handleRowPress`, if `item.keywords.$draft` (or folder role is drafts) navigate to `Compose` with a `draft: { id, to, cc, bcc, subject, body, blobId }` param; on send, destroy the old draft (composer area).
@@ -170,46 +170,46 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: `if (markAsReadDelay > 0) { timer } else { markRead() }` (`src/screens/EmailThreadScreen.tsx:236-245`) so the "Never" option in `ReadingSettings.tsx:171` behaves like "Instant".
   - Fix hint: add `if (markAsReadDelay === -1) return;` before the branch.
 
-- [ ] **Load-more appends duplicates when new mail shifts positions** — `P3` — `rn-only-bug`
+- [x] **Load-more appends duplicates when new mail shifts positions** — `P3` — `rn-only-bug` — fixed in f07e039
   - What WEB does: filters `newEmails` by existing ids before appending (`stores/email-store.ts:1620-1625`).
   - What RN does: `merged = [...emails, ...newEmails]` with no dedup (`src/stores/email-store.ts:714-716`); a message that arrived between pages appears twice (duplicate FlatList keys, double rows).
   - Fix hint: `newEmails.filter(e => !existingIds.has(e.id))`.
 
-- [ ] **Incremental-refresh window "cap" is a no-op** — `P3` — `rn-only-bug`
+- [x] **Incremental-refresh window "cap" is a no-op** — `P3` — `rn-only-bug` — fixed in f07e039
   - What RN does: `out.slice(0, Math.max(limit, out.length))` (`src/stores/email-store.ts:885`) never trims although the comment says it caps the window to the page size; harmless but misleading (the snapshot can grow past `emailsPerPage`).
   - Fix hint: either drop the line and comment, or use `Math.max(limit, baseEmails.length)` if the intent is "at least the previous window".
 
-- [ ] **Swipe "spam" available in Sent/Drafts and no "not spam" in Junk** — `P3` — `rn-only-bug`
+- [x] **Swipe "spam" available in Sent/Drafts and no "not spam" in Junk** — `P3` — `rn-only-bug` — fixed in PENDING-B
   - What WEB does: spam action hidden for sent/drafts/scheduled and flips to "not spam" inside Junk (`components/email/thread-list-item.tsx:523`, `components/email/email-hover-actions.tsx:117-140`, changelog 1.7.7).
   - What RN does: `handleSwipeAction 'spam'` only checks `currentMailboxId !== junkMailboxId` (`src/screens/EmailListScreen.tsx:379-388`), so a swipe in Sent moves your own mail to Junk; in Junk the swipe silently does nothing.
   - Fix hint: skip when `currentMailbox.role` is sent/drafts; in junk call an `undoSpam` (see next item) and change the band label to "Not spam".
 
-- [ ] **Spam / not-spam do not flip `$junk`/`$notjunk` (#850) nor honour "trash-and-read"** — `P2` — `bugfix-parity`
+- [x] **Spam / not-spam do not flip `$junk`/`$notjunk` (#850) nor honour "trash-and-read"** — `P2` — `bugfix-parity` — fixed in PENDING-B
   - What WEB does: `markAsSpam` patches `mailboxIds` + `keywords/$junk: true` + `keywords/$notjunk: null` (+ `$seen` when `deleteAction === 'trash-and-read'`); `undoSpam` restores the original mailbox with `$junk: null`, `$notjunk: true` (`lib/jmap/client.ts:2422-2475`, store `stores/email-store.ts:2947-3100`, undo toast in `components/mail/mail-app.tsx:2228-2270`).
   - What RN does: swipe and thread-screen spam are plain `moveToMailbox` calls (`src/screens/EmailListScreen.tsx:381`, `src/screens/EmailThreadScreen.tsx:344-356`); the keywords stay untouched, so other clients/Stalwart's classifier never learn; undo label reads "Email moved to Junk".
   - Fix hint: add `markAsSpam(ids, junkRawId, accountId, alsoMarkRead)` / `undoSpam(ids, targetRawId, accountId)` to `src/api/email.ts` writing the keyword pointers; store actions with `pendingUndo.kind = 'spam'` (type already exists, `src/stores/email-store.ts:155`) whose `undoLast` also restores the keywords; queue-safe via an outbox `keywords` op.
 
-- [ ] **Batch spam / batch not-spam** — `P3` — `missing`
+- [x] **Batch spam / batch not-spam** — `P3` — `missing` — fixed in PENDING-B
   - What WEB does: `batchMarkAsSpam`/`batchUndoSpam` (`stores/email-store.ts:3104-3236`), "Not spam" button in the Junk selection toolbar (`components/email/email-list.tsx:396-411`, changelog 1.7.8).
   - What RN does: selection header has star/read/tag/move/archive/delete only (`src/screens/EmailListScreen.tsx:572-630`).
   - Fix hint: add a shield button that calls the batch spam/undo-spam from the previous item depending on `currentMailbox.role === 'junk'`.
 
-- [ ] **Selecting a collapsed thread row selects/acts on only its newest message** — `P2` — `bug`
+- [x] **Selecting a collapsed thread row selects/acts on only its newest message** — `P2` — `bug` — fixed in PENDING-B
   - What WEB does: the thread checkbox toggles every message of the thread (`toggleThreadSelection`, `components/email/thread-list-item.tsx:640-660`); single delete/archive on a thread row uses `moveThreadToMailbox` for archive (`components/mail/mail-app.tsx:2141-2180`).
   - What RN does: `selectedIds` holds the representative id only (`src/screens/EmailListScreen.tsx:336-352`, `436-442`), so "3 selected" may be 3 conversations but batch delete/move/archive/tag touch one message each (`deleteEmailsBatch` filters `emails` by id, `email-store.ts:1443`); swipe actions on a thread row likewise act on one message.
   - Fix hint: when threading is on, expand each selected representative to all `emails` with the same `threadId` before calling the batch store actions (and for swipe archive/delete/move on rows with `threadCount > 1`).
 
-- [ ] **Keep search/filters when switching folders (#553)** — `P3` — `bugfix-parity`
+- [x] **Keep search/filters when switching folders (#553)** — `P3` — `bugfix-parity` — fixed in f07e039
   - What WEB does: re-runs the active text/advanced search in the newly selected folder (`components/mail/mail-app.tsx:2501-2512`).
   - What RN does: `selectMailbox` resets `searchQuery` and `filters` (`src/stores/email-store.ts:676-677`) and the list input follows (`EmailListScreen.tsx:504-511`).
   - Fix hint: keep `searchQuery`/`filters` in `selectMailbox` (seed the base snapshot only when they are empty) so the search re-runs in the new folder; offer "Clear" as today.
 
-- [ ] **Just-read mail dropped from an open Unread-filtered list on the next push refresh** — `P3` — `bugfix-parity`
+- [x] **Just-read mail dropped from an open Unread-filtered list on the next push refresh** — `P3` — `bugfix-parity` — fixed in f07e039
   - What WEB does: retains rows the user just read/unstarred in the Unread/Starred views until the view is re-opened (`stores/email-store.ts:1007-1050`, `mergeRetainedRows`; changelog 1.9.0).
   - What RN does: `markRead` patches the row in place, but the next `refreshEmails` (push or pull) re-runs the `notKeyword $seen` query (`src/stores/email-store.ts:279`, `917-944`) and the row vanishes while the user is looking at it.
   - Fix hint: keep a `retainedIds` set per filter session; after a full re-query, splice retained rows (from the previous `emails`) back at their old index.
 
-- [ ] **Search runs on every keystroke** — `P3` — `rn-only-bug`
+- [x] **Search runs on every keystroke** — `P3` — `rn-only-bug` — fixed in PENDING-B
   - What WEB does: searches on submit / suggestion pick (`components/search/search-box.tsx:108-115`).
   - What RN does: 300 ms debounce into `setSearchQuery` → full `Email/query` + `Email/get` per pause (`src/screens/EmailListScreen.tsx:512-516`); with the `*` wildcard a single letter matches the whole mailbox.
   - Fix hint: search on `onSubmitEditing` (keep the clear button live), or debounce ≥ 600 ms with a minimum of 2 characters.
@@ -234,24 +234,24 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: refuses with "Messages can only be moved within the same account" (`src/stores/email-store.ts:1183-1186`, `1396-1399`); `MoveSheet` is scoped to the same account so the message is only reachable by a future picker. `MoveSheet` also allows Drafts as a target (`MoveSheet.tsx:102-103`) which WEB excludes (`email-context-menu.tsx:163`).
   - Fix hint: exclude `role === 'drafts'` targets; cross-account move = `Email/get` blob → `Blob/upload` to the owner → `Email/import` → destroy (import helper already exists in `src/api/email.ts:423`).
 
-- [ ] **Undo snackbar / toast strings not localized; move toast lacks folder path** — `P3` — `partial`
+- [x] **Undo snackbar / toast strings not localized; move toast lacks folder path** — `P3` — `partial` — fixed in PENDING-B
   - What WEB does: toasts localized, full folder path in move toast (changelog 1.5.0).
   - What RN does: hard-coded English labels in the store (`src/stores/email-store.ts:1202, 1252, 1328, 1379, 1425, 1520`), "UNDO" (`UndoSnackbar.tsx:73`), list empty/loading strings (`EmailListScreen.tsx:805-830`), filter modal labels, `MoveSheet`/`TagSheet` titles.
   - Fix hint: route through `useLocaleStore().t` (keys already exist for many: `email_list.*`, `notifications.*`).
 
 ### Search
 
-- [ ] **Search folder scope: always the current folder; no all-folders default (#788) and no folder picker** — `P2` — `bugfix-parity`
+- [x] **Search folder scope: always the current folder; no all-folders default (#788) and no folder picker** — `P2` — `bugfix-parity` — fixed in PENDING-B
   - What WEB does: `searchMailboxId` defaults to `""` = all folders, is a separate, persisted choice in the filter panel (`stores/email-store.ts:95-101`, `2344-2378`, changelog 1.9.0 #788); cross-mailbox queries.
   - What RN does: `buildJmapFilter` always starts with `{ inMailbox: current }` (`src/stores/email-store.ts:255`); the filter modal has no folder field.
   - Fix hint: add `folder?: string | 'all'` to `EmailFilters` (default `'all'` while a text query or filter is active, i.e. omit `inMailbox`); expose a folder select in the modal; the base-view snapshot logic already keys off `isBaseView`.
 
-- [ ] **Body filter, per-chip removal** — `P3` — `partial`
+- [x] **Body filter, per-chip removal** — `P3` — `partial` — fixed in PENDING-B
   - What WEB does: `body` condition (`lib/jmap/search-utils.ts:62-64`); each chip has an X (`components/search/search-chips.tsx:260-266`).
   - What RN does: no `body` field; chips are read-only, only "Clear" all (`src/screens/EmailListScreen.tsx:725-796`).
   - Fix hint: add `body` to `EmailFilters`/`buildJmapFilter`; make each chip's X call `setFilterField(key, undefined)`.
 
-- [ ] **Search suggestions and recent-search history (#845)** — `P3` — `missing`
+- [x] **Search suggestions and recent-search history (#845)** — `P3` — `missing` — fixed in PENDING-B
   - What WEB does: recent searches (max 10, persisted) + contact/sender matches under the search box, keyboard navigable, pick a contact → `from:`/`to:` filter (`stores/search-history-store.ts`, `lib/search-suggestions.ts:183`, `components/search/search-box.tsx:34`, `components/mail/mail-app.tsx:2807-2826`).
   - What RN does: plain `TextInput` (`EmailListScreen.tsx:677-698`).
   - Fix hint: small zustand store persisted in AsyncStorage; render a dropdown under the input when focused (recent + `useContactsStore` matches); tapping a contact sets `filters.from`.

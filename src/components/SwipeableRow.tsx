@@ -3,11 +3,12 @@ import {
   View, Text, StyleSheet, Animated, PanResponder, Pressable, Dimensions,
 } from 'react-native';
 import {
-  Archive, Trash2, ShieldAlert, MailOpen, Star, Pin, FolderInput,
+  Archive, Trash2, ShieldAlert, ShieldCheck, MailOpen, Mail, Star, Pin, PinOff, FolderInput,
   type LucideIcon,
 } from 'lucide-react-native';
 import { typography, type ThemePalette } from '../theme/tokens';
 import { useColors } from '../theme/colors';
+import { useLocaleStore } from '../stores/locale-store';
 import type { SwipeAction, SwipeMode } from '../stores/settings-store';
 import {
   shouldClaimGesture, dragOffset, resolveRelease, exitsRow,
@@ -22,13 +23,21 @@ interface SwipeableRowProps {
   /** Left-to-right swipe action (revealed under a rightward drag, sits at left edge). */
   rightAction: SwipeAction;
   /** Pass the row state used to compute action labels (e.g. unread/starred toggling). */
-  context: { unread: boolean; starred: boolean; pinned: boolean };
+  context: SwipeContext;
   onAction: (action: SwipeAction) => void;
   /**
    * 'instant' (default): swipe past COMMIT_THRESHOLD and release fires the action.
    * 'reveal': swipe past ACTIVATION_THRESHOLD reveals an action band that must be tapped.
    */
   mode?: SwipeMode;
+}
+
+export interface SwipeContext {
+  unread: boolean;
+  starred: boolean;
+  pinned: boolean;
+  /** Inside Junk the spam band flips to "Not spam" (webmail 1.7.7). */
+  inJunk?: boolean;
 }
 
 // Distance the row flies off-screen by before the action callback fires.
@@ -44,12 +53,26 @@ const ACTION_META: Record<Exclude<SwipeAction, 'none'>, { icon: LucideIcon; bg: 
   move:    { icon: FolderInput,  bg: '#475569', defaultLabel: 'Move' },
 };
 
-function actionLabel(action: SwipeAction, context: { unread: boolean; starred: boolean; pinned: boolean }): string {
-  if (action === 'read') return context.unread ? 'Read' : 'Unread';
-  if (action === 'star') return context.starred ? 'Unstar' : 'Star';
-  if (action === 'pin') return context.pinned ? 'Unpin' : 'Pin';
-  if (action === 'none') return '';
-  return ACTION_META[action].defaultLabel;
+type Translate = (key: string, fallback?: string) => string;
+
+function actionLabel(action: SwipeAction, context: SwipeContext, t: Translate): string {
+  switch (action) {
+    case 'none': return '';
+    case 'read': return context.unread ? t('context_menu.mark_read', 'Read') : t('context_menu.mark_unread', 'Unread');
+    case 'star': return context.starred ? t('context_menu.unstar', 'Unstar') : t('context_menu.star', 'Star');
+    case 'pin': return context.pinned ? t('context_menu.unpin', 'Unpin') : t('context_menu.pin', 'Pin');
+    case 'spam': return context.inJunk ? t('context_menu.not_spam', 'Not spam') : t('email_list.swipe_spam', 'Spam');
+    case 'archive': return t('context_menu.archive', 'Archive');
+    case 'delete': return t('context_menu.delete', 'Delete');
+    case 'move': return t('email_list.swipe_move', 'Move');
+  }
+}
+
+function actionIcon(action: Exclude<SwipeAction, 'none'>, context: SwipeContext): LucideIcon {
+  if (action === 'spam' && context.inJunk) return ShieldCheck;
+  if (action === 'read' && !context.unread) return Mail;
+  if (action === 'pin' && context.pinned) return PinOff;
+  return ACTION_META[action].icon;
 }
 
 export function SwipeableRow({
@@ -57,6 +80,7 @@ export function SwipeableRow({
 }: SwipeableRowProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const dx = useRef(new Animated.Value(0)).current;
   const claimed = useRef(false);
   const widthRef = useRef(Dimensions.get('window').width);
@@ -186,8 +210,8 @@ export function SwipeableRow({
     const renderRevealBand = (action: SwipeAction, side: 'left' | 'right') => {
       if (action === 'none') return null;
       const meta = ACTION_META[action];
-      const Icon = meta.icon;
-      const label = actionLabel(action, context);
+      const Icon = actionIcon(action, context);
+      const label = actionLabel(action, context, t);
       return (
         <Pressable
           onPress={() => fireFromBandTap(action)}
@@ -228,8 +252,8 @@ export function SwipeableRow({
   const renderInstantBand = (action: SwipeAction, side: 'left' | 'right') => {
     if (action === 'none') return null;
     const meta = ACTION_META[action];
-    const Icon = meta.icon;
-    const label = actionLabel(action, context);
+    const Icon = actionIcon(action, context);
+    const label = actionLabel(action, context, t);
     const inputRange = side === 'left' ? [0, COMMIT_THRESHOLD] : [-COMMIT_THRESHOLD, 0];
     const iconScale = dx.interpolate({
       inputRange,
