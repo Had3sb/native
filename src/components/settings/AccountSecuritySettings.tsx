@@ -17,11 +17,16 @@ import {
   isClientCertSupported,
   pickClientCertAlias,
 } from '../../lib/client-cert';
+import { useLocaleStore } from '../../stores/locale-store';
 import {
   isStalwartSupported,
   fetchAuthInfo,
-  fetchEncryptionType,
+  fetchCryptoInfo,
   fetchPrincipal,
+  fetchPublicKeys,
+  createPublicKey,
+  removePublicKey,
+  updateEncryptionAtRest,
   changePassword,
   updateDisplayName,
   enableTotp,
@@ -33,7 +38,9 @@ import {
   type AppCredentialInfo,
   type AppCredentialInput,
   type AuthInfo,
+  type CryptoInfo,
   type EncryptionType,
+  type PublicKeyInfo,
 } from '../../api/account-security';
 import { generateTotpEnrolment, type TotpEnrolment } from '../../lib/totp';
 
@@ -535,22 +542,286 @@ function EmailClientSection() {
   );
 }
 
-// ── Encryption at rest (read-only status) ─────────────────
-function EncryptionSection({ type }: { type: EncryptionType }) {
+// ── Public keys (S/MIME / PGP) ────────────────────────────
+function PublicKeysSection({
+  keys,
+  onChanged,
+}: {
+  keys: PublicKeyInfo[];
+  onChanged: () => Promise<void>;
+}) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState('');
+  const [keyText, setKeyText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+
+  const add = async () => {
+    if (!name.trim() || !keyText.trim()) return;
+    setSaving(true);
+    try {
+      await createPublicKey({ description: name.trim(), key: keyText.trim() });
+      setName(''); setKeyText(''); setShowAdd(false);
+      await onChanged();
+    } catch (err) {
+      Alert.alert(
+        t('settings.security.public_keys.add_error', 'Failed to add public key'),
+        err instanceof Error ? err.message : undefined,
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = (key: PublicKeyInfo) => {
+    Alert.alert(
+      t('settings.security.public_keys.remove_title', 'Remove public key?'),
+      t('settings.security.public_keys.remove_message', 'Encryption at rest that uses this key will stop working.'),
+      [
+        { text: t('common.cancel', 'Cancel'), style: 'cancel' },
+        {
+          text: t('common.remove', 'Remove'),
+          style: 'destructive',
+          onPress: async () => {
+            setRemovingId(key.id);
+            try {
+              await removePublicKey(key.id);
+              await onChanged();
+            } catch (err) {
+              Alert.alert(
+                t('settings.security.public_keys.remove_error', 'Failed to remove public key'),
+                err instanceof Error ? err.message : undefined,
+              );
+            } finally {
+              setRemovingId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  return (
+    <View style={{ gap: spacing.md }}>
+      <View style={styles.headerRowBetween}>
+        <View style={styles.headerRow}>
+          <Key size={16} color={c.mutedForeground} />
+          <Text style={styles.headerTitle}>{t('settings.security.public_keys.title', 'Public Keys')}</Text>
+        </View>
+        <Button variant="outline" size="sm" icon={<Plus size={14} color={c.text} />} onPress={() => setShowAdd((v) => !v)}>
+          {t('common.add', 'Add')}
+        </Button>
+      </View>
+      <Text style={styles.panelHint}>
+        {t('settings.security.public_keys.description', 'S/MIME certificates and PGP keys stored on the server. They are used for encryption at rest.')}
+      </Text>
+
+      {showAdd && (
+        <View style={styles.panel}>
+          <View>
+            <Text style={styles.pwLabel}>{t('settings.security.public_keys.name_label', 'Public Key name')}</Text>
+            <Input value={name} onChangeText={setName} placeholder={t('settings.security.public_keys.name_placeholder', 'e.g. My Key')} />
+          </View>
+          <View>
+            <Text style={styles.pwLabel}>{t('settings.security.public_keys.key_label', 'Public Key (S/MIME or PGP ASCII-armored)')}</Text>
+            <Input
+              value={keyText}
+              onChangeText={setKeyText}
+              placeholder={t('settings.security.public_keys.key_placeholder', 'Paste your public key here')}
+              multiline
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{ minHeight: 120, textAlignVertical: 'top', fontFamily: 'monospace' }}
+            />
+          </View>
+          <View style={styles.rowGap}>
+            <Button size="sm" loading={saving} disabled={saving || !name.trim() || !keyText.trim()} onPress={() => { void add(); }}>
+              {t('common.add', 'Add')}
+            </Button>
+            <Button variant="ghost" size="sm" onPress={() => { setShowAdd(false); setName(''); setKeyText(''); }}>
+              {t('common.cancel', 'Cancel')}
+            </Button>
+          </View>
+        </View>
+      )}
+
+      {keys.length > 0 ? (
+        <View style={{ gap: spacing.sm }}>
+          {keys.map((key) => (
+            <View key={key.id} style={styles.credRow}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.credName} numberOfLines={1}>{key.description || key.id}</Text>
+                <Text style={styles.credMeta} numberOfLines={2}>
+                  {[
+                    key.emailAddresses.join(', '),
+                    key.expiresAt
+                      ? t('settings.security.public_keys.expires', 'expires {date}', { date: new Date(key.expiresAt).toLocaleDateString() })
+                      : null,
+                  ].filter(Boolean).join(' · ')}
+                </Text>
+              </View>
+              <Pressable
+                style={styles.iconBtn}
+                onPress={() => remove(key)}
+                disabled={removingId !== null}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.remove', 'Remove')}
+              >
+                {removingId === key.id
+                  ? <ActivityIndicator size="small" color={c.error} />
+                  : <Trash2 size={16} color={c.error} />}
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.emptyText}>{t('settings.security.public_keys.none', 'No public keys configured')}</Text>
+      )}
+    </View>
+  );
+}
+
+// ── Encryption at rest ────────────────────────────────────
+function EncryptionSection({
+  info,
+  keys,
+  onChanged,
+}: {
+  info: CryptoInfo;
+  keys: PublicKeyInfo[];
+  onChanged: () => Promise<void>;
+}) {
+  const c = useColors();
+  const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
+  const [type, setType] = useState<EncryptionType>(info.type);
+  const [keyId, setKeyId] = useState<string | null>(info.publicKeyId ?? keys[0]?.id ?? null);
+  const [encryptOnAppend, setEncryptOnAppend] = useState(info.encryptOnAppend);
+  const [allowSpamTraining, setAllowSpamTraining] = useState(info.allowSpamTraining);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setType(info.type);
+    setKeyId(info.publicKeyId ?? keys[0]?.id ?? null);
+    setEncryptOnAppend(info.encryptOnAppend);
+    setAllowSpamTraining(info.allowSpamTraining);
+  }, [info, keys]);
+
   const enabled = type !== 'Disabled';
+  const dirty =
+    type !== info.type
+    || (enabled && keyId !== info.publicKeyId)
+    || (enabled && encryptOnAppend !== info.encryptOnAppend)
+    || (enabled && allowSpamTraining !== info.allowSpamTraining);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await updateEncryptionAtRest({ type, publicKeyId: keyId, encryptOnAppend, allowSpamTraining });
+      await onChanged();
+      Alert.alert(
+        t('settings.security.encryption.section_title', 'Encryption at Rest'),
+        enabled
+          ? t('settings.security.encryption.enabled_success', 'Encryption at rest enabled')
+          : t('settings.security.encryption.disabled_success', 'Encryption at rest disabled'),
+      );
+    } catch (err) {
+      Alert.alert(
+        t('settings.security.encryption.error', 'Failed to update encryption settings'),
+        err instanceof Error ? err.message : undefined,
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const algorithms: { value: EncryptionType; label: string }[] = [
+    { value: 'Disabled', label: t('settings.security.encryption.inactive', 'Disabled') },
+    { value: 'Aes128', label: 'AES-128' },
+    { value: 'Aes256', label: 'AES-256' },
+  ];
+
   return (
     <View style={{ gap: spacing.md }}>
       <View style={styles.headerRow}>
         <Lock size={16} color={c.mutedForeground} />
-        <Text style={styles.headerTitle}>Encryption at rest</Text>
+        <Text style={styles.headerTitle}>{t('settings.security.encryption.section_title', 'Encryption at Rest')}</Text>
       </View>
-      <SettingItem label="Stored message encryption" description="Server-side encryption of stored messages." noBorder>
-        <Text style={[styles.statusText, { color: enabled ? c.success : c.mutedForeground }]}>
-          {enabled ? `Active (${type})` : 'Disabled'}
-        </Text>
-      </SettingItem>
+      <Text style={styles.panelHint}>
+        {t('settings.security.encryption.description', 'Encrypt stored emails on the server for additional privacy')}
+        {' '}
+        {info.type !== 'Disabled'
+          ? t('settings.security.encryption.active', '{type} encryption enabled', { type: info.type })
+          : t('settings.security.encryption.inactive', 'Disabled')}
+      </Text>
+
+      <View>
+        <Text style={styles.pwLabel}>{t('settings.security.encryption.algorithm_label', 'Encryption Algorithm')}</Text>
+        <View style={styles.rowGap}>
+          {algorithms.map((opt) => (
+            <Button
+              key={opt.value}
+              size="sm"
+              variant={type === opt.value ? 'default' : 'outline'}
+              onPress={() => setType(opt.value)}
+            >
+              {opt.label}
+            </Button>
+          ))}
+        </View>
+      </View>
+
+      {enabled && (
+        <View style={styles.panel}>
+          <Text style={styles.pwLabel}>{t('settings.security.public_keys.title', 'Public Keys')}</Text>
+          {keys.length === 0 ? (
+            <Text style={styles.errorText}>
+              {t('settings.security.encryption.no_keys', 'Add a public key first - encryption at rest needs one.')}
+            </Text>
+          ) : (
+            <View style={{ gap: spacing.xs }}>
+              {keys.map((key) => (
+                <Pressable
+                  key={key.id}
+                  onPress={() => setKeyId(key.id)}
+                  style={styles.keyChoice}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: keyId === key.id }}
+                >
+                  {keyId === key.id ? <Check size={14} color={c.primary} /> : <View style={{ width: 14 }} />}
+                  <Text style={styles.credName} numberOfLines={1}>{key.description || key.id}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+          <SettingItem
+            label={t('settings.security.encryption.encrypt_on_append', 'Encrypt new emails on upload')}
+            noBorder
+          >
+            <ToggleSwitch checked={encryptOnAppend} onChange={setEncryptOnAppend} />
+          </SettingItem>
+          <SettingItem
+            label={t('settings.security.encryption.allow_spam_training', 'Allow spam training before encrypting emails')}
+            noBorder
+          >
+            <ToggleSwitch checked={allowSpamTraining} onChange={setAllowSpamTraining} />
+          </SettingItem>
+        </View>
+      )}
+
+      <View style={{ alignItems: 'flex-start' }}>
+        <Button
+          size="sm"
+          loading={saving}
+          disabled={saving || !dirty || (enabled && !keyId)}
+          onPress={() => { void save(); }}
+        >
+          {t('common.save', 'Save')}
+        </Button>
+      </View>
     </View>
   );
 }
@@ -565,9 +836,18 @@ export function AccountSecuritySettings() {
   // null = still probing; false = server lacks the Stalwart extension.
   const [supported, setSupported] = useState<boolean | null>(null);
   const [auth, setAuth] = useState<AuthInfo | null>(null);
+  const t = useLocaleStore((s) => s.t);
   const [displayName, setDisplayName] = useState('');
-  const [encryption, setEncryption] = useState<EncryptionType>('Disabled');
+  const [crypto, setCrypto] = useState<CryptoInfo | null>(null);
+  const [publicKeys, setPublicKeys] = useState<PublicKeyInfo[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+
+  const reloadCrypto = useCallback(async () => {
+    const [info, keys] = await Promise.allSettled([fetchCryptoInfo(), fetchPublicKeys()]);
+    if (info.status === 'fulfilled') setCrypto(info.value);
+    if (keys.status === 'fulfilled') setPublicKeys(keys.value);
+  }, []);
 
   const reloadAuth = useCallback(async () => {
     try {
@@ -580,7 +860,8 @@ export function AccountSecuritySettings() {
   useEffect(() => {
     let cancelled = false;
     const session = jmapClient.currentSession;
-    if (!session) { setSupported(false); return; }
+    if (!session) { setOffline(true); setSupported(false); return; }
+    setOffline(false);
     if (!isStalwartSupported()) { setSupported(false); return; }
     setSupported(true);
 
@@ -592,10 +873,9 @@ export function AccountSecuritySettings() {
         if (!isOAuth) {
           // Principal + crypto only matter for password accounts; failures are
           // non-fatal (e.g. a non-admin principal read is forbidden).
-          const [principal, enc] = await Promise.allSettled([fetchPrincipal(), fetchEncryptionType()]);
+          const [principal] = await Promise.allSettled([fetchPrincipal(), reloadCrypto()]);
           if (cancelled) return;
           if (principal.status === 'fulfilled') setDisplayName(principal.value.displayName);
-          if (enc.status === 'fulfilled') setEncryption(enc.value);
         }
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load security settings.');
@@ -603,7 +883,7 @@ export function AccountSecuritySettings() {
     })();
 
     return () => { cancelled = true; };
-  }, [isOAuth]);
+  }, [isOAuth, reloadCrypto]);
 
   return (
     <View style={styles.container}>
@@ -617,15 +897,23 @@ export function AccountSecuritySettings() {
       )}
 
       {supported === false && (
-        <SettingsSection title="Account security" description="Manage your password, two-factor authentication, and app credentials.">
+        <SettingsSection
+          title={t('settings.security.title', 'Account Security')}
+          description={t('settings.security.description', 'Manage your password, two-factor authentication, and security settings')}
+        >
           <Text style={styles.emptyText}>
-            Account security management requires a Stalwart server. These features are not available for this account.
+            {offline
+              ? t('settings.security.offline', 'You are offline. Account security settings need a live connection to the server.')
+              : t('settings.security.not_supported', 'Account security management requires a Stalwart server. These features are not available for this account.')}
           </Text>
         </SettingsSection>
       )}
 
       {supported && (
-        <SettingsSection title="Account security" description="Manage your password, two-factor authentication, and app credentials.">
+        <SettingsSection
+          title={t('settings.security.title', 'Account Security')}
+          description={t('settings.security.description', 'Manage your password, two-factor authentication, and security settings')}
+        >
           <View style={{ gap: spacing.xxxl }}>
             {loadError ? <Text style={styles.errorText}>{loadError}</Text> : null}
 
@@ -660,7 +948,12 @@ export function AccountSecuritySettings() {
             />
 
             {isOAuth && <EmailClientSection />}
-            {!isOAuth && <EncryptionSection type={encryption} />}
+            {!isOAuth && (
+              <>
+                <PublicKeysSection keys={publicKeys} onChanged={reloadCrypto} />
+                {crypto && <EncryptionSection info={crypto} keys={publicKeys} onChanged={reloadCrypto} />}
+              </>
+            )}
           </View>
         </SettingsSection>
       )}
@@ -723,6 +1016,7 @@ function makeStyles(c: ThemePalette) {
     ipPill: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.xs, backgroundColor: c.background, borderWidth: 1, borderColor: c.border },
     ipText: { fontSize: 10, fontFamily: 'monospace', color: c.mutedForeground },
     iconBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
+    keyChoice: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 6 },
     emptyText: { ...typography.caption, color: c.mutedForeground, fontStyle: 'italic' },
 
     // TLS client cert

@@ -63,7 +63,12 @@
     "no_archive_folder": "Could not find an Archive folder on the server.",
     "no_junk_folder": "Could not find a Spam/Junk folder on the server.",
     "no_trash_folder": "Could not find a Trash folder on the server. Please check your mailbox configuration.",
-    "undo_failed": "Undo failed"
+    "undo_failed": "Undo failed",
+    "marked_as_spam_count": "{count, plural, one {# email} other {# emails}} marked as spam",
+    "marked_not_spam_count": "{count, plural, one {# email} other {# emails}} marked as not spam",
+    "emails_archived_count": "{count, plural, one {# email} other {# emails}} archived",
+    "emails_moved_to": "{count, plural, one {# email} other {# emails}} moved to {mailbox}",
+    "moved_to_trash_count": "{count, plural, one {# email} other {# emails}} moved to Trash"
   },
   "email_viewer": {
     "color_tag": {
