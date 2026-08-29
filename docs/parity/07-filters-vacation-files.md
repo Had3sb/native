@@ -22,12 +22,12 @@ Filters: RN carries a byte-for-byte port of WEB's Sieve parser/generator/tests a
   - What RN does: `src/components/settings/FilterSettings.tsx:359-365` always renders `<FilterRuleModal visible={showRuleModal} rule={editingRule} .../>`; the modal seeds `name/matchType/conditions/actions/stopProcessing` only in `useState` initialisers (`src/components/filters/FilterRuleModal.tsx:74-82`) and has no reset effect. Opening "Add Rule" after editing a rule shows the previous rule's content; opening rule B after rule A shows A's fields but saves them under B's `id` (`:170`), overwriting B. Compare `SieveEditorSheet.tsx:33-39`, which does re-seed on `visible`.
   - Fix hint: either mount the modal conditionally (`{showRuleModal && <FilterRuleModal .../>}`) or add a `useEffect([visible, rule])` that resets all local state like `SieveEditorSheet` does.
 
-- [ ] **Vacation-active banner is not actionable** — `P3` — `partial`
+- [x] **Vacation-active banner is not actionable** — fixed in 3ffcef2 — `P3` — `partial`
   - What WEB does: banner is a button that switches the settings tab to Vacation (`components/settings/filter-settings.tsx:483-507`, `vacation_configure` label).
   - What RN does: plain `View` with title/description only (`src/components/settings/FilterSettings.tsx:231-241`); no "Configure →" affordance.
   - Fix hint: accept an `onOpenVacation` prop from `SettingsScreen` and wrap the banner in a `Pressable`.
 
-- [ ] **Expanded ("IF / THEN") visual rule summary missing** — `P3` — `partial`
+- [x] **Expanded ("IF / THEN") visual rule summary missing** — fixed in 3ffcef2 — `P3` — `partial`
   - What WEB does: `VisualRuleSummary` renders condition/action chips with IF/THEN labels and the match-type hint when `expandedFilterView` is on (`components/settings/filter-settings.tsx:89-156`, `612-616`); changelog 1.4.6 "Add expanded visual view for filter rules".
   - What RN does: the `filtersExpandedView` toggle exists (`src/components/settings/FilterSettings.tsx:350-355`) but only lifts the `numberOfLines` clamp on the same one-line summary (`:268`, `:292`); `if`/`then`/`match_all_conditions` locale keys are unused.
   - Fix hint: add a `VisualRuleSummary` component rendering rows of chips (all conditions, all actions) when `expandedView` is true.
