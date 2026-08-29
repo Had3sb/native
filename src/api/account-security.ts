@@ -48,10 +48,13 @@ type MethodResponse = [string, Record<string, any>, string];
 
 // True once a live session advertises Stalwart's JMAP extension. Without it
 // none of the x:* methods exist, so the screen shows a "not available" notice.
+// Stalwart lists `urn:stalwart:jmap` only under the account's
+// `accountCapabilities` (verified on 0.16.19), never at session level, so the
+// account-level map is what has to be checked (native #47).
 export function isStalwartSupported(): boolean {
   const session = jmapClient.currentSession;
-  if (!session) return false;
-  return STALWART_CAPABILITY in (session.capabilities ?? {});
+  if (!session || !jmapClient.isConnected) return false;
+  return jmapClient.hasAccountCapability(STALWART_CAPABILITY);
 }
 
 // Pull a single method response out by its call id and throw on a JMAP method
@@ -194,6 +197,9 @@ export async function changePassword(currentPassword: string, newPassword: strin
   const result = resultFor<{ notUpdated?: Record<string, { description?: string; type?: string }> }>(responses, '0');
   const failure = result.notUpdated?.singleton;
   if (failure) throw new Error(failure.description || failure.type || 'Failed to change password');
+  // The stored credential must follow, otherwise the next request 401s and
+  // the next launch evicts the account.
+  await jmapClient.updatePassword(newPassword);
 }
 
 export async function updateDisplayName(displayName: string): Promise<void> {
