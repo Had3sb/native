@@ -8,11 +8,31 @@ import type {
 import { CAPABILITIES } from './types';
 import { generateAccountId } from '../lib/account-utils';
 import { secureFetch } from '../lib/client-cert';
-import { refreshOAuthAccessToken, type OAuthTokens } from '../lib/oauth';
+import {
+  refreshOAuthAccessToken,
+  TransientRefreshError,
+  type OAuthTokens,
+} from '../lib/oauth';
+import { FirstTouchGate } from './first-touch-gate';
 
 // Refresh OAuth access tokens this many ms before they actually expire so
 // in-flight requests don't race the expiry window.
 const TOKEN_REFRESH_LEEWAY_MS = 60_000;
+
+// Deadline on response headers for an ordinary JMAP call, and for blob
+// transfers (uploads/downloads can legitimately take minutes on cellular).
+// Mirrors the webmail's REQUEST_TIMEOUT_MS / blob timeout (#702): iOS suspends
+// sockets in the background and hands back dead pooled connections on resume;
+// without a deadline a send or save hangs forever.
+export const REQUEST_TIMEOUT_MS = 30_000;
+export const BLOB_TIMEOUT_MS = 300_000;
+
+// Base back-off per attempt when the server refuses a request for being one
+// too many in parallel (maxConcurrentRequests, #780).
+const CONCURRENT_REQUEST_RETRY_DELAYS_MS = [200, 400, 800];
+
+// Delay before the single transient-network retry of an idempotent request.
+const TRANSIENT_RETRY_DELAY_MS = 1000;
 
 const LEGACY_CREDENTIALS_KEY = 'jmap_credentials';
 const CREDENTIALS_PREFIX = 'jmap_credentials__';
@@ -36,10 +56,152 @@ export interface StoredCredentials {
   clientId?: string;
 }
 
+/**
+ * RFC 8620 §3.6.1 limit error naming the server's parallel-request ceiling.
+ * Stalwart refuses the surplus of a burst with 400 jmap:error:limit /
+ * maxConcurrentRequests BEFORE any method runs, so the request is safe to
+ * replay - even a /set.
+ */
+export function isConcurrentRequestRefusal(status: number, body: string): boolean {
+  if (status !== 400) return false;
+  try {
+    const parsed = JSON.parse(body) as { type?: unknown; limit?: unknown } | null;
+    return (
+      parsed?.type === 'urn:ietf:params:jmap:error:limit' &&
+      parsed?.limit === 'maxConcurrentRequests'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Seconds or HTTP-date `Retry-After`, capped at 5 minutes, defaulting to 60 s
+ * when missing or unparseable (an HTTP-date used to turn into `NaN` ms).
+ */
+export function parseRetryAfter(header: string | null): number {
+  if (!header) return 60_000;
+  const seconds = Number(header);
+  if (!Number.isNaN(seconds) && seconds > 0) {
+    return Math.min(seconds * 1000, 300_000);
+  }
+  const date = Date.parse(header);
+  if (!Number.isNaN(date)) {
+    const ms = date - Date.now();
+    return ms > 0 ? Math.min(ms, 300_000) : 60_000;
+  }
+  return 60_000;
+}
+
+// Methods whose bodies must never be replayed automatically: a retried
+// EmailSubmission/set would send the mail twice.
+function hasNonIdempotentMethod(methodCalls: ReadonlyArray<JMAPMethodCall>): boolean {
+  return methodCalls.some(
+    ([name]) =>
+      name === 'EmailSubmission/set' ||
+      name === 'Email/import' ||
+      name === 'Blob/upload',
+  );
+}
+
+function fetchSessionDescribes(session: unknown): session is JMAPSession {
+  if (!session || typeof session !== 'object') return false;
+  const s = session as Partial<JMAPSession>;
+  return typeof s.apiUrl === 'string';
+}
+
+// ── Shared response helpers ──────────────────────────────
+// Most RN api functions used to index `methodResponses[0][1]` blindly, so a
+// method-level `['error', {...}]` reply produced a TypeError on reads and was
+// silently treated as success on writes. Route every response through these.
+
+type MethodResponse = [string, Record<string, any>, string];
+
+export class JMAPMethodError extends Error {
+  type: string;
+  constructor(type: string, description?: string) {
+    super(description || type || 'JMAP method error');
+    this.name = 'JMAPMethodError';
+    this.type = type;
+  }
+}
+
+/**
+ * Pull the response body for `callId` (or the first response when omitted)
+ * and throw a `JMAPMethodError` when the server answered with the error
+ * envelope. Also verifies the method name when `expectMethod` is given.
+ */
+export function requireMethodResult<T = Record<string, any>>(
+  res: JMAPResponseBody,
+  callId?: string,
+  expectMethod?: string,
+): T {
+  const responses = (res.methodResponses ?? []) as MethodResponse[];
+  const match = callId === undefined
+    ? responses[0]
+    : responses.find((r) => r[2] === callId);
+  if (!match) {
+    throw new JMAPMethodError('missingResponse', `Missing JMAP response${callId !== undefined ? ` for call ${callId}` : ''}`);
+  }
+  if (match[0] === 'error') {
+    const err = match[1] as { type?: string; description?: string };
+    throw new JMAPMethodError(err.type ?? 'serverFail', err.description);
+  }
+  if (expectMethod && match[0] !== expectMethod) {
+    throw new JMAPMethodError('unexpectedMethod', `Expected ${expectMethod}, got ${match[0]}`);
+  }
+  return match[1] as T;
+}
+
+/**
+ * Throw when a /set response reports the given ids (or any id when `ids` is
+ * omitted) under `notCreated` / `notUpdated` / `notDestroyed`.
+ */
+export function assertSetResult(
+  body: Record<string, any>,
+  ids?: string[],
+  what = 'object',
+): void {
+  const buckets = ['notCreated', 'notUpdated', 'notDestroyed'] as const;
+  for (const bucket of buckets) {
+    const failures = body?.[bucket] as
+      | Record<string, { type?: string; description?: string; properties?: string[] }>
+      | undefined;
+    if (!failures) continue;
+    const entries = Object.entries(failures).filter(([id]) => !ids || ids.includes(id));
+    if (entries.length === 0) continue;
+    const [id, err] = entries[0];
+    const verb = bucket === 'notCreated' ? 'create' : bucket === 'notUpdated' ? 'update' : 'destroy';
+    const detail = [err?.type ?? 'unknown'];
+    if (err?.properties?.length) detail.push(`properties=[${err.properties.join(', ')}]`);
+    if (err?.description) detail.push(err.description);
+    const more = entries.length > 1 ? ` (+${entries.length - 1} more)` : '';
+    throw new JMAPMethodError(
+      err?.type ?? 'setError',
+      `Failed to ${verb} ${what} ${id}${more}: ${detail.join(' – ')}`,
+    );
+  }
+}
+
+/** Split `items` into consecutive batches of at most `size` entries. */
+export function batched<T>(items: T[], size: number): T[][] {
+  const step = Math.max(1, Math.floor(size));
+  const result: T[][] = [];
+  for (let i = 0; i < items.length; i += step) {
+    result.push(items.slice(i, i + step));
+  }
+  return result;
+}
+
 export class JMAPClient {
   private session: JMAPSession | null = null;
   private credentials: StoredCredentials | null = null;
   private _accountId: string | null = null;
+  private firstTouchGate = new FirstTouchGate();
+  private rateLimitedUntil = 0;
+  private authFailureListeners = new Set<(err: AuthenticationError) => void>();
+  private rateLimitListeners = new Set<(retryAfterMs: number) => void>();
+  private tokenRefreshListeners = new Set<() => void>();
 
   get accountId(): string {
     if (!this._accountId) {
@@ -71,6 +233,48 @@ export class JMAPClient {
     return this.session !== null && this._accountId !== null;
   }
 
+  // ── Lifecycle hooks ───────────────────────────────────
+  // The auth store subscribes to auth failures so a revoked token/password
+  // leads back to the login screen instead of a dead session; the offline
+  // banner subscribes to rate-limit windows; the live-update layer recreates
+  // the SSE stream whenever the bearer token rotates.
+
+  onAuthFailure(listener: (err: AuthenticationError) => void): () => void {
+    this.authFailureListeners.add(listener);
+    return () => this.authFailureListeners.delete(listener);
+  }
+
+  onRateLimit(listener: (retryAfterMs: number) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => this.rateLimitListeners.delete(listener);
+  }
+
+  onTokenRefresh(listener: () => void): () => void {
+    this.tokenRefreshListeners.add(listener);
+    return () => this.tokenRefreshListeners.delete(listener);
+  }
+
+  private notifyAuthFailure(err: AuthenticationError): void {
+    for (const l of this.authFailureListeners) {
+      try { l(err); } catch { /* listener errors must not mask the request */ }
+    }
+  }
+
+  isRateLimited(): boolean {
+    return this.rateLimitedUntil > Date.now();
+  }
+
+  rateLimitRemainingMs(): number {
+    return Math.max(0, this.rateLimitedUntil - Date.now());
+  }
+
+  private setRateLimited(retryAfterMs: number): void {
+    this.rateLimitedUntil = Date.now() + retryAfterMs;
+    for (const l of this.rateLimitListeners) {
+      try { l(retryAfterMs); } catch { /* ignore */ }
+    }
+  }
+
   // ── Authentication ────────────────────────────────────
 
   // Public so blob upload/download helpers (which can't go through the JMAP
@@ -85,13 +289,28 @@ export class JMAPClient {
     return `Basic ${encoded}`;
   }
 
-  async connect(serverUrl: string, username: string, password: string): Promise<JMAPSession> {
-    // Normalise URL
+  /**
+   * Password login. When the server answers 402 "MFA code required" and no
+   * `totp` was supplied, throws `TotpRequiredError` so the UI can ask for a
+   * code. With a code, Stalwart 0.16+ no longer accepts the legacy
+   * `password$totp` Basic convention, so the structured login endpoint is used
+   * to obtain OAuth tokens (see `connectWithTotp`).
+   */
+  async connect(
+    serverUrl: string,
+    username: string,
+    password: string,
+    totp?: string,
+  ): Promise<JMAPSession> {
     const baseUrl = serverUrl.replace(/\/+$/, '');
+    if (totp) {
+      return this.connectWithTotp(baseUrl, username, password, totp);
+    }
     this.credentials = { serverUrl: baseUrl, username, password };
 
     this.session = this.rewriteSessionUrls(await this.fetchSession(baseUrl), baseUrl);
     this._accountId = this.resolveAccountId(this.session);
+    this.firstTouchGate.reset();
 
     const accountId = generateAccountId(username, baseUrl);
     await SecureStore.setItemAsync(
@@ -102,12 +321,41 @@ export class JMAPClient {
     return this.session;
   }
 
+  /**
+   * TOTP login through Stalwart's structured auth endpoint (`/api/auth` with a
+   * separate `mfaToken`, then `/auth/token` with PKCE). The resulting bundle is
+   * persisted as an OAuth account so the normal refresh path keeps it alive.
+   * Falls back to the legacy `password$totp` Basic convention when the server
+   * predates the structured endpoint (404).
+   */
+  private async connectWithTotp(
+    baseUrl: string,
+    username: string,
+    password: string,
+    totp: string,
+  ): Promise<JMAPSession> {
+    const { exchangePasswordForTokens, LoginEndpointMissingError } = await import('../lib/totp-login');
+    let tokens: OAuthTokens;
+    try {
+      tokens = await exchangePasswordForTokens(baseUrl, username, password, totp);
+    } catch (err) {
+      if (err instanceof LoginEndpointMissingError) {
+        // Pre-0.16 Stalwart: TOTP rides along in the Basic password.
+        return this.connect(baseUrl, username, `${password}$${totp}`);
+      }
+      throw err;
+    }
+    const { session } = await this.connectWithOAuth(baseUrl, tokens, username);
+    return session;
+  }
+
   async connectWithToken(serverUrl: string, accessToken: string): Promise<JMAPSession> {
     const baseUrl = serverUrl.replace(/\/+$/, '');
     this.credentials = { serverUrl: baseUrl, username: '', password: '', accessToken };
 
     this.session = this.rewriteSessionUrls(await this.fetchSession(baseUrl), baseUrl);
     this._accountId = this.resolveAccountId(this.session);
+    this.firstTouchGate.reset();
 
     return this.session;
   }
@@ -115,9 +363,12 @@ export class JMAPClient {
   // OAuth login via webmail handoff. The webmail did the OAuth dance against
   // Stalwart and handed us a complete token bundle. We persist the bundle
   // so subsequent launches can refresh without prompting the user again.
+  // `preferredUsername` (the address the user typed) wins over the session's
+  // `username`, which for OIDC logins may be a bare `preferred_username`.
   async connectWithOAuth(
     serverUrl: string,
     tokens: OAuthTokens,
+    preferredUsername?: string,
   ): Promise<{ session: JMAPSession; username: string; accountId: string }> {
     const baseUrl = serverUrl.replace(/\/+$/, '');
     this.credentials = {
@@ -133,11 +384,13 @@ export class JMAPClient {
 
     this.session = this.rewriteSessionUrls(await this.fetchSession(baseUrl), baseUrl);
     this._accountId = this.resolveAccountId(this.session);
+    this.firstTouchGate.reset();
 
     // The JMAP session document carries the authenticated user's identifier
     // — use it as the username so per-account storage keys are stable across
     // restarts and OAuth re-logins.
-    const username = this.session.username || tokens.accessToken.slice(0, 8);
+    const username =
+      preferredUsername || this.session.username || tokens.accessToken.slice(0, 8);
     this.credentials.username = username;
 
     const accountId = generateAccountId(username, baseUrl);
@@ -170,6 +423,9 @@ export class JMAPClient {
       credentialsKey(accountId),
       JSON.stringify(this.credentials),
     );
+    for (const l of this.tokenRefreshListeners) {
+      try { l(); } catch { /* ignore */ }
+    }
   }
 
   private currentOAuthTokens(): OAuthTokens | null {
@@ -191,8 +447,10 @@ export class JMAPClient {
   }
 
   // Proactive refresh: when the access token is about to expire, swap it for
-  // a fresh one. Quiet no-op for password credentials.
-  private async ensureFreshToken(): Promise<void> {
+  // a fresh one. Quiet no-op for password credentials. Public so long-lived
+  // consumers of `authHeader` (SSE stream, file downloads) can make sure the
+  // header they capture is not about to expire.
+  async ensureFreshToken(): Promise<void> {
     const tokens = this.currentOAuthTokens();
     if (!tokens) return;
     if (tokens.expiresAt == null) return;
@@ -207,17 +465,41 @@ export class JMAPClient {
   }
 
   // Reactive refresh after a 401. Returns true if a fresh token was obtained
-  // so the caller can retry the original request.
-  private async forceRefreshToken(): Promise<boolean> {
+  // so the caller can retry the original request. A transient token-endpoint
+  // failure (offline, 5xx, 429) is rethrown as a NetworkError so callers keep
+  // the account instead of evicting it (webmail 1.7.6 "keep the session when
+  // the auth server is briefly unreachable").
+  async forceRefreshToken(): Promise<boolean> {
     const tokens = this.currentOAuthTokens();
     if (!tokens) return false;
     try {
       const next = await refreshOAuthAccessToken(tokens);
       await this.persistRefreshedTokens(next);
       return true;
-    } catch {
+    } catch (err) {
+      if (err instanceof TransientRefreshError) {
+        throw new NetworkError(err.message);
+      }
       return false;
     }
+  }
+
+  /**
+   * After a successful password change the stored credential must follow,
+   * otherwise the next request gets a 401 and the next launch evicts the
+   * account. No-op for bearer sessions.
+   */
+  async updatePassword(newPassword: string): Promise<void> {
+    if (!this.credentials || this.credentials.accessToken) return;
+    this.credentials = { ...this.credentials, password: newPassword };
+    const accountId = generateAccountId(
+      this.credentials.username,
+      this.credentials.serverUrl,
+    );
+    await SecureStore.setItemAsync(
+      credentialsKey(accountId),
+      JSON.stringify(this.credentials),
+    );
   }
 
   // Legacy single-slot restore - kept for backward-compat tests. New code
@@ -234,6 +516,7 @@ export class JMAPClient {
         creds.serverUrl,
       );
       this._accountId = this.resolveAccountId(this.session);
+      this.firstTouchGate.reset();
       return true;
     } catch {
       await this.logout();
@@ -257,6 +540,7 @@ export class JMAPClient {
     // unrecoverable (AuthenticationError) from transient (NetworkError) and
     // avoid clearing credentials when the server is just unreachable.
     this.credentials = creds;
+    this.firstTouchGate.reset();
     try {
       this.session = this.rewriteSessionUrls(
         await this.fetchSession(creds.serverUrl),
@@ -269,6 +553,7 @@ export class JMAPClient {
       this.session = null;
       this._accountId = null;
       if (err instanceof AuthenticationError) throw err;
+      if (err instanceof NetworkError) throw err;
       // Anything else is treated as transport-level. Wrapping rather than
       // rethrowing the raw fetch error gives callers a single check.
       throw new NetworkError(
@@ -277,6 +562,25 @@ export class JMAPClient {
     }
     this._accountId = this.resolveAccountId(this.session);
     return true;
+  }
+
+  /**
+   * Snapshot of the live connection so a failed "add account" / switch can put
+   * the previous account back without a network round-trip.
+   */
+  snapshot(): ClientSnapshot {
+    return {
+      session: this.session,
+      credentials: this.credentials,
+      accountId: this._accountId,
+    };
+  }
+
+  restoreSnapshot(snap: ClientSnapshot): void {
+    this.session = snap.session;
+    this.credentials = snap.credentials;
+    this._accountId = snap.accountId;
+    this.firstTouchGate.reset();
   }
 
   async clearAccountCredentials(accountId: string): Promise<void> {
@@ -311,20 +615,17 @@ export class JMAPClient {
   // Rewrite session URLs to share the origin the client connected with.
   // JMAP servers often self-report localhost/container-internal hostnames in
   // apiUrl/downloadUrl/etc. that are unreachable from mobile clients (e.g.
-  // the Android emulator can't resolve the host's "localhost").
+  // the Android emulator can't resolve the host's "localhost"), and some
+  // deployments advertise relative URLs (`/jmap/`) which `fetch` can't use.
   //
   // Splits via plain string indexing rather than `new URL()` because RN's
   // URL polyfill mutates inputs (appends trailing slashes, normalises
   // characters) and would corrupt the RFC 6570 templates {accountId}/{blobId}
   // before the caller has a chance to substitute values into them.
   private rewriteSessionUrls(session: JMAPSession, serverUrl: string): JMAPSession {
-    const serverOrigin = this.extractOrigin(serverUrl);
-    const rewrite = (url: string | undefined): string | undefined => {
-      if (!url) return url;
-      const origin = this.extractOrigin(url);
-      if (!origin || !serverOrigin || origin === serverOrigin) return url;
-      return serverOrigin + url.slice(origin.length);
-    };
+    const serverOrigin = extractOrigin(serverUrl);
+    const rewrite = (url: string | undefined): string | undefined =>
+      rewriteSessionUrl(url, serverOrigin);
     return {
       ...session,
       apiUrl: rewrite(session.apiUrl) ?? session.apiUrl,
@@ -334,17 +635,14 @@ export class JMAPClient {
     };
   }
 
-  private extractOrigin(url: string): string | null {
-    const m = url.match(/^(https?:\/\/[^/?#]+)/i);
-    return m ? m[1] : null;
-  }
-
   // Reset in-memory state without touching persisted credentials (used on
   // account switch so the active account's stored creds remain available).
   reset(): void {
     this.session = null;
     this.credentials = null;
     this._accountId = null;
+    this.firstTouchGate.reset();
+    this.rateLimitedUntil = 0;
   }
 
   async logout(): Promise<void> {
@@ -358,31 +656,153 @@ export class JMAPClient {
     }
   }
 
+  // ── Transport ─────────────────────────────────────────
+
+  /**
+   * `secureFetch` with a deadline on the response headers. The abort reason is
+   * tracked separately so a caller-supplied signal (cancelled upload) can be
+   * told apart from "we gave up".
+   */
+  private async timedFetch(
+    url: string,
+    init: RequestInit | undefined,
+    timeoutMs: number,
+  ): Promise<Response> {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const external = init?.signal ?? undefined;
+    if (controller && external) {
+      if (external.aborted) controller.abort();
+      else external.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller?.abort();
+    }, timeoutMs);
+    try {
+      return await secureFetch(url, controller ? { ...init, signal: controller.signal } : init);
+    } catch (error) {
+      if (timedOut) throw new RequestTimeoutError(timeoutMs);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Authenticated fetch shared by the API, session and blob paths: proactive
+   * token refresh, deadline, one transient retry for idempotent requests,
+   * reactive refresh on 401, rate-limit bookkeeping on 429. Returns the
+   * response for the caller to interpret; throws `NetworkError` /
+   * `RequestTimeoutError` / `RateLimitError`.
+   */
+  async authenticatedFetch(
+    url: string,
+    init?: RequestInit,
+    opts?: { timeoutMs?: number; idempotent?: boolean },
+  ): Promise<Response> {
+    if (this.isRateLimited()) {
+      throw new RateLimitError(this.rateLimitRemainingMs());
+    }
+    const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    const idempotent = opts?.idempotent ?? true;
+
+    await this.ensureFreshToken();
+    const withAuth = (): RequestInit => ({
+      ...init,
+      headers: { ...(init?.headers as Record<string, string> | undefined), Authorization: this.authHeader },
+    });
+
+    let response: Response;
+    try {
+      response = await this.timedFetch(url, withAuth(), timeoutMs);
+    } catch (error) {
+      if (error instanceof RequestTimeoutError) throw error;
+      if (!idempotent || (error as Error)?.name === 'AbortError') {
+        throw toNetworkError(error);
+      }
+      // Transient proxy/connection blip: one retry after a short pause.
+      await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_DELAY_MS));
+      try {
+        response = await this.timedFetch(url, withAuth(), timeoutMs);
+      } catch (retryError) {
+        if (retryError instanceof RequestTimeoutError) throw retryError;
+        throw toNetworkError(retryError);
+      }
+    }
+
+    if (response.status === 401 && (await this.forceRefreshToken())) {
+      try {
+        response = await this.timedFetch(url, withAuth(), timeoutMs);
+      } catch (error) {
+        if (error instanceof RequestTimeoutError) throw error;
+        throw toNetworkError(error);
+      }
+    }
+
+    if (response.status === 429) {
+      const retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'));
+      this.setRateLimited(retryAfterMs);
+      throw new RateLimitError(retryAfterMs);
+    }
+
+    return response;
+  }
+
   // ── Session Discovery ─────────────────────────────────
 
   private async fetchSession(baseUrl: string): Promise<JMAPSession> {
     const url = `${baseUrl}/.well-known/jmap`;
-    await this.ensureFreshToken();
-    const doFetch = () =>
-      secureFetch(url, {
-        headers: {
-          Authorization: this.authHeader,
-          Accept: 'application/json',
-        },
-      });
-    let response = await doFetch();
-    if (response.status === 401 && (await this.forceRefreshToken())) {
-      response = await doFetch();
-    }
+    let response = await this.authenticatedFetch(url, {
+      headers: { Accept: 'application/json' },
+    });
 
     if (response.status === 401) {
       throw new AuthenticationError('Invalid credentials');
+    }
+    if (response.status === 402) {
+      // Stalwart answers 402 with a problem+json whose title names the
+      // missing factor ("TOTP code required" / "MFA code required").
+      let title = '';
+      try {
+        const body = (await response.json()) as { title?: string; detail?: string };
+        title = `${body?.title ?? ''} ${body?.detail ?? ''}`.toLowerCase();
+      } catch {
+        // fall through - treat any 402 as an MFA challenge
+      }
+      if (!title || title.includes('totp') || title.includes('mfa') || title.includes('factor')) {
+        throw new TotpRequiredError();
+      }
     }
     if (!response.ok) {
       throw new Error(`Session discovery failed: ${response.status} ${response.statusText}`);
     }
 
-    return response.json();
+    let session = (await response.json()) as JMAPSession;
+
+    // Stalwart 307-redirects /.well-known/jmap to /jmap/session. iOS
+    // NSURLSession (and some auth proxies) drop the Authorization header on
+    // the redirect, which yields a 200 with an empty session. Refetch the
+    // final URL with the header explicitly.
+    const redirectedEmpty =
+      (response as { redirected?: boolean }).redirected &&
+      (!session?.accounts || Object.keys(session.accounts).length === 0) &&
+      !session?.username;
+    if (redirectedEmpty && (response as { url?: string }).url) {
+      response = await this.authenticatedFetch((response as { url: string }).url, {
+        headers: { Accept: 'application/json' },
+      });
+      if (response.status === 401) throw new AuthenticationError('Invalid credentials');
+      if (!response.ok) {
+        throw new Error(`Session discovery failed: ${response.status} ${response.statusText}`);
+      }
+      session = (await response.json()) as JMAPSession;
+    }
+
+    if (!fetchSessionDescribes(session)) {
+      throw new Error('Session discovery failed: response is not a JMAP session');
+    }
+    return session;
   }
 
   private resolveAccountId(session: JMAPSession): string {
@@ -400,6 +820,34 @@ export class JMAPClient {
     throw new Error('No account found in JMAP session');
   }
 
+  /**
+   * Re-read the session document (capabilities, shared accounts,
+   * eventSourceUrl) without disturbing credentials. Used by the keep-alive
+   * and after a basic-auth 401 that may just be a stale session.
+   */
+  async refreshSession(): Promise<JMAPSession> {
+    if (!this.credentials) throw new Error('No credentials');
+    const baseUrl = this.credentials.serverUrl;
+    this.session = this.rewriteSessionUrls(await this.fetchSession(baseUrl), baseUrl);
+    this._accountId = this.resolveAccountId(this.session);
+    return this.session;
+  }
+
+  /**
+   * Cheap liveness probe (`Core/echo`). Resolves true when the server answered,
+   * false on transport failure. Used by the foreground keep-alive.
+   */
+  async ping(): Promise<boolean> {
+    if (!this.session) return false;
+    try {
+      await this.request([['Core/echo', { ping: Date.now() }, 'ping']], [CAPABILITIES.CORE]);
+      return true;
+    } catch (err) {
+      if (err instanceof AuthenticationError) throw err;
+      return false;
+    }
+  }
+
   // ── API Request ───────────────────────────────────────
 
   async request(
@@ -412,38 +860,54 @@ export class JMAPClient {
       using: using ?? [CAPABILITIES.CORE, CAPABILITIES.MAIL],
       methodCalls,
     };
+    const serialized = JSON.stringify(body);
+    const apiUrl = this.session.apiUrl;
+    const idempotent = !hasNonIdempotentMethod(methodCalls);
 
-    await this.ensureFreshToken();
-    const doFetch = () =>
-      secureFetch(this.session!.apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: this.authHeader,
-        },
-        body: JSON.stringify(body),
-      });
+    for (let attempt = 0; ; attempt++) {
+      const response = await this.firstTouchGate.run(methodCalls, () =>
+        this.authenticatedFetch(
+          apiUrl,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: serialized,
+          },
+          { idempotent },
+        ),
+      );
 
-    let response = await doFetch();
-    if (response.status === 401 && (await this.forceRefreshToken())) {
-      response = await doFetch();
+      if (response.status === 401) {
+        const err = new AuthenticationError('Session expired');
+        this.notifyAuthFailure(err);
+        throw err;
+      }
+
+      const responseText = await readBodyText(response);
+
+      if (!response.ok) {
+        // Stalwart caps parallel API requests per user (maxConcurrentRequests,
+        // default 4). One push event fans out into several refreshes at once,
+        // so the ceiling is reached in ordinary use. The refusal comes before
+        // any method runs, so back off briefly and replay (#780).
+        if (
+          attempt < CONCURRENT_REQUEST_RETRY_DELAYS_MS.length &&
+          isConcurrentRequestRefusal(response.status, responseText)
+        ) {
+          const base = CONCURRENT_REQUEST_RETRY_DELAYS_MS[attempt];
+          await new Promise((r) => setTimeout(r, base + Math.random() * base));
+          continue;
+        }
+        const detail = responseText ? ` - ${responseText.substring(0, 200)}` : '';
+        throw new Error(`JMAP request failed: ${response.status}${detail}`);
+      }
+
+      try {
+        return JSON.parse(responseText) as JMAPResponseBody;
+      } catch {
+        throw new Error('Invalid JSON response from server');
+      }
     }
-
-    if (response.status === 401) {
-      throw new AuthenticationError('Session expired');
-    }
-
-    if (response.status === 429) {
-      const retryAfter = response.headers.get('Retry-After');
-      const ms = retryAfter ? parseInt(retryAfter, 10) * 1000 : 5000;
-      throw new RateLimitError(ms);
-    }
-
-    if (!response.ok) {
-      throw new Error(`JMAP request failed: ${response.status}`);
-    }
-
-    return response.json();
   }
 
   // ── Capability Check ──────────────────────────────────
@@ -452,18 +916,53 @@ export class JMAPClient {
     return Boolean(this.session?.capabilities?.[urn]);
   }
 
-  getMaxObjectsInGet(): number {
-    const core = this.session?.capabilities?.[CAPABILITIES.CORE] as
-      | { maxObjectsInGet?: number }
+  /**
+   * True when `urn` is advertised for the account (RFC 8620 §2
+   * `accountCapabilities`) or, as a fallback, at session level. Stalwart puts
+   * its extension capabilities (`urn:stalwart:jmap`, filenode, …) only under
+   * the account, so a session-level check alone is wrong for those.
+   */
+  hasAccountCapability(urn: string, accountId?: string): boolean {
+    const id = accountId ?? this._accountId;
+    if (!id) return this.hasCapability(urn);
+    const account = this.session?.accounts?.[id];
+    if (account?.accountCapabilities && urn in account.accountCapabilities) return true;
+    return this.hasCapability(urn);
+  }
+
+  private get coreCapability():
+    | { maxObjectsInGet?: number; maxObjectsInSet?: number; maxCallsInRequest?: number; maxSizeUpload?: number; maxSizeRequest?: number }
+    | undefined {
+    return this.session?.capabilities?.[CAPABILITIES.CORE] as
+      | { maxObjectsInGet?: number; maxObjectsInSet?: number; maxCallsInRequest?: number; maxSizeUpload?: number; maxSizeRequest?: number }
       | undefined;
-    return core?.maxObjectsInGet || 500;
+  }
+
+  getMaxObjectsInGet(): number {
+    return this.coreCapability?.maxObjectsInGet || 500;
+  }
+
+  getMaxObjectsInSet(): number {
+    return this.coreCapability?.maxObjectsInSet || 500;
   }
 
   getMaxCallsInRequest(): number {
-    const core = this.session?.capabilities?.[CAPABILITIES.CORE] as
-      | { maxCallsInRequest?: number }
+    return this.coreCapability?.maxCallsInRequest || 16;
+  }
+
+  /** Server-advertised upload ceiling in bytes (0 = unknown / unlimited). */
+  getMaxSizeUpload(): number {
+    const max = this.coreCapability?.maxSizeUpload;
+    return typeof max === 'number' && max > 0 ? max : 0;
+  }
+
+  /** Per-message attachment total ceiling in bytes (0 = unknown). */
+  getMaxSizeAttachmentsPerEmail(): number {
+    const mail = this.session?.capabilities?.[CAPABILITIES.MAIL] as
+      | { maxSizeAttachmentsPerEmail?: number }
       | undefined;
-    return core?.maxCallsInRequest || 16;
+    const max = mail?.maxSizeAttachmentsPerEmail;
+    return typeof max === 'number' && max > 0 ? max : 0;
   }
 
   // ── Shared / group accounts ───────────────────────────
@@ -494,6 +993,16 @@ export class JMAPClient {
 
   getAccountName(accountId: string): string | undefined {
     return this.session?.accounts?.[accountId]?.name;
+  }
+
+  /**
+   * Primary account for a capability (RFC 8620 `primaryAccounts`), falling
+   * back to the mail primary. Contacts/calendars can live in a different
+   * account than mail on some servers.
+   */
+  getPrimaryAccountId(capability: string): string {
+    const id = this.session?.primaryAccounts?.[capability];
+    return id || this.accountId;
   }
 
   // ── Scheduled send (FUTURERELEASE) ────────────────────
@@ -572,16 +1081,66 @@ export class JMAPClient {
     accountId?: string,
   ): Promise<ArrayBuffer> {
     const url = this.getBlobDownloadUrl(blobId, name, type, accountId);
-    await this.ensureFreshToken();
-    const doFetch = () => secureFetch(url, { headers: { Authorization: this.authHeader } });
-    let response = await doFetch();
-    if (response.status === 401 && (await this.forceRefreshToken())) {
-      response = await doFetch();
+    const response = await this.authenticatedFetch(url, undefined, {
+      timeoutMs: BLOB_TIMEOUT_MS,
+    });
+    if (response.status === 401) {
+      const err = new AuthenticationError('Session expired');
+      this.notifyAuthFailure(err);
+      throw err;
     }
-    if (response.status === 401) throw new AuthenticationError('Session expired');
     if (!response.ok) throw new Error(`Failed to fetch blob: ${response.status}`);
     return response.arrayBuffer();
   }
+}
+
+export interface ClientSnapshot {
+  session: JMAPSession | null;
+  credentials: StoredCredentials | null;
+  accountId: string | null;
+}
+
+// ── URL helpers ──────────────────────────────────────────
+
+export function extractOrigin(url: string): string | null {
+  const m = url.match(/^(https?:\/\/[^/?#]+)/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Rebase a session URL onto the origin the client connected with. Relative
+ * URLs (`/jmap/`) get the origin prefixed; absolute ones have their origin
+ * swapped. Pure string work so `{accountId}`/`{blobId}` templates survive.
+ */
+export function rewriteSessionUrl(
+  url: string | undefined,
+  serverOrigin: string | null,
+): string | undefined {
+  if (!url || !serverOrigin) return url;
+  const origin = extractOrigin(url);
+  if (!origin) {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return url; // non-http scheme: leave it
+    return serverOrigin + (url.startsWith('/') ? url : '/' + url);
+  }
+  if (origin === serverOrigin) return url;
+  return serverOrigin + url.slice(origin.length);
+}
+
+async function readBodyText(response: Response): Promise<string> {
+  try {
+    if (typeof response.text === 'function') return await response.text();
+    if (typeof response.json === 'function') return JSON.stringify(await response.json());
+  } catch {
+    // fall through
+  }
+  return '';
+}
+
+function toNetworkError(error: unknown): NetworkError {
+  if (error instanceof NetworkError) return error;
+  return new NetworkError(
+    error instanceof Error && error.message ? error.message : 'Network request failed',
+  );
 }
 
 // ── Error Classes ─────────────────────────────────────────
@@ -593,12 +1152,29 @@ export class AuthenticationError extends Error {
   }
 }
 
+// The server wants a second factor before it will hand out a session.
+export class TotpRequiredError extends AuthenticationError {
+  constructor() {
+    super('TOTP_REQUIRED');
+    this.name = 'TotpRequiredError';
+  }
+}
+
 // Server unreachable / transient transport failure. Callers should keep
 // stored credentials and surface an offline state rather than logging out.
 export class NetworkError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'NetworkError';
+  }
+}
+
+// No response headers within the deadline. The request may have reached the
+// server (a send may have gone out), so callers must not blindly retry.
+export class RequestTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    this.name = 'RequestTimeoutError';
   }
 }
 

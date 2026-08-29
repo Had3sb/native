@@ -1,19 +1,30 @@
 // Classify an error thrown by a JMAP call as a *transient* connectivity
-// failure (server unreachable, offline, session not yet up) versus a
+// failure (server unreachable, offline, timed out, rate limited) versus a
 // *permanent* one (the server received the request and rejected it, e.g. a
-// 4xx). The offline outbox uses this to decide whether to keep an operation
-// queued for a later retry or to give up on it.
+// method error or a 4xx). The offline outbox uses this to decide whether to
+// keep an operation queued for a later retry or to give up on it.
 //
-// We err on the side of "transient" only for signals we recognise as
-// connectivity-related; anything else (including bare 4xx/5xx responses) is
-// treated as permanent so a poison operation can't wedge the queue forever.
+// Classification is by error class first. A bare `TypeError` used to count as
+// transient because RN's fetch throws `TypeError("Network request failed")`,
+// but the JMAP client now wraps transport failures in `NetworkError`; a
+// TypeError reaching here is far more likely a programming error (e.g. an
+// unchecked method-error response) and must not wedge the queue forever.
+// `AuthenticationError` is terminal: the credentials are gone, retrying won't
+// help until the user signs in again.
 
 import { useNetworkStore } from '../stores/network-store';
 
 const TRANSIENT_NAMES = new Set([
-  'NetworkError',     // jmap-client transport wrapper
-  'AbortError',       // request aborted (e.g. app backgrounded)
-  'TypeError',        // RN fetch throws TypeError("Network request failed")
+  'NetworkError',        // jmap-client transport wrapper
+  'RequestTimeoutError', // no response headers within the deadline
+  'RateLimitError',      // 429 - retry after the window
+  'AbortError',          // request aborted (e.g. app backgrounded)
+]);
+
+const TERMINAL_NAMES = new Set([
+  'AuthenticationError',
+  'TotpRequiredError',
+  'JMAPMethodError',
 ]);
 
 const TRANSIENT_MESSAGE_HINTS = [
@@ -21,19 +32,29 @@ const TRANSIENT_MESSAGE_HINTS = [
   'network error',
   'failed to fetch',
   'not connected',
-  'session expired',   // token refresh will happen on the next live request
   'timeout',
   'timed out',
   'connection',
 ];
 
 export function isTransientNetworkError(err: unknown): boolean {
-  // If the device itself reports offline, treat any failure as transient.
+  if (err instanceof Error && TERMINAL_NAMES.has(err.name)) return false;
+
+  // If the device itself reports offline, treat any other failure as transient.
   if (!useNetworkStore.getState().online) return true;
 
   if (!(err instanceof Error)) return false;
   if (TRANSIENT_NAMES.has(err.name)) return true;
 
+  // A raw fetch TypeError only counts when its message says "network".
   const msg = err.message?.toLowerCase() ?? '';
+  if (err.name === 'TypeError') {
+    return msg.includes('network') || msg.includes('failed to fetch') || msg.includes('securefetch failed');
+  }
   return TRANSIENT_MESSAGE_HINTS.some((hint) => msg.includes(hint));
+}
+
+/** True when the failure means the session/credentials are unusable. */
+export function isAuthError(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'AuthenticationError' || err.name === 'TotpRequiredError');
 }

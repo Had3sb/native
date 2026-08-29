@@ -42,6 +42,7 @@ function mockFetch(responses: Array<{ status: number; json?: any; headers?: Reco
         get: (name: string) => resp.headers?.[name] ?? null,
       },
       json: async () => resp.json,
+      text: async () => (resp.json === undefined ? '' : JSON.stringify(resp.json)),
     };
   });
 }
