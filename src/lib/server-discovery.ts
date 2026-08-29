@@ -12,6 +12,24 @@ import { secureFetch } from './client-cert';
 export const DISCOVERY_TIMEOUT_MS = 2500;
 
 const SCHEME_RE = /^([a-z][a-z0-9+.-]*):\/\//i;
+
+/** Loopback, the Android emulator's host alias, RFC 1918 ranges and `.local`. */
+export function isLocalHost(url: string): boolean {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#:]+)/i.exec(url);
+  const host = (m ? m[1] : '').toLowerCase();
+  if (!host) return false;
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '10.0.2.2') return true;
+  if (host.endsWith('.local') || host.endsWith('.localhost')) return true;
+  const ip = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
+  if (!ip) return false;
+  const [a, b] = [Number(ip[1]), Number(ip[2])];
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+/** True when a normalised server URL uses plain http. */
+export function isCleartextUrl(url: string): boolean {
+  return /^http:\/\//i.test(url);
+}
 const EMAIL_RE = /^[^\s@]+@([^\s@]+\.[^\s@]+)$/;
 
 /**
@@ -31,6 +49,12 @@ export function normalizeServerUrl(input: string): string | null {
   } else {
     value = `https://${value}`;
   }
+
+  // Basic credentials travel in every request. Cleartext is only acceptable
+  // for a server on the developer's own machine / LAN; on a public host it
+  // would fail opaquely on Android anyway (no cleartext traffic allowed) and
+  // leak the password on iOS.
+  if (/^http:\/\//i.test(value) && !isLocalHost(value)) return null;
 
   // Someone pasting the endpoint they found in the webmail's settings gets the
   // same result as someone typing the address they use in the browser.

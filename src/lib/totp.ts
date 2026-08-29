@@ -46,9 +46,13 @@ export interface TotpEnrolment {
   url: string;
 }
 
-export function generateTotpEnrolment(accountLabel: string): TotpEnrolment {
+export function generateTotpEnrolment(accountLabel: string, issuerOverride?: string): TotpEnrolment {
   const secret = base32Encode(randomBytes(SECRET_BYTES));
-  const issuer = 'Stalwart';
+  // The issuer is what the authenticator app shows above the code; the
+  // account's mail domain identifies the service far better than the
+  // server software's name.
+  const at = accountLabel.lastIndexOf('@');
+  const issuer = issuerOverride || (at > 0 ? accountLabel.slice(at + 1) : 'Bulwark');
   const label = accountLabel || 'account';
   const params = new URLSearchParams({
     secret,
