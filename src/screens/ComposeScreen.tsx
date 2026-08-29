@@ -540,7 +540,13 @@ export default function ComposeScreen({ route, navigation }: Props) {
           ? `<div>${escapeHtml(prefillBody).replace(/\r?\n/g, '<br>')}</div><p><br></p>`
           : '<p><br></p>';
       }
-      return buildInitialHtml(mode, {
+      // Quick reply "More options" hands the typed text over as prefillBody;
+      // it goes above the quote.
+      const typed = prefillBody
+        ? `<div>${escapeHtml(prefillBody).replace(/?
+/g, '<br>')}</div>`
+        : '';
+      return typed + buildInitialHtml(mode, {
         from: { name: replyTo.from.name, email: replyTo.from.email },
         to: replyTo.to,
         cc: replyTo.cc,

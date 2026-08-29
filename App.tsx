@@ -11,6 +11,7 @@ import { startLiveUpdates, type LiveUpdatesHandle } from './src/api/push-stream'
 import { jmapClient } from './src/api/jmap-client';
 import type { StateChange } from './src/api/types';
 import { dispatchStateChange } from './src/lib/state-change-bus';
+import { sweepStaleExportFiles } from './src/lib/email-export';
 import { useFilterStore } from './src/stores/filter-store';
 import { useVacationStore } from './src/stores/vacation-store';
 import {
@@ -308,6 +309,9 @@ export default function App() {
   const haveLiveSession = useAuthStore((s) => s.session != null);
   React.useEffect(() => {
     void useOfflineCacheStore.getState().hydrate();
+    // Attachments shared out of the app linger in the cache dir; drop the
+    // ones older than a day so a granted content URI can't read them forever.
+    void sweepStaleExportFiles();
   }, []);
   React.useEffect(() => {
     if (!offlineCacheEnabled || !haveLiveSession) return;
