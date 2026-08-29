@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -55,19 +56,28 @@ import {
   applySharedCalendarColors,
   buildEventDayIndex,
   eventsOnDayFromIndex,
+  getPrimaryCalendarId,
   pickUnusedCalendarColor,
   sharedCalendarColorKey,
   type EventDayIndex,
   type TimeFormat,
 } from '../lib/calendar-utils';
 import { buildReplyTo } from '../lib/calendar-invitation';
+import {
+  buildAllScopeUpdates,
+  buildFutureSeriesData,
+  buildRecurrenceOverridePatch,
+  isRecurringSeriesMember,
+  truncateRecurrenceRules,
+} from '../lib/recurrence-overrides';
 import { generateBirthdayEvents, createBirthdayCalendar, BIRTHDAY_CALENDAR_ID } from '../lib/birthday-calendar';
 import { useContactsStore } from '../stores/contacts-store';
-import type { Calendar, CalendarEvent } from '../api/types';
+import { useLocaleStore } from '../stores/locale-store';
+import type { Calendar, CalendarEvent, RecurrenceRule } from '../api/types';
 
 type ViewMode = 'month' | 'week' | 'agenda';
 type PendingAction =
-  | { kind: 'edit'; event: CalendarEvent }
+  | { kind: 'edit'; event: CalendarEvent; updates: Partial<CalendarEvent>; calendarId: string }
   | { kind: 'delete'; event: CalendarEvent }
   | null;
 
@@ -115,6 +125,7 @@ function headerTitle(
 export default function CalendarScreen() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const calendarDefaultView = useSettingsStore((s) => s.calendarDefaultView);
   const calendarFirstDayOfWeek = useSettingsStore((s) => s.calendarFirstDayOfWeek);
   const calendarShowWeekNumbers = useSettingsStore((s) => s.calendarShowWeekNumbers);
@@ -154,6 +165,7 @@ export default function CalendarScreen() {
   const createEvent = useCalendarStore((s) => s.createEvent);
   const updateEvent = useCalendarStore((s) => s.updateEvent);
   const deleteEvent = useCalendarStore((s) => s.deleteEvent);
+  const getMasterEvent = useCalendarStore((s) => s.getMasterEvent);
   const rsvpEvent = useCalendarStore((s) => s.rsvpEvent);
   const importEvents = useCalendarStore((s) => s.importEvents);
   const tasks = useCalendarStore((s) => s.tasks);
@@ -315,24 +327,13 @@ export default function CalendarScreen() {
     [],
   );
 
-  // A recurring series member is a master (has recurrenceRules) or an expanded
-  // occurrence (has recurrenceId) — those get the this/all scope dialog. Note:
-  // we must NOT key off originalId here, since shared/group events now carry it
-  // for id-namespacing even when they aren't recurring.
-  const isRecurringSeriesMember = React.useCallback(
-    (event: CalendarEvent) => !!event.recurrenceRules?.length || !!event.recurrenceId,
-    [],
-  );
-
+  // Editing a series member opens the editor directly; the this/future/all
+  // scope question is asked on save (like webmail), once we know the edits.
   const handleEditFromDetail = React.useCallback((event: CalendarEvent) => {
     if (isReadOnlyEvent(event)) { setDetailEvent(null); return; }
     setDetailEvent(null);
-    if (isRecurringSeriesMember(event)) {
-      setPendingAction({ kind: 'edit', event });
-    } else {
-      openEditDirect(event);
-    }
-  }, [openEditDirect, isReadOnlyEvent, isRecurringSeriesMember]);
+    openEditDirect(event);
+  }, [openEditDirect, isReadOnlyEvent]);
 
   const handleDeleteFromDetail = React.useCallback((event: CalendarEvent) => {
     if (isReadOnlyEvent(event)) { setDetailEvent(null); return; }
@@ -342,30 +343,130 @@ export default function CalendarScreen() {
     } else {
       void deleteEvent(event.id);
     }
-  }, [deleteEvent, isReadOnlyEvent, isRecurringSeriesMember]);
+  }, [deleteEvent, isReadOnlyEvent]);
+
+  // "This and following": end the master at the occurrence and hand back the
+  // master plus its untouched rules so the caller can start a new series (or
+  // roll back). Port of webmail's truncateRecurrenceAtEvent.
+  const truncateRecurrenceAtEvent = React.useCallback(
+    async (event: CalendarEvent) => {
+      const master = await getMasterEvent(event);
+      if (!master) return null;
+      const originalRules = master.recurrenceRules
+        ? (JSON.parse(JSON.stringify(master.recurrenceRules)) as RecurrenceRule[])
+        : null;
+      await updateEvent(master.id, {
+        recurrenceRules: truncateRecurrenceRules(master.recurrenceRules, event),
+      });
+      return { master, originalRules };
+    },
+    [getMasterEvent, updateEvent],
+  );
 
   const handleScopeSelect = React.useCallback(
     async (scope: RecurrenceEditScope) => {
       const action = pendingAction;
       setPendingAction(null);
       if (!action) return;
-      // For the first pass, treat all scopes as "all" - proper override
-      // handling lives in the store's update/delete path against originalId.
-      // TODO: implement "this only" via recurrenceOverrides write, and
-      // "this and following" via excludedRecurrenceRules + new master.
-      if (action.kind === 'edit') {
-        openEditDirect(action.event);
-      } else {
-        await deleteEvent(action.event.id);
+      const { event } = action;
+      try {
+        if (action.kind === 'edit') {
+          const { updates } = action;
+          switch (scope) {
+            case 'this': {
+              if (event.recurrenceId) {
+                // Client-side expanded occurrence: write a one-shot override
+                // on the master instead of touching the series.
+                await updateEvent(event.id, buildRecurrenceOverridePatch(updates, event.recurrenceId));
+              } else {
+                await updateEvent(event.id, updates);
+              }
+              break;
+            }
+            case 'this_and_future': {
+              const result = await truncateRecurrenceAtEvent(event);
+              if (!result) throw new Error('Master event not found');
+              const { master, originalRules } = result;
+              const newEventData = buildFutureSeriesData(master, originalRules, event, updates);
+              delete newEventData.calendarIds;
+              const targetCalendarId =
+                action.calendarId || getPrimaryCalendarId(master) || '';
+              try {
+                await createEvent(newEventData, targetCalendarId);
+              } catch (createError) {
+                // Roll back the truncation so the series isn't left cut short.
+                try {
+                  await updateEvent(master.id, { recurrenceRules: originalRules ?? [] });
+                } catch {
+                  // The rollback failing is reported through the original error.
+                }
+                throw createError;
+              }
+              break;
+            }
+            case 'all': {
+              const master = await getMasterEvent(event);
+              if (!master) throw new Error('Master event not found');
+              await updateEvent(master.id, buildAllScopeUpdates(updates, event, master));
+              break;
+            }
+          }
+        } else {
+          switch (scope) {
+            case 'this': {
+              if (event.recurrenceId) {
+                await updateEvent(event.id, {
+                  [`recurrenceOverrides/${event.recurrenceId}`]: { excluded: true },
+                });
+              } else {
+                await deleteEvent(event.id);
+              }
+              break;
+            }
+            case 'this_and_future': {
+              const result = await truncateRecurrenceAtEvent(event);
+              if (!result) throw new Error('Master event not found');
+              break;
+            }
+            case 'all': {
+              const master = await getMasterEvent(event);
+              if (!master) throw new Error('Master event not found');
+              await deleteEvent(master.id);
+              break;
+            }
+          }
+        }
+      } catch (err) {
+        Alert.alert(
+          t('calendar.notifications.event_error', 'Something went wrong'),
+          err instanceof Error ? err.message : undefined,
+        );
+      }
+      try {
+        await refresh();
+      } catch {
+        // Best effort — the next navigation refetches anyway.
       }
     },
-    [pendingAction, openEditDirect, deleteEvent],
+    [pendingAction, updateEvent, deleteEvent, createEvent, getMasterEvent, truncateRecurrenceAtEvent, refresh, t],
   );
 
   const handleSave = React.useCallback(
     async (data: Partial<CalendarEvent>, calendarId: string) => {
       if (modalEvent) {
-        await updateEvent(modalEvent.id, data);
+        const updates: Partial<CalendarEvent> = { ...data };
+        // Moving the event to another calendar: the store remaps the store id
+        // onto the owning account's raw calendar id.
+        if (calendarId && calendarId !== getPrimaryCalendarId(modalEvent)) {
+          updates.calendarIds = { [calendarId]: true };
+        }
+        if (isRecurringSeriesMember(modalEvent)) {
+          // Ask which occurrences the edit applies to; the actual write
+          // happens in handleScopeSelect.
+          setPendingAction({ kind: 'edit', event: modalEvent, updates, calendarId });
+          return;
+        }
+        await updateEvent(modalEvent.id, updates);
       } else {
         await createEvent(data, calendarId);
       }
@@ -376,6 +477,10 @@ export default function CalendarScreen() {
   const handleDeleteFromModal = React.useCallback(
     async (event: CalendarEvent) => {
       setModalVisible(false);
+      if (isRecurringSeriesMember(event)) {
+        setPendingAction({ kind: 'delete', event });
+        return;
+      }
       await deleteEvent(event.id);
     },
     [deleteEvent],

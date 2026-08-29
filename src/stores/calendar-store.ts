@@ -16,6 +16,7 @@ import {
 } from '../api/calendar';
 import { jmapClient } from '../api/jmap-client';
 import { expandRecurringEvents } from '../lib/recurrence-expansion';
+import { isRecurringSeriesMember } from '../lib/recurrence-overrides';
 
 // Does the event carry attendees the server should notify over iMIP? Used to
 // decide whether to set sendSchedulingMessages on create/update/delete.
@@ -84,8 +85,13 @@ export interface CalendarState {
   refresh: () => Promise<void>;
   handleStateChange: (change: StateChange) => Promise<void>;
   createEvent: (event: Partial<CalendarEvent>, calendarId: string) => Promise<CalendarEvent>;
-  updateEvent: (id: string, changes: Partial<CalendarEvent>) => Promise<void>;
+  // `changes` may be a plain partial or a JMAP patch with JSON-pointer keys
+  // (e.g. `recurrenceOverrides/<recurrenceId>`).
+  updateEvent: (id: string, changes: Partial<CalendarEvent> | Record<string, unknown>) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
+  // Resolve a client-side expanded occurrence (or a master) to its master
+  // event, fetching it from the server when the expansion replaced it.
+  getMasterEvent: (event: CalendarEvent) => Promise<CalendarEvent | null>;
   // Invitations / scheduling
   rsvpEvent: (
     eventId: string,
@@ -307,14 +313,34 @@ export const useCalendarStore = create<CalendarState>()(
     // Resolve client-side expanded occurrence IDs back to the master event ID.
     const storeEvent = get().events.find((e) => e.id === id);
     const realId = storeEvent?.originalId || id;
+    // Remap namespaced (shared-calendar) store ids in calendarIds back to the
+    // raw server ids the owning account knows.
+    const patch: Record<string, unknown> = { ...changes };
+    const calendarIds = patch.calendarIds as Record<string, boolean> | undefined;
+    if (calendarIds && typeof calendarIds === 'object') {
+      const remapped: Record<string, boolean> = {};
+      for (const [calId, v] of Object.entries(calendarIds)) {
+        const cal = get().calendars.find((c) => c.id === calId);
+        remapped[cal?.originalId || calId] = v;
+      }
+      patch.calendarIds = remapped;
+    }
     // Notify attendees if either the stored event or the incoming changes
     // carry participants.
     const schedule =
-      hasSchedulingParticipants(changes) || hasSchedulingParticipants(storeEvent);
-    await apiUpdateEvent(realId, changes, schedule ? true : undefined, storeEvent?.accountId);
+      hasSchedulingParticipants(changes as Partial<CalendarEvent>) ||
+      hasSchedulingParticipants(storeEvent);
+    await apiUpdateEvent(realId, patch, schedule ? true : undefined, storeEvent?.accountId);
     set({
-      events: get().events.map((e) => (e.id === id ? { ...e, ...changes } : e)),
+      events: get().events.map((e) => (e.id === id ? { ...e, ...(changes as Partial<CalendarEvent>) } : e)),
     });
+    // A series mutation (an occurrence override, a truncated/changed rule, a
+    // master edit) touches every expanded sibling, and the optimistic merge
+    // above only updated the tapped one — reload the visible range like
+    // webmail's refetchAfterOccurrenceMutation.
+    if (storeEvent && isRecurringSeriesMember(storeEvent)) {
+      await get().refresh();
+    }
   },
 
   deleteEvent: async (id) => {
@@ -325,7 +351,27 @@ export const useCalendarStore = create<CalendarState>()(
       hasSchedulingParticipants(storeEvent) ? true : undefined,
       storeEvent?.accountId,
     );
-    set({ events: get().events.filter((e) => e.id !== id) });
+    // Destroying a master removes every expanded occurrence of it, not just
+    // the tapped one.
+    set({ events: get().events.filter((e) => e.id !== id && (e.originalId || e.id) !== realId) });
+    if (storeEvent && isRecurringSeriesMember(storeEvent)) {
+      await get().refresh();
+    }
+  },
+
+  getMasterEvent: async (event) => {
+    if (event.recurrenceRules?.length && !event.recurrenceId) return event;
+    // Client-side expansion replaces the master with its occurrences, each
+    // pointing back at the master's server id through originalId.
+    const realId = event.originalId || event.id;
+    const inStore = get().events.find(
+      (e) => e.id === realId && !e.recurrenceId && !!e.recurrenceRules?.length,
+    );
+    if (inStore) return inStore;
+    const fetched = (await fetchEvents([realId], event.accountId)) ?? [];
+    const master = fetched[0];
+    if (!master) return null;
+    return mapServerEventToStoreEvent(master, get().calendars, event.accountId);
   },
 
   rsvpEvent: async (eventId, participantId, status, replyTo) => {

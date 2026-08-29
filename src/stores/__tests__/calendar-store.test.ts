@@ -417,5 +417,85 @@ describe('calendar-store', () => {
       expect(useCalendarStore.getState().events).toHaveLength(1);
       expect(useCalendarStore.getState().events[0].id).toBe('ev2');
     });
+
+    it('should drop every expanded occurrence of a destroyed master and refetch', async () => {
+      useCalendarStore.setState({
+        calendars: [{ id: 'cal-1', name: 'Personal' } as any],
+        loadedRange: { after: '2026-03-01T00:00:00Z', before: '2026-03-31T00:00:00Z' },
+        events: [
+          { id: 'ev1:a', originalId: 'ev1', recurrenceId: 'a', recurrenceRules: [{ frequency: 'daily' }] } as any,
+          { id: 'ev1:b', originalId: 'ev1', recurrenceId: 'b', recurrenceRules: [{ frequency: 'daily' }] } as any,
+          { id: 'ev2' } as any,
+        ],
+      });
+      mockDeleteEvents.mockResolvedValue(undefined);
+      mockQueryEvents.mockResolvedValue([]);
+
+      await useCalendarStore.getState().deleteEvent('ev1:a');
+
+      expect(mockDeleteEvents).toHaveBeenCalledWith(['ev1'], undefined, undefined);
+      // The visible range was reloaded (empty here).
+      expect(mockQueryEvents).toHaveBeenCalled();
+    });
+  });
+
+  describe('recurring series mutations', () => {
+    it('updateEvent on an occurrence patches the master and refetches the range', async () => {
+      useCalendarStore.setState({
+        calendars: [{ id: 'cal-1', name: 'Personal' } as any],
+        loadedRange: { after: '2026-03-01T00:00:00Z', before: '2026-03-31T00:00:00Z' },
+        events: [
+          { id: 'ev1:a', originalId: 'ev1', recurrenceId: 'a', title: 'Old', recurrenceRules: [{ frequency: 'daily' }] } as any,
+          { id: 'ev1:b', originalId: 'ev1', recurrenceId: 'b', title: 'Old', recurrenceRules: [{ frequency: 'daily' }] } as any,
+        ],
+      });
+      mockUpdateEvent.mockResolvedValue(undefined);
+      mockQueryEvents.mockResolvedValue(['ev1']);
+      mockGetEvents.mockResolvedValue([
+        { id: 'ev1', title: 'New', start: '2026-03-02T09:00:00', recurrenceRules: [{ frequency: 'daily', count: 2 }], calendarIds: { 'cal-1': true } },
+      ]);
+
+      await useCalendarStore.getState().updateEvent('ev1:a', { 'recurrenceOverrides/a': { title: 'New' } });
+
+      expect(mockUpdateEvent).toHaveBeenCalledWith('ev1', { 'recurrenceOverrides/a': { title: 'New' } }, undefined, undefined);
+      // Refetched: siblings now carry the server's state.
+      const events = useCalendarStore.getState().events;
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.every((e) => e.title === 'New')).toBe(true);
+    });
+
+    it('updateEvent remaps namespaced calendarIds to the raw server id', async () => {
+      useCalendarStore.setState({
+        calendars: [
+          { id: 'cal-1', name: 'Personal' } as any,
+          { id: 'acc-2:cal-9', originalId: 'cal-9', accountId: 'acc-2', name: 'Shared', isShared: true } as any,
+        ],
+        events: [{ id: 'ev1', calendarIds: { 'cal-1': true } } as any],
+      });
+      mockUpdateEvent.mockResolvedValue(undefined);
+
+      await useCalendarStore.getState().updateEvent('ev1', { calendarIds: { 'acc-2:cal-9': true } });
+
+      expect(mockUpdateEvent).toHaveBeenCalledWith('ev1', { calendarIds: { 'cal-9': true } }, undefined, undefined);
+    });
+
+    it('getMasterEvent fetches the master an occurrence points at', async () => {
+      useCalendarStore.setState({ calendars: [], events: [] });
+      mockGetEvents.mockResolvedValue([{ id: 'ev1', start: '2026-03-02T09:00:00', recurrenceRules: [{ frequency: 'daily' }] }]);
+
+      const master = await useCalendarStore.getState().getMasterEvent({
+        id: 'ev1:a', originalId: 'ev1', recurrenceId: 'a', start: '2026-03-04T09:00:00',
+      } as any);
+
+      expect(mockGetEvents).toHaveBeenCalledWith(['ev1'], undefined);
+      expect(master?.id).toBe('ev1');
+      expect(master?.start).toBe('2026-03-02T09:00:00');
+    });
+
+    it('getMasterEvent returns a master as-is', async () => {
+      const ev = { id: 'ev1', recurrenceRules: [{ frequency: 'daily' }] } as any;
+      expect(await useCalendarStore.getState().getMasterEvent(ev)).toBe(ev);
+      expect(mockGetEvents).not.toHaveBeenCalled();
+    });
   });
 });
