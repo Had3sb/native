@@ -601,7 +601,7 @@ export class JMAPClient {
       controller?.abort();
     }, timeoutMs);
     try {
-      return await secureFetch(url, controller ? { ...init, signal: controller.signal } : init);
+      return await secureFetch(url, { ...init, ...(controller ? { signal: controller.signal } : {}), timeoutMs });
     } catch (error) {
       if (timedOut) throw new RequestTimeoutError(timeoutMs);
       throw error;

@@ -148,9 +148,47 @@ function buildResponse(raw: {
  * on iOS), it just calls the platform `fetch` and the caller pays no
  * bridge overhead.
  */
+export interface SecureFetchInit extends RequestInit {
+  /** Native-path deadline (ms); blob transfers pass a longer one. */
+  timeoutMs?: number;
+}
+
+const MAX_REDIRECTS = 5;
+
+function originOf(url: string): string {
+  const m = /^(https?):\/\/([^/?#]+)/i.exec(url);
+  return m ? `${m[1].toLowerCase()}://${m[2].toLowerCase()}` : '';
+}
+
+function hostOnly(origin: string): string {
+  return origin.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+}
+
+/**
+ * May the Authorization header (and the original method + body) follow a
+ * redirect to `target`? Only within the same host, or an http→https upgrade
+ * of it - the same rule the webmail's Stalwart passthrough applies.
+ */
+export function mayFollowRedirect(from: string, target: string): boolean {
+  const a = originOf(from);
+  const b = originOf(target);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return hostOnly(a) === hostOnly(b) && a.startsWith('http://') && b.startsWith('https://');
+}
+
+function resolveRedirect(base: string, location: string): string {
+  if (/^https?:\/\//i.test(location)) return location;
+  const origin = originOf(base);
+  if (location.startsWith('/')) return origin + location;
+  const path = base.slice(origin.length).replace(/[?#].*$/, '');
+  const dir = path.slice(0, path.lastIndexOf('/') + 1) || '/';
+  return origin + dir + location;
+}
+
 export async function secureFetch(
   url: string,
-  init?: RequestInit,
+  init?: SecureFetchInit,
 ): Promise<Response> {
   const native = getNative();
   if (!native) return fetch(url, init);
@@ -167,19 +205,37 @@ export async function secureFetch(
     const decoded = base64ToBytes(bodyBase64);
     headers['Content-Length'] = String(decoded.byteLength);
   }
-  try {
-    const raw = await native.fetchSecure({
-      url,
-      method,
-      headers,
-      bodyBase64,
-      timeoutMs: 30_000,
-    });
+  const timeoutMs = init?.timeoutMs ?? 30_000;
+
+  // Redirects are handled here rather than by HttpURLConnection, which would
+  // turn a POST into a GET on 301/302 (Stalwart answers a GET /jmap/ with a
+  // 404 problem+json, #627) and re-send the Authorization header to a
+  // foreign host. Same host / https upgrade keeps method, body and header;
+  // anything else is returned to the caller as the 3xx it is.
+  let currentUrl = url;
+  for (let hop = 0; ; hop++) {
+    let raw: Awaited<ReturnType<typeof native.fetchSecure>>;
+    try {
+      raw = await native.fetchSecure({ url: currentUrl, method, headers, bodyBase64, timeoutMs });
+    } catch (err) {
+      // Surface as a TypeError to mimic fetch's network-error contract; keep
+      // the original message for diagnostics.
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new TypeError(`secureFetch failed: ${msg}`);
+    }
+    const status = raw.status;
+    const location = raw.headers?.Location ?? raw.headers?.location;
+    if (
+      (status === 301 || status === 302 || status === 303 || status === 307 || status === 308) &&
+      location &&
+      hop < MAX_REDIRECTS
+    ) {
+      const next = resolveRedirect(currentUrl, location);
+      if (mayFollowRedirect(currentUrl, next)) {
+        currentUrl = next;
+        continue;
+      }
+    }
     return buildResponse(raw);
-  } catch (err) {
-    // Surface as a TypeError to mimic fetch's network-error contract; keep
-    // the original message for diagnostics.
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new TypeError(`secureFetch failed: ${msg}`);
   }
 }

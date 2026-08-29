@@ -141,7 +141,9 @@ class BulwarkClientCertModule(reactContext: ReactApplicationContext)
                     connectTimeout = timeoutMs
                     readTimeout = timeoutMs
                     requestMethod = method
-                    instanceFollowRedirects = true
+                    // Redirects are resolved in JS (lib/client-cert.ts) so a POST
+                    // stays a POST and credentials never follow a cross-host hop.
+                    instanceFollowRedirects = false
                     if (bodyBytes != null) {
                         doOutput = true
                         setFixedLengthStreamingMode(bodyBytes.size)
