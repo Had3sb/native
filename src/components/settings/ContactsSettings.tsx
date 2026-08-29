@@ -3,12 +3,12 @@ import { Alert, Share, Text, View, StyleSheet, Pressable, TextInput } from 'reac
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import {
-  Download, Upload, Plus, Pencil, Trash2, Check, X, BookUser,
+  Download, Upload, Plus, Pencil, Trash2, Check, X, BookUser, Star,
 } from 'lucide-react-native';
 import { SettingsSection, SettingItem, ToggleSwitch } from './settings-section';
 import Button from '../Button';
 import Dialog from '../Dialog';
-import { ContactImportSheet } from '../contacts';
+import { ContactImportSheet, AddressBookPickerSheet } from '../contacts';
 import { useSettingsStore } from '../../stores/settings-store';
 import { useContactsStore, selectAddressBooksWithCount } from '../../stores/contacts-store';
 import { contactsToVCard } from '../../lib/vcard';
@@ -35,9 +35,13 @@ export function ContactsSettings() {
   const createAddressBook = useContactsStore((s) => s.createAddressBook);
   const renameAddressBook = useContactsStore((s) => s.renameAddressBook);
   const deleteAddressBook = useContactsStore((s) => s.deleteAddressBook);
+  const setDefaultAddressBook = useContactsStore((s) => s.setDefaultAddressBook);
+  const getDefaultAddressBookId = useContactsStore((s) => s.getDefaultAddressBookId);
 
   const [exporting, setExporting] = React.useState(false);
   const [importOpen, setImportOpen] = React.useState(false);
+  const [importTargetOpen, setImportTargetOpen] = React.useState(false);
+  const [importTargetBookId, setImportTargetBookId] = React.useState<string | null>(null);
 
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editName, setEditName] = React.useState('');
@@ -51,7 +55,21 @@ export function ContactsSettings() {
     exportable.length === 0
       ? 'No contacts to export'
       : `Export ${exportable.length} contact${exportable.length === 1 ? '' : 's'} as a single vCard file.`;
-  const importTargetBookId = books[0]?.id ?? null;
+  // Imports land in the account's default book unless the user picks another.
+  const resolvedImportTarget = importTargetBookId ?? getDefaultAddressBookId();
+  const importTargetName = books.find((b) => b.id === resolvedImportTarget)?.name;
+
+  const handleSetDefault = async (id: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await setDefaultAddressBook(id);
+    } catch (err) {
+      Alert.alert('Could not set default', err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleExport = async () => {
     if (exportable.length === 0 || exporting) return;
@@ -196,17 +214,36 @@ export function ContactsSettings() {
             ) : (
               <>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={styles.bookName} numberOfLines={1}>{book.name}</Text>
+                  <Text style={styles.bookName} numberOfLines={1}>
+                    {book.isShared && book.accountName ? `${book.name} (${book.accountName})` : book.name}
+                  </Text>
                   <Text style={styles.bookCount}>
                     {book.count} contact{book.count === 1 ? '' : 's'}
+                    {book.isDefault ? ' · Default' : ''}
                   </Text>
                 </View>
+                {!book.isShared && (
+                  <Pressable
+                    onPress={() => { if (!book.isDefault) void handleSetDefault(book.id); }}
+                    hitSlop={6}
+                    style={styles.iconBtn}
+                    disabled={!!book.isDefault}
+                    accessibilityLabel={book.isDefault ? 'Default address book' : 'Set as default'}
+                  >
+                    <Star
+                      size={15}
+                      color={book.isDefault ? c.primary : c.textSecondary}
+                      fill={book.isDefault ? c.primary : 'transparent'}
+                    />
+                  </Pressable>
+                )}
                 {book.myRights?.mayWrite !== false && (
                   <Pressable onPress={() => startRename(book.id, book.name)} hitSlop={6} style={styles.iconBtn}>
                     <Pencil size={15} color={c.textSecondary} />
                   </Pressable>
                 )}
-                {book.myRights?.mayDelete !== false && books.length > 1 && (
+                {/* The default book and shared books cannot be deleted (the server rejects it). */}
+                {book.myRights?.mayDelete !== false && !book.isDefault && !book.isShared && books.length > 1 && (
                   <Pressable
                     onPress={() => setDeleteTarget({ id: book.id, name: book.name, count: book.count })}
                     hitSlop={6}
@@ -269,9 +306,18 @@ export function ContactsSettings() {
       <ContactImportSheet
         visible={importOpen}
         onClose={() => setImportOpen(false)}
-        targetBookId={importTargetBookId}
-        targetBookName={books[0]?.name}
+        targetBookId={resolvedImportTarget}
+        targetBookName={importTargetName}
+        onChangeTarget={books.length > 1 ? () => setImportTargetOpen(true) : undefined}
         onImported={() => { void fetchContacts(); }}
+      />
+
+      <AddressBookPickerSheet
+        visible={importTargetOpen}
+        onClose={() => setImportTargetOpen(false)}
+        currentBookId={resolvedImportTarget}
+        title="Import into address book"
+        onPick={(id) => { setImportTargetBookId(id); setImportTargetOpen(false); }}
       />
 
       <Dialog
@@ -279,7 +325,7 @@ export function ContactsSettings() {
         title="Delete address book"
         message={
           deleteTarget
-            ? `Delete "${deleteTarget.name}"?${deleteTarget.count > 0 ? ` Its ${deleteTarget.count} contact${deleteTarget.count === 1 ? '' : 's'} will be removed from this book.` : ''} This cannot be undone.`
+            ? `Delete "${deleteTarget.name}"?${deleteTarget.count > 0 ? ` Its ${deleteTarget.count} contact${deleteTarget.count === 1 ? '' : 's'} will be deleted with it.` : ''} This cannot be undone.`
             : ''
         }
         variant="destructive"
