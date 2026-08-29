@@ -11,11 +11,13 @@ import { X } from 'lucide-react-native';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { useContactsStore } from '../../stores/contacts-store';
-import type { Participant } from '../../api/types';
+import { useLocaleStore } from '../../stores/locale-store';
+import type { Attendee } from '../../lib/calendar-participants';
 
 interface ParticipantInputProps {
-  participants: Record<string, Participant>;
-  onChange: (next: Record<string, Participant>) => void;
+  attendees: Attendee[];
+  onAdd: (attendee: Attendee) => void;
+  onRemove: (email: string) => void;
 }
 
 interface Suggestion {
@@ -25,10 +27,6 @@ interface Suggestion {
 
 function emailRegex(): RegExp {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-}
-
-function generateParticipantId(): string {
-  return `p-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function flattenContactEmails(): Suggestion[] {
@@ -44,15 +42,18 @@ function flattenContactEmails(): Suggestion[] {
   return out;
 }
 
-export function ParticipantInput({ participants, onChange }: ParticipantInputProps) {
+// Attendee rows only: the organizer participant is added by
+// buildParticipantMap on save (see lib/calendar-participants).
+export function ParticipantInput({ attendees, onAdd, onRemove }: ParticipantInputProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [draft, setDraft] = React.useState('');
   const [allSuggestions] = React.useState(() => flattenContactEmails());
 
   const existingEmails = React.useMemo(() => {
-    return new Set(Object.values(participants).map((p) => p.email?.toLowerCase()));
-  }, [participants]);
+    return new Set(attendees.map((a) => a.email.toLowerCase()));
+  }, [attendees]);
 
   const filteredSuggestions = React.useMemo(() => {
     const q = draft.trim().toLowerCase();
@@ -75,44 +76,24 @@ export function ParticipantInput({ participants, onChange }: ParticipantInputPro
       setDraft('');
       return;
     }
-    const id = generateParticipantId();
-    const next: Record<string, Participant> = {
-      ...participants,
-      [id]: {
-        email: trimmed,
-        name,
-        sendTo: { imip: `mailto:${trimmed}` },
-        roles: { attendee: true },
-        participationStatus: 'needs-action',
-        expectReply: true,
-      },
-    };
-    onChange(next);
+    onAdd({ name: name || '', email: trimmed });
     setDraft('');
-  };
-
-  const removeParticipant = (id: string) => {
-    const next = { ...participants };
-    delete next[id];
-    onChange(next);
   };
 
   const handleSubmit = () => {
     if (draft.trim()) addParticipant(draft);
   };
 
-  const entries = Object.entries(participants);
-
   return (
     <View style={styles.container}>
-      {entries.length > 0 && (
+      {attendees.length > 0 && (
         <View style={styles.chips}>
-          {entries.map(([id, p]) => (
-            <View key={id} style={styles.chip}>
+          {attendees.map((a) => (
+            <View key={a.email.toLowerCase()} style={styles.chip}>
               <Text style={styles.chipText} numberOfLines={1}>
-                {p.name || p.email || 'Unknown'}
+                {a.name || a.email}
               </Text>
-              <Pressable onPress={() => removeParticipant(id)} hitSlop={6}>
+              <Pressable onPress={() => onRemove(a.email)} hitSlop={6}>
                 <X size={12} color={c.textMuted} />
               </Pressable>
             </View>
@@ -123,12 +104,13 @@ export function ParticipantInput({ participants, onChange }: ParticipantInputPro
       <TextInput
         value={draft}
         onChangeText={setDraft}
-        placeholder="Add participant by email"
+        placeholder={t('calendar.event_modal.participant_placeholder', 'Add participant by email')}
         placeholderTextColor={c.textMuted}
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="email-address"
         onSubmitEditing={handleSubmit}
+        onBlur={handleSubmit}
         returnKeyType="done"
         style={styles.input}
       />

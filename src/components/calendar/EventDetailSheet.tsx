@@ -35,16 +35,17 @@ import { useColors } from '../../theme/colors';
 import {
   eventTimeRange,
   getEventColor,
+  getEventDisplayEndDate,
   getPrimaryCalendarId,
   timePattern,
   type TimeFormat,
 } from '../../lib/calendar-utils';
 import { alertsToReminders, formatReminder } from '../../lib/calendar-alerts';
 import {
-  findParticipantByEmail,
-  isOrganizerParticipant,
-} from '../../lib/calendar-invitation';
-import { useAccountStore } from '../../stores/account-store';
+  getParticipantList,
+  getUserParticipantId,
+  isOrganizer,
+} from '../../lib/calendar-participants';
 import { useSheetDrag } from '../../lib/use-sheet-drag';
 
 type RsvpStatus = 'accepted' | 'declined' | 'tentative';
@@ -53,6 +54,8 @@ interface EventDetailSheetProps {
   event: CalendarEvent | null;
   calendars: Calendar[];
   timeFormat?: TimeFormat;
+  // Login address + identities + aliases; finds "me" among the participants.
+  currentUserEmails?: string[];
   onClose: () => void;
   onEdit?: (event: CalendarEvent) => void;
   onDelete?: (event: CalendarEvent) => void;
@@ -61,7 +64,10 @@ interface EventDetailSheetProps {
 }
 
 function formatRange(event: CalendarEvent, timeFormat?: TimeFormat): string {
-  const { start, end, allDay } = eventTimeRange(event);
+  const { start, allDay } = eventTimeRange(event);
+  // All-day events store an exclusive end (next day 00:00); show the
+  // inclusive last day so a one-day event doesn't read as two (#318).
+  const end = allDay ? getEventDisplayEndDate(event) : eventTimeRange(event).end;
   if (allDay) {
     if (
       start.getFullYear() === end.getFullYear() &&
@@ -105,6 +111,7 @@ export function EventDetailSheet({
   event,
   calendars,
   timeFormat,
+  currentUserEmails = [],
   onClose,
   onEdit,
   onDelete,
@@ -112,7 +119,6 @@ export function EventDetailSheet({
   onRsvp,
 }: EventDetailSheetProps) {
   const c = useColors();
-  const activeEmail = useAccountStore((s) => s.getActiveAccount()?.email ?? null);
   const [rsvpBusy, setRsvpBusy] = React.useState(false);
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const slideY = React.useRef(new Animated.Value(Dimensions.get('window').height)).current;
@@ -164,21 +170,24 @@ export function EventDetailSheet({
   const range = formatRange(event, timeFormat);
   const recurrence = recurrenceLabel(event);
   const reminders = alertsToReminders(event.alerts);
-  const participants = event.participants ? Object.values(event.participants) : [];
+  const participants = getParticipantList(event);
   const location = event.locations ? Object.values(event.locations)[0]?.name : undefined;
   const videoUri = event.virtualLocations ? Object.values(event.virtualLocations)[0]?.uri : undefined;
+  const isCancelled = event.status === 'cancelled';
 
   // Can the signed-in user RSVP? Only when they appear as a non-organizer
-  // participant and the caller wired an onRsvp handler.
-  const me = activeEmail ? findParticipantByEmail(event, [activeEmail]) : null;
-  const canRsvp = Boolean(onRsvp && me && !isOrganizerParticipant(me.participant));
-  const myStatus = me?.participant.participationStatus;
+  // participant (matched against every address of theirs: login, identities,
+  // aliases) and the caller wired an onRsvp handler.
+  const myParticipantId = getUserParticipantId(event, currentUserEmails);
+  const userIsOrganizer = isOrganizer(event, currentUserEmails);
+  const canRsvp = Boolean(onRsvp && myParticipantId && !userIsOrganizer);
+  const myStatus = myParticipantId ? event.participants?.[myParticipantId]?.participationStatus : undefined;
 
   const doRsvp = async (status: RsvpStatus) => {
-    if (!onRsvp || !me || rsvpBusy) return;
+    if (!onRsvp || !myParticipantId || rsvpBusy) return;
     setRsvpBusy(true);
     try {
-      await onRsvp(event, me.id, status);
+      await onRsvp(event, myParticipantId, status);
     } finally {
       setRsvpBusy(false);
     }
@@ -206,7 +215,9 @@ export function EventDetailSheet({
             <View style={styles.header}>
               <View style={[styles.colorBar, { backgroundColor: color }]} />
               <View style={styles.headerText}>
-                <Text style={styles.title}>{event.title || 'Untitled'}</Text>
+                <Text style={[styles.title, isCancelled && styles.titleCancelled]}>
+                  {event.title || 'Untitled'}
+                </Text>
                 {calendar && <Text style={styles.subtitle}>{calendar.name}</Text>}
               </View>
               <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={8}>
@@ -303,21 +314,24 @@ export function EventDetailSheet({
                     {participants.length} participants
                   </Text>
                 </View>
-                {participants.map((p, idx) => (
-                  <View key={idx} style={styles.participantRow}>
+                {participants.map((p) => (
+                  <View key={p.id} style={styles.participantRow}>
                     <View
                       style={[
                         styles.participantDot,
                         {
-                          backgroundColor: statusColor(c, p.participationStatus),
+                          backgroundColor: statusColor(c, p.status),
                         },
                       ]}
                     />
                     <Text style={styles.participantName} numberOfLines={1}>
                       {p.name || p.email || 'Unknown'}
+                      {p.isOrganizer ? (
+                        <Text style={styles.participantOrganizer}> (organizer)</Text>
+                      ) : null}
                     </Text>
                     <Text style={styles.participantStatus}>
-                      {statusLabel(p.participationStatus)}
+                      {p.isOrganizer ? '' : statusLabel(p.status)}
                     </Text>
                   </View>
                 ))}
@@ -508,6 +522,7 @@ function makeStyles(c: ThemePalette) {
   colorBar: { width: 4, alignSelf: 'stretch', borderRadius: 2 },
   headerText: { flex: 1 },
   title: { ...typography.h3, color: c.text },
+  titleCancelled: { textDecorationLine: 'line-through', color: c.textMuted },
   subtitle: { ...typography.caption, color: c.textMuted, marginTop: 2 },
   closeBtn: { padding: 4 },
 
@@ -567,6 +582,7 @@ function makeStyles(c: ThemePalette) {
   },
   participantDot: { width: 8, height: 8, borderRadius: 4 },
   participantName: { flex: 1, ...typography.body, color: c.text },
+  participantOrganizer: { ...typography.caption, color: c.textMuted },
   participantStatus: { ...typography.caption, color: c.textMuted },
 
   actions: {

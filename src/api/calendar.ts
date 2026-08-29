@@ -328,11 +328,15 @@ export async function deleteEvents(
 
 // RSVP to an invitation: patch the participant's participationStatus via a JSON
 // Pointer (RFC 6901) and let Stalwart send the iTIP REPLY (sendSchedulingMessages).
+// Stalwart routes the REPLY to the stored ORGANIZER (organizerCalendarAddress);
+// the RFC 8984 replyTo property is retired in jscalendarbis and ignored. The
+// caller passes `repairOrganizerAddress` only for events that lack an
+// organizer (e.g. imported ones) — attendees may not modify an existing one.
 export async function rsvpEvent(
   eventId: string,
   participantId: string,
   status: 'accepted' | 'declined' | 'tentative',
-  replyTo?: Record<string, string> | null,
+  repairOrganizerAddress?: string | null,
   targetAccountId?: string,
 ): Promise<void> {
   const accountId = targetAccountId || jmapClient.accountId;
@@ -341,7 +345,7 @@ export async function rsvpEvent(
   const patch: Record<string, unknown> = {
     [`participants/${escaped}/participationStatus`]: status,
   };
-  if (replyTo) patch.replyTo = replyTo;
+  if (repairOrganizerAddress) patch.organizerCalendarAddress = repairOrganizerAddress;
   const res = await jmapClient.request(
     [['CalendarEvent/set', { accountId, update: { [eventId]: patch }, sendSchedulingMessages: true }, '0']],
     USING,

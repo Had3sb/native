@@ -29,7 +29,6 @@ import { addHours, addMinutes, format } from 'date-fns';
 import type {
   Calendar,
   CalendarEvent,
-  Participant,
   EventLocation,
   RecurrenceRule,
   VirtualLocation,
@@ -53,6 +52,12 @@ import {
   type Reminder,
 } from '../../lib/calendar-alerts';
 import { buildRecurrenceSummary, isSimpleRecurrenceRule } from '../../lib/recurrence';
+import {
+  buildParticipantMap,
+  getParticipantList,
+  seedAttendees,
+  type Attendee,
+} from '../../lib/calendar-participants';
 import { Button } from '..';
 import { ParticipantInput } from './ParticipantInput';
 import { RecurrenceEditor } from './RecurrenceEditor';
@@ -74,6 +79,9 @@ interface EventModalProps {
   calendars: Calendar[];
   defaultDate?: Date;
   defaultCalendarId?: string;
+  // Login address + identities + aliases; the first one is the organizer
+  // address of invitations sent from this editor.
+  currentUserEmails?: string[];
   onSave: (data: Partial<CalendarEvent>, calendarId: string) => void | Promise<void>;
   onDelete?: (event: CalendarEvent) => void;
   onClose: () => void;
@@ -153,6 +161,7 @@ export function EventModal({
   calendars,
   defaultDate,
   defaultCalendarId,
+  currentUserEmails = [],
   onSave,
   onDelete,
   onClose,
@@ -174,7 +183,8 @@ export function EventModal({
     || calendars[0]?.id
     || '';
   const [calendarId, setCalendarId] = React.useState<string>(fallbackCalendarId);
-  const [participants, setParticipants] = React.useState<Record<string, Participant>>({});
+  // Attendee rows only — the organizer participant is rebuilt on save.
+  const [attendees, setAttendees] = React.useState<Attendee[]>([]);
   const [recurrence, setRecurrence] = React.useState<RecurrenceOption>('none');
   const [customRule, setCustomRule] = React.useState<RecurrenceRule | null>(null);
   const [recurrenceEditorOpen, setRecurrenceEditorOpen] = React.useState(false);
@@ -202,7 +212,7 @@ export function EventModal({
       // grows the event by one day.
       setEnd(event.showWithoutTime ? getEventDisplayEndDate(event) : getEventEndDate(event));
       setCalendarId(getPrimaryCalendarId(event) || calendars[0]?.id || '');
-      setParticipants(event.participants || {});
+      setAttendees(seedAttendees(event, currentUserEmails));
       const detected = detectRecurrence(event);
       setRecurrence(detected);
       setCustomRule(detected === 'custom' ? event.recurrenceRules?.[0] ?? null : null);
@@ -223,7 +233,7 @@ export function EventModal({
         || calendars[0]?.id
         || '',
       );
-      setParticipants({});
+      setAttendees([]);
       setRecurrence('none');
       setCustomRule(null);
       setRecurrenceEditorOpen(false);
@@ -231,7 +241,7 @@ export function EventModal({
       setLocation('');
       setVideoUrl('');
     }
-  }, [visible, event, defaultDate, defaultCalendarId, calendars]);
+  }, [visible, event, defaultDate, defaultCalendarId, calendars, currentUserEmails]);
 
   React.useEffect(() => {
     if (allDay) {
@@ -295,16 +305,30 @@ export function EventModal({
         // every viewer; label the wall-clock with the zone it was entered in.
         // All-day events are date-only and carry no zone.
         timeZone: allDay ? null : getEffectiveTimeZone(),
-        participants: clearedOr(
-          Object.keys(participants).length > 0 ? participants : undefined,
-          'participants',
-        ),
         recurrenceRules: clearedOr(recurrenceRules, 'recurrenceRules'),
         alerts: clearedOr(remindersToAlerts(reminders), 'alerts'),
         useDefaultAlerts: reminders.length > 0 ? false : undefined,
         locations: clearedOr(buildLocations(location), 'locations'),
         virtualLocations: clearedOr(buildVirtualLocations(videoUrl), 'virtualLocations'),
       };
+      const organizerEmail = currentUserEmails[0];
+      if (attendees.length > 0 && organizerEmail) {
+        const organizerName =
+          (event ? getParticipantList(event).find((p) => p.isOrganizer)?.name : '') || '';
+        data.participants = buildParticipantMap(
+          { name: organizerName, email: organizerEmail },
+          attendees,
+        );
+        // Stalwart (calcard) derives the iCalendar ORGANIZER property solely from
+        // organizerCalendarAddress; without it no ORGANIZER is emitted and iTIP
+        // scheduling is silently skipped, so no invites are sent.
+        data.organizerCalendarAddress = `mailto:${organizerEmail}`;
+      } else if (attendees.length === 0 && isEdit && had('participants')) {
+        data.participants = null;
+        // Also clear the retired replyTo that older releases wrote.
+        if (event?.replyTo) data.replyTo = null;
+        if (event?.organizerCalendarAddress) data.organizerCalendarAddress = null;
+      }
       if (data.recurrenceRules === null) {
         // Dropping the rule leaves per-occurrence data dangling.
         if (had('recurrenceOverrides')) data.recurrenceOverrides = null;
@@ -619,8 +643,11 @@ export function EventModal({
             label="Participants"
           >
             <ParticipantInput
-              participants={participants}
-              onChange={setParticipants}
+              attendees={attendees}
+              onAdd={(a) => setAttendees((prev) => [...prev, a])}
+              onRemove={(email) =>
+                setAttendees((prev) => prev.filter((a) => a.email.toLowerCase() !== email.toLowerCase()))
+              }
             />
           </Section>
 

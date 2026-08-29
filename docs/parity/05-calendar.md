@@ -22,7 +22,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `updateEvent` maps only `e.id === id` (`src/stores/calendar-store.ts:315-317`), so sibling occurrences keep the old title/time until a pull-to-refresh; `deleteEvent` removes only the tapped occurrence from state while the server destroyed the master (`:320-329`).
   - Fix hint: after mutating a `recurrenceId`/`recurrenceRules` event call `get().refresh()` (RN already has it) like WEB's `refetchAfterOccurrenceMutation`.
 
-- [ ] **RSCALE=GREGORIAN;SKIP=OMIT still emitted by the custom recurrence editor (#805)** — `P2` — `bugfix-parity`
+- [x] **RSCALE=GREGORIAN;SKIP=OMIT still emitted by the custom recurrence editor (#805)** — `P2` — `bugfix-parity` — fixed in 58a6f45
   - What WEB does: `createRecurrenceRule` deliberately omits `rscale`/`skip` because Stalwart serialises them into the RRULE and DAVx5 rejects it (ref `lib/recurrence-rule.ts:5-33`, changelog 1.9.2 #805).
   - What RN does: `buildRuleFromEditorValue` sets `rscale: 'gregorian', skip: 'omit'` on every custom rule (ref `src/lib/recurrence.ts:220-221`). RN affected: any custom recurrence created on mobile breaks Android CalDAV sync.
   - Fix hint: delete the two properties in `buildRuleFromEditorValue`; the simple presets in `EventModal.tsx:143-146` are already clean.
@@ -32,7 +32,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: always fetches raw events and expands on the client (`src/stores/calendar-store.ts:228`, `src/lib/recurrence-expansion.ts`). Functionally fine on all server versions; RN's expansion file is a line-for-line port of WEB's (diffed: only comments, formatting and the `isServerRecurrenceInstance` pass-through differ).
   - Fix hint: optional. If adopted, port `recurrence-instances.ts` wholesale and the `isServerRecurrenceInstance` guard in `expandRecurringEvents`.
 
-- [ ] **Removing recurrence / participants / reminders / location on edit does not persist** — `P2` — `bug`
+- [x] **Removing recurrence / participants / reminders / location on edit does not persist** — `P2` — `bug` — fixed in 58a6f45
   - What WEB does: sends explicit `null` for `recurrenceRules` (+ `recurrenceOverrides`, `excludedRecurrenceRules`), `alerts`, `participants` (+ `replyTo`, `organizerCalendarAddress`), `locations`, `virtualLocations` when the field was cleared (ref `components/calendar/event-modal.tsx:528-549, 560-563, 588-592`).
   - What RN does: `handleSave` emits `undefined` for cleared fields (`recurrenceRules: undefined`, `participants: undefined`, `alerts: remindersToAlerts([]) === undefined`, `locations: undefined`) which JSON serialisation drops, so the server keeps the old value (ref `src/components/calendar/EventModal.tsx:262-281`, `src/lib/calendar-alerts.ts:72-73`). Setting "Does not repeat" on a recurring event, removing all attendees, deleting the last reminder or clearing the location silently does nothing.
   - Fix hint: in edit mode compare against `event` and send `null` for fields that existed and are now empty; RN's `cleanRecurrenceRules` already turns `[]`/`null` into `recurrenceRule: null` (`src/api/calendar.ts:115-118`), so `recurrenceRules: []` works today for recurrence.
@@ -43,12 +43,12 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Events: create / edit
 
-- [ ] **All-day events are created and saved one day too long** — `P1` — `rn-only-bug`
+- [x] **All-day events are created and saved one day too long** — `P1` — `rn-only-bug` — fixed in 58a6f45
   - What WEB does: seeds the end field from `getEventDisplayEndDate` (inclusive, end - 1 ms) for all-day events and builds `buildAllDayDuration(start, inclusiveEnd)` (ref `components/calendar/event-modal.tsx:274-280, 471-477`).
   - What RN does: edit seeds `end` with `getEventEndDate(event)` which is the exclusive end (start + P1D = next day 00:00) (`src/components/calendar/EventModal.tsx:198`); the all-day toggle effect pushes `end` to the next day whenever `end <= start` (`:231-242`); `handleSave` then calls `buildAllDayDuration(start, end)` which is inclusive (`:269`, `src/lib/calendar-utils.ts:183-189`), yielding `P2D` for a one-day event. Every create-via-toggle and every re-save of an all-day event adds a day.
   - Fix hint: seed/display the inclusive end (`getEventDisplayEndDate`) for all-day events, and in the all-day effect set `e = s` (same day) when `end <= start`; keep `buildAllDayDuration` inclusive.
 
-- [ ] **Events created without `timeZone` (floating time)** — `P1` — `bug`
+- [x] **Events created without `timeZone` (floating time)** — `P1` — `bug` — fixed in 58a6f45
   - What WEB does: every timed event carries `timeZone: getEffectiveTimeZone()` (all-day: `null`) so other clients and invitees resolve the wall-clock correctly (ref `components/calendar/event-modal.tsx:494-502`, `lib/timezone.ts:64-75`).
   - What RN does: `handleSave` never sets `timeZone` (`src/components/calendar/EventModal.tsx:262-281`) and `createEvent` does not add one (`src/api/calendar.ts:248-275`). Stalwart stores a floating DTSTART; attendees in other zones, CalDAV clients, and the user after travelling see wrong times; iMIP invites sent for such events are ambiguous.
   - Fix hint: set `timeZone: allDay ? null : Intl.DateTimeFormat().resolvedOptions().timeZone` (reuse `getUserTimeZone` from `src/api/calendar.ts:15`); once a custom time-zone setting exists (see below) use that.

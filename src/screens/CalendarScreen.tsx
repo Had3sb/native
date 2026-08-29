@@ -73,6 +73,7 @@ import {
 import { generateBirthdayEvents, createBirthdayCalendar, BIRTHDAY_CALENDAR_ID } from '../lib/birthday-calendar';
 import { useContactsStore } from '../stores/contacts-store';
 import { useLocaleStore } from '../stores/locale-store';
+import { useUserCalendarAddresses } from '../lib/calendar-user-addresses';
 import type { Calendar, CalendarEvent, RecurrenceRule } from '../api/types';
 
 type ViewMode = 'month' | 'week' | 'agenda';
@@ -126,6 +127,7 @@ export default function CalendarScreen() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const t = useLocaleStore((s) => s.t);
+  const currentUserEmails = useUserCalendarAddresses();
   const calendarDefaultView = useSettingsStore((s) => s.calendarDefaultView);
   const calendarFirstDayOfWeek = useSettingsStore((s) => s.calendarFirstDayOfWeek);
   const calendarShowWeekNumbers = useSettingsStore((s) => s.calendarShowWeekNumbers);
@@ -627,6 +629,7 @@ export default function CalendarScreen() {
         event={detailEvent}
         calendars={calendars}
         timeFormat={calendarTimeFormat}
+        currentUserEmails={currentUserEmails}
         onClose={() => setDetailEvent(null)}
         onEdit={handleEditFromDetail}
         onDelete={handleDeleteFromDetail}
@@ -651,6 +654,7 @@ export default function CalendarScreen() {
         event={modalEvent}
         calendars={eventCalendars}
         defaultDate={modalDate}
+        currentUserEmails={currentUserEmails}
         onSave={handleSave}
         onDelete={handleDeleteFromModal}
         onClose={() => setModalVisible(false)}

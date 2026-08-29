@@ -9,7 +9,6 @@ import { spacing, radius, typography, type ThemePalette } from '../../theme/toke
 import { useColors } from '../../theme/colors';
 import { parseCalendarBlob } from '../../api/calendar';
 import { useCalendarStore } from '../../stores/calendar-store';
-import { useAccountStore } from '../../stores/account-store';
 import { useSettingsStore } from '../../stores/settings-store';
 import {
   findCalendarAttachment,
@@ -19,6 +18,7 @@ import {
   inferInvitationMethod,
   type InvitationMethod,
 } from '../../lib/calendar-invitation';
+import { useUserCalendarAddresses } from '../../lib/calendar-user-addresses';
 
 type BannerState = 'loading' | 'parsed' | 'done' | 'error';
 type RsvpStatus = 'accepted' | 'tentative' | 'declined';
@@ -34,7 +34,9 @@ export function CalendarInvitationBanner({ email }: Props) {
   const calendars = useCalendarStore((s) => s.calendars);
   const importEvents = useCalendarStore((s) => s.importEvents);
   const rsvpEvent = useCalendarStore((s) => s.rsvpEvent);
-  const activeEmail = useAccountStore((s) => s.getActiveAccount()?.email ?? null);
+  // Login address + identities + aliases, so invitations addressed to an
+  // alias still show the RSVP buttons.
+  const currentUserEmails = useUserCalendarAddresses();
 
   const attachment = React.useMemo(() => findCalendarAttachment(email), [email]);
 
@@ -90,7 +92,7 @@ export function CalendarInvitationBanner({ email }: Props) {
   const organizer = getOrganizerName(event);
   const location = event.locations ? Object.values(event.locations)[0]?.name : undefined;
   const videoUri = event.virtualLocations ? Object.values(event.virtualLocations)[0]?.uri : undefined;
-  const me = activeEmail ? findParticipantByEmail(event, [activeEmail]) : null;
+  const me = findParticipantByEmail(event, currentUserEmails);
   const canRsvp = method !== 'cancel' && method !== 'reply' && !!me;
 
   const writableCalendar = calendars.find((cal) => !cal.myRights || cal.myRights.mayWrite !== false);
@@ -104,8 +106,8 @@ export function CalendarInvitationBanner({ email }: Props) {
       await importEvents([event], writableCalendar.id);
       // Re-read from the store to get the server-assigned id + participant.
       const stored = useCalendarStore.getState().events.find((e) => e.uid === event.uid);
-      const participant = stored && activeEmail
-        ? findParticipantByEmail(stored, [activeEmail])
+      const participant = stored
+        ? findParticipantByEmail(stored, currentUserEmails)
         : me;
       if (stored && participant) {
         await rsvpEvent(stored.id, participant.id, status, buildReplyTo(event));

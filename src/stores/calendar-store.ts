@@ -375,12 +375,20 @@ export const useCalendarStore = create<CalendarState>()(
   },
 
   rsvpEvent: async (eventId, participantId, status, replyTo) => {
-    if (!participantId || participantId.includes('..')) {
+    // JMAP participant ids are opaque strings (they can contain @, ., :, /);
+    // the api layer RFC 6901-escapes them, so only reject empty values.
+    if (!participantId) {
       throw new Error('Invalid participant ID');
     }
     const storeEvent = get().events.find((e) => e.id === eventId);
     const realId = storeEvent?.originalId || eventId;
-    await apiRsvpEvent(realId, participantId, status, replyTo, storeEvent?.accountId);
+    // Repair events that are missing the organizer (e.g. imported ones) so
+    // Stalwart can route the REPLY; never touch an existing one.
+    const repair =
+      replyTo?.imip && storeEvent && !storeEvent.organizerCalendarAddress
+        ? replyTo.imip
+        : undefined;
+    await apiRsvpEvent(realId, participantId, status, repair, storeEvent?.accountId);
     set({
       events: get().events.map((e) => {
         if (e.id !== eventId || !e.participants?.[participantId]) return e;
