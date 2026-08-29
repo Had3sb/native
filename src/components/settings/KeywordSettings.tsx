@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, TextInput } from 'react-native';
-import { Plus, Pencil, Trash2, Check, X, RotateCcw } from 'lucide-react-native';
+import { View, Text, StyleSheet, Pressable, TextInput, Alert, ActivityIndicator } from 'react-native';
+import { Plus, Pencil, Trash2, Check, X, RotateCcw, ScanSearch } from 'lucide-react-native';
 import { SettingsSection } from './settings-section';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { useKeywordsStore, type KeywordDef } from '../../stores/keywords-store';
 import { DARK_COLORS } from '../../theme/tokens';
 import { useLocaleStore } from '../../stores/locale-store';
+import { discoverKeywords } from '../../api/keyword-discovery';
+import { findUnrecognizedKeywords, type UnrecognizedKeyword } from '../../lib/keyword-discovery';
+import { jmapClient } from '../../api/jmap-client';
 
 type Keyword = KeywordDef;
 
@@ -44,6 +47,51 @@ export function KeywordSettings() {
 
   const deleteKeyword = (id: string) => {
     removeKeyword(id);
+  };
+
+  // One stray tap used to wipe a carefully built tag list (webmail removed
+  // the button in 1.8.1); keep it behind a confirm.
+  const confirmReset = () => {
+    Alert.alert(
+      t('settings.keywords.reset_defaults', 'Reset to Defaults'),
+      t('settings.keywords.reset_confirm', 'Replace your tag list with the default tags? Tags already set on messages stay on the server.'),
+      [
+        { text: t('common.cancel', 'Cancel'), style: 'cancel' },
+        { text: t('settings.keywords.reset_defaults', 'Reset to Defaults'), style: 'destructive', onPress: resetDefaults },
+      ],
+    );
+  };
+
+  // Scan the mailbox for `$label:` keywords no local tag explains (#658) and
+  // offer to add them with a proposed name and colour.
+  const [scan, setScan] = useState<{
+    phase: 'idle' | 'running' | 'done' | 'error';
+    scanned: number;
+    total: number;
+    complete: boolean;
+    found: UnrecognizedKeyword[];
+    error?: string;
+  }>({ phase: 'idle', scanned: 0, total: 0, complete: false, found: [] });
+  const scanAbort = React.useRef({ aborted: false });
+  const runScan = async () => {
+    if (!jmapClient.isConnected) return;
+    scanAbort.current = { aborted: false };
+    setScan({ phase: 'running', scanned: 0, total: 0, complete: false, found: [] });
+    try {
+      const result = await discoverKeywords({
+        signal: scanAbort.current,
+        onProgress: (scanned, total) => setScan((s) => ({ ...s, scanned, total })),
+      });
+      const found = findUnrecognizedKeywords(result.keywords, useKeywordsStore.getState().keywords);
+      setScan({ phase: 'done', scanned: result.scanned, total: result.total, complete: result.complete, found });
+    } catch (err) {
+      setScan((s) => ({ ...s, phase: 'error', error: err instanceof Error ? err.message : String(err) }));
+    }
+  };
+  useEffect(() => () => { scanAbort.current.aborted = true; }, []);
+  const adoptFound = (kw: UnrecognizedKeyword) => {
+    addKeyword({ id: kw.id, label: kw.label, color: kw.color });
+    setScan((s) => ({ ...s, found: s.found.filter((f) => f.id !== kw.id) }));
   };
 
   return (
@@ -93,10 +141,56 @@ export function KeywordSettings() {
               <Plus size={14} color={c.mutedForeground} />
               <Text style={styles.outlineBtnText}>{t('settings.keywords.add_keyword', "Add Tag")}</Text>
             </Pressable>
-            <Pressable style={styles.outlineBtn} onPress={resetDefaults}>
+            <Pressable style={styles.outlineBtn} onPress={confirmReset}>
               <RotateCcw size={14} color={c.mutedForeground} />
               <Text style={styles.outlineBtnText}>{t('settings.keywords.reset_defaults', "Reset to Defaults")}</Text>
             </Pressable>
+            <Pressable style={styles.outlineBtn} onPress={() => { void runScan(); }} disabled={scan.phase === 'running'}>
+              {scan.phase === 'running' ? (
+                <ActivityIndicator size="small" color={c.mutedForeground} />
+              ) : (
+                <ScanSearch size={14} color={c.mutedForeground} />
+              )}
+              <Text style={styles.outlineBtnText}>{t('settings.keywords.discover.scan', 'Find tags in mailbox')}</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {scan.phase === 'running' && (
+          <Text style={styles.scanStatus}>
+            {t('settings.keywords.discover.progress', `Scanned ${scan.scanned} of ${scan.total} messages…`, { scanned: scan.scanned, total: scan.total })}
+          </Text>
+        )}
+        {scan.phase === 'error' && (
+          <Text style={[styles.scanStatus, { color: c.error }]}>{scan.error}</Text>
+        )}
+        {scan.phase === 'done' && (
+          <View style={styles.scanResults}>
+            <Text style={styles.scanStatus}>
+              {scan.found.length === 0
+                ? t('settings.keywords.discover.none', `No unknown tags found in ${scan.scanned} messages.`, { scanned: scan.scanned })
+                : t('settings.keywords.discover.found', `${scan.found.length} tags found that are not defined here.`, { count: scan.found.length })}
+              {!scan.complete ? ` ${t('settings.keywords.discover.partial', '(The scan stopped at the newest messages only.)')}` : ''}
+            </Text>
+            {scan.found.map((kw) => (
+              <View key={kw.id} style={styles.kwRow}>
+                <View style={[styles.kwDot, { backgroundColor: c.tags[kw.color]?.dot ?? c.textMuted }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.kwLabel}>{kw.label}</Text>
+                  <Text style={styles.kwId}>{kw.keyword} · {kw.count}</Text>
+                </View>
+                <Pressable style={styles.outlineBtn} onPress={() => adoptFound(kw)}>
+                  <Plus size={14} color={c.mutedForeground} />
+                  <Text style={styles.outlineBtnText}>{t('common.add', 'Add')}</Text>
+                </Pressable>
+              </View>
+            ))}
+            {scan.found.length > 1 && (
+              <Pressable style={styles.outlineBtn} onPress={() => { for (const kw of [...scan.found]) adoptFound(kw); }}>
+                <Plus size={14} color={c.mutedForeground} />
+                <Text style={styles.outlineBtnText}>{t('settings.keywords.discover.add_all', 'Add all')}</Text>
+              </Pressable>
+            )}
           </View>
         )}
       </View>
@@ -229,6 +323,8 @@ function makeStyles(c: ThemePalette) {
     borderColor: c.border,
   },
   outlineBtnText: { ...typography.caption, color: c.mutedForeground },
+  scanStatus: { ...typography.caption, color: c.mutedForeground, paddingTop: spacing.xs },
+  scanResults: { gap: spacing.sm },
   form: {
     gap: spacing.md,
     padding: spacing.md,

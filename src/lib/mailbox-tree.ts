@@ -129,8 +129,17 @@ const ACCOUNT_NODE_RIGHTS: Mailbox['myRights'] = {
  * (GitHub #151), so a Stalwart group mailbox shows up as its own section
  * rather than being mixed into the user's folder list.
  */
-export function buildMailboxTree(mailboxes: Mailbox[]): MailboxNode[] {
-  const own = mailboxes.filter((m) => !m.isShared);
+export function buildMailboxTree(
+  mailboxes: Mailbox[],
+  opts: {
+    /**
+     * Role folders to leave out of the user's own tree — e.g. the server's
+     * `scheduled` folder while the virtual Scheduled row is shown (#495).
+     */
+    hideOwnRoles?: ReadonlySet<string>;
+  } = {},
+): MailboxNode[] {
+  const own = mailboxes.filter((m) => !m.isShared && !(m.role && opts.hideOwnRoles?.has(m.role)));
   const shared = mailboxes.filter((m) => m.isShared);
 
   const roots = buildRoots(own);
@@ -178,6 +187,27 @@ export function buildMailboxTree(mailboxes: Mailbox[]): MailboxNode[] {
   accountNodes.sort((a, b) => a.name.localeCompare(b.name));
 
   return [...roots, ...accountNodes];
+}
+
+/** Every folder below `mailboxId` (any depth) plus the folder itself. */
+export function mailboxSubtreeIds(mailboxes: Mailbox[], mailboxId: string): string[] {
+  const childrenOf = new Map<string, string[]>();
+  for (const m of mailboxes) {
+    if (!m.parentId) continue;
+    const list = childrenOf.get(m.parentId);
+    if (list) list.push(m.id);
+    else childrenOf.set(m.parentId, [m.id]);
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const walk = (id: string) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(id);
+    for (const child of childrenOf.get(id) ?? []) walk(child);
+  };
+  walk(mailboxId);
+  return out;
 }
 
 // Flatten the tree in traversal order, skipping children of collapsed nodes.

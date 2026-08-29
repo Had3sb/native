@@ -12,12 +12,22 @@ export interface KeywordDef {
   color: KeywordColor;
 }
 
-const DEFAULT_KEYWORDS: KeywordDef[] = [
-  { id: 'important', label: 'Important', color: 'red' },
-  { id: 'work',      label: 'Work',      color: 'blue' },
-  { id: 'personal',  label: 'Personal',  color: 'green' },
-  { id: 'todo',      label: 'Todo',      color: 'amber' },
+// Same ids/labels/colours as the webmail's DEFAULT_KEYWORDS
+// (stores/settings-store.ts): the default tags are named after their colour,
+// so a message tagged `$label:blue` on one client is the same tag on the
+// other. The colour keys match the webmail's KEYWORD_PALETTE base row.
+export const DEFAULT_KEYWORDS: KeywordDef[] = [
+  { id: 'red',    label: 'Red',    color: 'red' },
+  { id: 'orange', label: 'Orange', color: 'orange' },
+  { id: 'yellow', label: 'Yellow', color: 'yellow' },
+  { id: 'green',  label: 'Green',  color: 'green' },
+  { id: 'blue',   label: 'Blue',   color: 'blue' },
+  { id: 'purple', label: 'Purple', color: 'purple' },
+  { id: 'pink',   label: 'Pink',   color: 'pink' },
 ];
+
+/** The colour a tag falls back to when its definition is gone. */
+export const FALLBACK_KEYWORD_COLOR: KeywordColor = 'gray';
 
 /**
  * JMAP keyword token used on emails for a given keyword id.

@@ -1,62 +1,149 @@
 import React from 'react';
 import {
-  View, Text, StyleSheet, FlatList, ActivityIndicator, Pressable,
+  View, Text, StyleSheet, FlatList, ActivityIndicator, Pressable, TextInput, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ArrowLeft, Star, Paperclip, AlertTriangle } from 'lucide-react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  ArrowLeft, Star, Paperclip, AlertTriangle, Search, X, Square, SquareCheck,
+  Mail as MailIcon, MailOpen, Archive, Trash2, ShieldAlert, ShieldCheck, Folder,
+} from 'lucide-react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import SenderAvatar from '../components/SenderAvatar';
-import { fetchUnifiedInbox, type UnifiedEmail } from '../api/unified-inbox';
+import { SwipeableRow } from '../components/SwipeableRow';
+import {
+  fetchUnifiedInbox, patchUnifiedKeywords, moveUnifiedEmails, deleteUnifiedEmails, isInUnifiedTrash,
+  type UnifiedEmail, type UnifiedRole, type CrossView,
+} from '../api/unified-inbox';
 import { useAccountStore } from '../stores/account-store';
 import { useAuthStore } from '../stores/auth-store';
-import { useSettingsStore } from '../stores/settings-store';
+import { useSettingsStore, type SwipeAction } from '../stores/settings-store';
 import { useLocaleStore } from '../stores/locale-store';
 import { formatListDate } from '../lib/date-format';
+import { isPermanentDelete, confirmPermanentDelete } from '../lib/delete-confirm';
 import { spacing, typography, componentSizes, radius, type ThemePalette } from '../theme/tokens';
 import { useColors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'UnifiedInbox'>;
 
-function senderName(email: UnifiedEmail): string {
+const PAGE_SIZE = 25;
+
+function senderName(email: UnifiedEmail, showRecipient: boolean): string {
+  if (showRecipient) {
+    const to = email.to?.[0];
+    if (to) return to.name || to.email;
+  }
   return email.from?.[0]?.name || email.from?.[0]?.email || 'Unknown';
 }
 
-export default function UnifiedInboxScreen({ navigation }: Props) {
+function rowKey(e: UnifiedEmail): string {
+  return `${e.sourceAccountId}:${e.jmapAccountId}:${e.id}`;
+}
+
+export default function UnifiedInboxScreen({ navigation, route }: Props) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
+  const role: UnifiedRole = route.params?.role ?? 'inbox';
+  const view: CrossView | undefined = route.params?.view;
   const accounts = useAccountStore((s) => s.accounts);
+  const activeAccountId = useAuthStore((s) => s.activeAccountId);
   const switchAccount = useAuthStore((s) => s.switchAccount);
   const dateFormat = useSettingsStore((s) => s.dateFormat);
   const timeFormat = useSettingsStore((s) => s.timeFormat);
   const includeGroup = useSettingsStore((s) => s.includeGroupInUnified);
+  const crossAccount = useSettingsStore((s) => s.unifiedCrossAccount);
+  const deleteAction = useSettingsStore((s) => s.deleteAction);
+  const permanentlyDeleteJunk = useSettingsStore((s) => s.permanentlyDeleteJunk);
+  const swipeLeftAction = useSettingsStore((s) => s.swipeLeftAction);
+  const swipeRightAction = useSettingsStore((s) => s.swipeRightAction);
+  const swipeMode = useSettingsStore((s) => s.swipeMode);
+  const showAvatarsInJunk = useSettingsStore((s) => s.showAvatarsInJunk);
   const locale = useLocaleStore((s) => s.locale);
 
   const [emails, setEmails] = React.useState<UnifiedEmail[]>([]);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [loading, setLoading] = React.useState(true);
+  const [loadingMore, setLoadingMore] = React.useState(false);
   const [opening, setOpening] = React.useState(false);
+  const [searchInput, setSearchInput] = React.useState('');
+  const [query, setQuery] = React.useState('');
+  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const positionsRef = React.useRef<Record<string, number>>({});
+  const hasMoreRef = React.useRef(false);
+  const loadSeq = React.useRef(0);
 
   const accountById = React.useMemo(
     () => new Map(accounts.map((a) => [a.id, a])),
     [accounts],
   );
-  const accountIds = React.useMemo(() => accounts.map((a) => a.id), [accounts]);
+  // Account-bounded by default (the active account + its shared/group
+  // folders); every signed-in account only with the cross-account opt-in.
+  const accountIds = React.useMemo(() => {
+    if (crossAccount || !activeAccountId) return accounts.map((a) => a.id);
+    return accounts.some((a) => a.id === activeAccountId) ? [activeAccountId] : accounts.map((a) => a.id);
+  }, [accounts, activeAccountId, crossAccount]);
+
+  const fetchOpts = React.useMemo(
+    () => ({ includeGroup, query, role, view }),
+    [includeGroup, query, role, view],
+  );
 
   const load = React.useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
-      const result = await fetchUnifiedInbox(accountIds, 25, { includeGroup });
+      const result = await fetchUnifiedInbox(accountIds, PAGE_SIZE, { ...fetchOpts, positions: {} });
+      if (seq !== loadSeq.current) return;
+      positionsRef.current = result.positions;
+      hasMoreRef.current = result.hasMore;
       setEmails(result.emails);
       setErrors(result.errors);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
-  }, [accountIds, includeGroup]);
+  }, [accountIds, fetchOpts]);
 
+  const loadMore = React.useCallback(async () => {
+    if (loading || loadingMore || !hasMoreRef.current) return;
+    const seq = loadSeq.current;
+    setLoadingMore(true);
+    try {
+      const result = await fetchUnifiedInbox(accountIds, PAGE_SIZE, {
+        ...fetchOpts,
+        positions: positionsRef.current,
+      });
+      if (seq !== loadSeq.current) return;
+      positionsRef.current = result.positions;
+      hasMoreRef.current = result.hasMore;
+      setEmails((prev) => {
+        const seen = new Set(prev.map(rowKey));
+        const merged = [...prev];
+        for (const e of result.emails) if (!seen.has(rowKey(e))) merged.push(e);
+        return merged.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+      });
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [accountIds, fetchOpts, loading, loadingMore]);
+
+  // Reload when the view comes back into focus (a message read or deleted
+  // in the thread screen is stale otherwise) and whenever the inputs change.
+  useFocusEffect(
+    React.useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  // Search on submit / after a pause (2+ chars), like the folder list.
   React.useEffect(() => {
-    void load();
-  }, [load]);
+    const trimmed = searchInput.trim();
+    if (trimmed === query) return;
+    if (trimmed.length > 0 && trimmed.length < 2) return;
+    const id = setTimeout(() => setQuery(trimmed), 600);
+    return () => clearTimeout(id);
+  }, [searchInput, query]);
 
   const onOpen = React.useCallback(
     (email: UnifiedEmail) => {
@@ -91,79 +178,247 @@ export default function UnifiedInboxScreen({ navigation }: Props) {
     [opening, switchAccount, navigation, emails],
   );
 
+  // ── Actions (routed to each message's own account) ────────────────────
+  const removeRows = (targets: UnifiedEmail[]) => {
+    const gone = new Set(targets.map(rowKey));
+    setEmails((prev) => prev.filter((e) => !gone.has(rowKey(e))));
+  };
+  const patchRows = (targets: UnifiedEmail[], patch: Record<string, boolean | null>) => {
+    const keys = new Set(targets.map(rowKey));
+    setEmails((prev) => prev.map((e) => {
+      if (!keys.has(rowKey(e))) return e;
+      const keywords = { ...e.keywords };
+      for (const [k, v] of Object.entries(patch)) {
+        if (v) keywords[k] = true;
+        else delete keywords[k];
+      }
+      return { ...e, keywords };
+    }));
+  };
+  const fail = (err: unknown) => {
+    Alert.alert(t('email_list.error', 'Error'), err instanceof Error ? err.message : String(err));
+    void load();
+  };
+
+  const setRead = (targets: UnifiedEmail[], read: boolean) => {
+    patchRows(targets, { $seen: read ? true : null });
+    patchUnifiedKeywords(targets, { $seen: read ? true : null }).catch(fail);
+  };
+  const setStarred = (targets: UnifiedEmail[], starred: boolean) => {
+    patchRows(targets, { $flagged: starred ? true : null });
+    patchUnifiedKeywords(targets, { $flagged: starred ? true : null }).catch(fail);
+  };
+  const archive = (targets: UnifiedEmail[]) => {
+    removeRows(targets);
+    moveUnifiedEmails(targets, 'archive').catch(fail);
+  };
+  const spam = (targets: UnifiedEmail[]) => {
+    removeRows(targets);
+    moveUnifiedEmails(targets, role === 'junk' ? 'inbox' : 'junk', {
+      markRead: role !== 'junk' && deleteAction === 'trash-and-read',
+    }).catch(fail);
+  };
+  const remove = async (targets: UnifiedEmail[]) => {
+    const permanent = targets.some((e) => isPermanentDelete({
+      inTrash: role === 'trash' || isInUnifiedTrash(e),
+      inJunk: role === 'junk',
+      deleteAction,
+      permanentlyDeleteJunk,
+    }));
+    if (permanent && !(await confirmPermanentDelete(targets.length, t))) return;
+    removeRows(targets);
+    deleteUnifiedEmails(targets, {
+      permanent: deleteAction === 'permanent' || (permanentlyDeleteJunk && role === 'junk'),
+      markRead: deleteAction === 'trash-and-read',
+    }).catch(fail);
+  };
+
+  const handleSwipe = (email: UnifiedEmail, action: SwipeAction) => {
+    switch (action) {
+      case 'archive': if (role !== 'archive') archive([email]); break;
+      case 'delete': void remove([email]); break;
+      case 'spam': if (role !== 'sent' && role !== 'drafts') spam([email]); break;
+      case 'read': setRead([email], !email.keywords?.$seen); break;
+      case 'star': setStarred([email], !email.keywords?.$flagged); break;
+      case 'pin':
+        patchRows([email], { $pinned: email.keywords?.$pinned ? null : true });
+        patchUnifiedKeywords([email], { $pinned: email.keywords?.$pinned ? null : true }).catch(fail);
+        break;
+      default: break;
+    }
+  };
+
+  const selectionMode = selected.size > 0;
+  const selectedEmails = React.useMemo(
+    () => emails.filter((e) => selected.has(rowKey(e))),
+    [emails, selected],
+  );
+  const toggleSelect = (email: UnifiedEmail) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const key = rowKey(email);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelected(new Set());
+  const allRead = selectedEmails.length > 0 && selectedEmails.every((e) => !!e.keywords?.$seen);
+  const allStarred = selectedEmails.length > 0 && selectedEmails.every((e) => !!e.keywords?.$flagged);
+
   const errorCount = Object.keys(errors).length;
+  const showRecipient = role === 'sent' || role === 'drafts';
+  const title = view
+    ? t(`sidebar.unified_all_${view === 'all' ? 'mail' : view}`, { all: 'All mail', unread: 'All unread', starred: 'All starred' }[view])
+    : role === 'inbox'
+      ? t('sidebar.unified_inbox', 'All inboxes')
+      : t(`sidebar.unified_${role}`, `All ${role}`);
 
   const renderItem = ({ item }: { item: UnifiedEmail }) => {
     const acc = accountById.get(item.sourceAccountId);
     const unread = !item.keywords?.$seen;
     const starred = !!item.keywords?.$flagged;
+    const isSelected = selected.has(rowKey(item));
     return (
-      <Pressable
-        onPress={() => onOpen(item)}
-        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      <SwipeableRow
+        leftAction={selectionMode ? 'none' : swipeLeftAction}
+        rightAction={selectionMode ? 'none' : swipeRightAction}
+        mode={swipeMode}
+        context={{ unread, starred, pinned: !!item.keywords?.$pinned, inJunk: role === 'junk' }}
+        onAction={(action) => handleSwipe(item, action)}
       >
-        {unread && <View style={styles.unreadDot} />}
-        <View style={styles.avatarWrap}>
-          <SenderAvatar
-            name={senderName(item)}
-            email={item.from?.[0]?.email}
-            size={componentSizes.avatarMd}
-          />
-          {acc && <View style={[styles.accountDot, { backgroundColor: acc.avatarColor }]} />}
-        </View>
-        <View style={styles.content}>
-          <View style={styles.line}>
-            <Text style={[styles.sender, unread && styles.bold]} numberOfLines={1}>
-              {senderName(item)}
-            </Text>
-            {starred && <Star size={12} color={c.starred} fill={c.starred} />}
-            {item.hasAttachment && <Paperclip size={12} color={c.textMuted} />}
-            <Text style={styles.time}>{formatListDate(item.receivedAt, { dateFormat, timeFormat, locale })}</Text>
+        <Pressable
+          onPress={() => (selectionMode ? toggleSelect(item) : onOpen(item))}
+          onLongPress={() => toggleSelect(item)}
+          delayLongPress={300}
+          style={({ pressed }) => [styles.row, pressed && styles.rowPressed, isSelected && styles.rowSelected]}
+        >
+          {unread && <View style={styles.unreadDot} />}
+          {selectionMode && (
+            <View style={styles.checkbox}>
+              {isSelected ? <SquareCheck size={16} color={c.primary} /> : <Square size={16} color={c.textMuted} />}
+            </View>
+          )}
+          <View style={styles.avatarWrap}>
+            <SenderAvatar
+              name={senderName(item, showRecipient)}
+              email={showRecipient ? item.to?.[0]?.email : item.from?.[0]?.email}
+              size={componentSizes.avatarMd}
+              disableImages={role === 'junk' && !showAvatarsInJunk}
+            />
+            {acc && accountIds.length > 1 && (
+              <View style={[styles.accountDot, { backgroundColor: acc.avatarColor }]} />
+            )}
           </View>
-          <Text style={[styles.subject, unread && styles.bold]} numberOfLines={1}>
-            {item.subject || '(no subject)'}
-          </Text>
-          <View style={styles.line}>
-            {acc && (
-              <Text style={styles.account} numberOfLines={1}>
-                {acc.email || acc.username}
+          <View style={styles.content}>
+            <View style={styles.line}>
+              <Text style={[styles.sender, unread && styles.bold]} numberOfLines={1}>
+                {senderName(item, showRecipient)}
               </Text>
-            )}
-            {item.isShared && (
-              <View style={styles.sharedBadge}>
-                <Text style={styles.sharedBadgeText} numberOfLines={1}>
-                  {item.sharedLabel || 'Shared'}
+              {starred && <Star size={12} color={c.starred} fill={c.starred} />}
+              {item.hasAttachment && <Paperclip size={12} color={c.textMuted} />}
+              <Text style={styles.time}>{formatListDate(item.receivedAt, { dateFormat, timeFormat, locale })}</Text>
+            </View>
+            <Text style={[styles.subject, unread && styles.bold]} numberOfLines={1}>
+              {item.subject || '(no subject)'}
+            </Text>
+            <View style={styles.line}>
+              {acc && accountIds.length > 1 && (
+                <Text style={styles.account} numberOfLines={1}>
+                  {acc.email || acc.username}
                 </Text>
-              </View>
-            )}
+              )}
+              {item.isShared && (
+                <View style={styles.sharedBadge}>
+                  <Text style={styles.sharedBadgeText} numberOfLines={1}>
+                    {item.sharedLabel || t('sidebar.shared', 'Shared')}
+                  </Text>
+                </View>
+              )}
+              {item.sourceFolder && (
+                <View style={styles.sharedBadge}>
+                  <Folder size={10} color={c.mutedForeground} />
+                  <Text style={styles.sharedBadgeText} numberOfLines={1}>{item.sourceFolder}</Text>
+                </View>
+              )}
+            </View>
+            {item.preview ? (
+              <Text style={styles.preview} numberOfLines={1}>{item.preview}</Text>
+            ) : null}
           </View>
-          {item.preview ? (
-            <Text style={styles.preview} numberOfLines={1}>{item.preview}</Text>
-          ) : null}
-        </View>
-      </Pressable>
+        </Pressable>
+      </SwipeableRow>
     );
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.headerBtn} hitSlop={8}>
-          <ArrowLeft size={22} color={c.text} />
-        </Pressable>
-        <Text style={styles.headerTitle} numberOfLines={1}>All inboxes</Text>
-        <View style={styles.headerBtn}>
-          {opening ? <ActivityIndicator size="small" color={c.primary} /> : null}
+      {selectionMode ? (
+        <View style={styles.header}>
+          <Pressable onPress={clearSelection} style={styles.headerBtn} hitSlop={8}>
+            <X size={20} color={c.text} />
+          </Pressable>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {t('context_menu.items_selected', `${selected.size} selected`, { count: selected.size })}
+          </Text>
+          <Pressable onPress={() => { setStarred(selectedEmails, !allStarred); clearSelection(); }} style={styles.headerBtn} hitSlop={6}>
+            <Star size={20} color={allStarred ? c.starred : c.text} fill={allStarred ? c.starred : 'transparent'} />
+          </Pressable>
+          <Pressable onPress={() => { setRead(selectedEmails, !allRead); clearSelection(); }} style={styles.headerBtn} hitSlop={6}>
+            {allRead ? <MailIcon size={20} color={c.text} /> : <MailOpen size={20} color={c.text} />}
+          </Pressable>
+          {role !== 'sent' && role !== 'drafts' && (
+            <Pressable onPress={() => { spam(selectedEmails); clearSelection(); }} style={styles.headerBtn} hitSlop={6}>
+              {role === 'junk' ? <ShieldCheck size={20} color={c.text} /> : <ShieldAlert size={20} color={c.text} />}
+            </Pressable>
+          )}
+          {role !== 'archive' && (
+            <Pressable onPress={() => { archive(selectedEmails); clearSelection(); }} style={styles.headerBtn} hitSlop={6}>
+              <Archive size={20} color={c.text} />
+            </Pressable>
+          )}
+          <Pressable onPress={() => { void remove(selectedEmails).then(clearSelection); }} style={styles.headerBtn} hitSlop={6}>
+            <Trash2 size={20} color={c.text} />
+          </Pressable>
         </View>
+      ) : (
+        <View style={styles.header}>
+          <Pressable onPress={() => navigation.goBack()} style={styles.headerBtn} hitSlop={8}>
+            <ArrowLeft size={22} color={c.text} />
+          </Pressable>
+          <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
+          <View style={styles.headerBtn}>
+            {opening ? <ActivityIndicator size="small" color={c.primary} /> : null}
+          </View>
+        </View>
+      )}
+
+      <View style={styles.searchBar}>
+        <Search size={16} color={c.textMuted} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder={t('email_list.search_placeholder', 'Search mail...')}
+          placeholderTextColor={c.textMuted}
+          value={searchInput}
+          onChangeText={setSearchInput}
+          onSubmitEditing={() => setQuery(searchInput.trim())}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+        />
+        {searchInput.length > 0 && (
+          <Pressable onPress={() => { setSearchInput(''); setQuery(''); }} hitSlop={8}>
+            <X size={14} color={c.textMuted} />
+          </Pressable>
+        )}
       </View>
 
       {errorCount > 0 && (
         <View style={styles.errorBanner}>
           <AlertTriangle size={14} color={c.error} />
-          <Text style={styles.errorBannerText} numberOfLines={1}>
-            {errorCount === 1
-              ? '1 account could not be loaded'
-              : `${errorCount} accounts could not be loaded`}
+          <Text style={styles.errorBannerText} numberOfLines={2}>
+            {t('unified_mailbox.accounts_failed', `${errorCount} account(s) could not be loaded`, { count: errorCount })}
+            {': '}
+            {Object.values(errors)[0]}
           </Text>
         </View>
       )}
@@ -171,20 +426,26 @@ export default function UnifiedInboxScreen({ navigation }: Props) {
       {loading && emails.length === 0 ? (
         <View style={styles.center}>
           <ActivityIndicator color={c.primary} />
-          <Text style={styles.loadingText}>Loading all inboxes…</Text>
+          <Text style={styles.loadingText}>{t('email_list.loading', 'Loading…')}</Text>
         </View>
       ) : emails.length === 0 ? (
         <View style={styles.center}>
-          <Text style={styles.loadingText}>No mail across your accounts</Text>
+          <Text style={styles.loadingText}>
+            {query ? t('email_list.no_search_results', 'No emails found') : t('email_list.no_emails', 'No emails')}
+          </Text>
         </View>
       ) : (
         <FlatList
           data={emails}
-          keyExtractor={(item) => `${item.sourceAccountId}:${item.id}`}
+          keyExtractor={rowKey}
           renderItem={renderItem}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           refreshing={loading}
           onRefresh={() => { void load(); }}
+          onEndReached={() => { void loadMore(); }}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={loadingMore ? <ActivityIndicator style={{ padding: spacing.md }} color={c.primary} /> : null}
+          contentContainerStyle={{ paddingBottom: 40 }}
         />
       )}
     </SafeAreaView>
@@ -207,6 +468,20 @@ function makeStyles(c: ThemePalette) {
       width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md,
     },
     headerTitle: { ...typography.h3, color: c.text, flex: 1 },
+    searchBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginHorizontal: spacing.lg,
+      marginVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      height: componentSizes.inputHeight,
+      backgroundColor: c.surface,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: c.border,
+      gap: spacing.sm,
+    },
+    searchInput: { flex: 1, ...typography.body, color: c.text },
     errorBanner: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -224,8 +499,11 @@ function makeStyles(c: ThemePalette) {
       gap: spacing.md,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
+      backgroundColor: c.background,
     },
     rowPressed: { backgroundColor: c.surfaceHover },
+    rowSelected: { backgroundColor: c.selection },
+    checkbox: { width: 16, height: componentSizes.avatarMd, alignItems: 'center', justifyContent: 'center' },
     // Same unread indicator as the mailbox list (and the webmail): an 8px
     // filled circle in the start gutter (#27). Anchored on the row's *first*
     // line — top padding + half an avatar — because centring it on the row
@@ -256,11 +534,14 @@ function makeStyles(c: ThemePalette) {
     subject: { ...typography.body, color: c.text },
     account: { ...typography.caption, color: c.textMuted },
     sharedBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
       paddingHorizontal: 6,
       paddingVertical: 1,
       borderRadius: radius.full,
       backgroundColor: c.muted,
-      maxWidth: 120,
+      maxWidth: 140,
     },
     sharedBadgeText: { fontSize: 10, fontWeight: '500', color: c.mutedForeground },
     preview: { ...typography.caption, color: c.textMuted },

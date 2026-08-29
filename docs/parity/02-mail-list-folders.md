@@ -12,17 +12,17 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: `deduplicate()` in `src/lib/mailbox-tree.ts:49-68` uses `lower.includes(rn) || rn.includes(lower)` — "Old Inbox", "2025 Archive", "Sent to Accounting" vanish from the drawer and the move sheet (also from `findTrashMailbox` etc. only indirectly).
   - Fix hint: replace the substring test with `r.name.trim().toLowerCase() === lower`; keep the nested/parent guards. Add a case to `src/lib/__tests__/mailbox-tree.test.ts`.
 
-- [ ] **Role folders not localized (#404)** — `P3` — `missing`
+- [x] **Role folders not localized (#404)** — `P3` — `missing` — fixed in PENDING-D
   - What WEB does: `localizeMailboxName(role, name, t)` maps inbox/sent/drafts/trash/archive/junk/important/flagged/all to translated labels (`lib/mailbox-label.ts:35`); used by sidebar (`components/layout/sidebar.tsx:520`), move menu, context menus.
   - What RN does: raw server name everywhere: drawer `src/components/SidebarDrawer.tsx:491`, list header `src/screens/EmailListScreen.tsx:637-641`, `MoveSheet.tsx:120`, `FolderSettings.tsx:26-29` (English-only pill).
   - Fix hint: add `src/lib/mailbox-label.ts` (port of WEB) using `useLocaleStore().t` keys `sidebar.mailboxes.*` (already present in `locales/*/common.json`), apply in the four places.
 
-- [ ] **Setting to hide the total message count on folders (#498)** — `P3` — `missing`
+- [x] **Setting to hide the total message count on folders (#498)** — `P3` — `missing` — fixed in PENDING-D
   - What WEB does: `showFolderTotalCount` setting (`stores/settings-store.ts`, `components/settings/layout-settings.tsx:236`) hides the `/ total` part in `SidebarRowCounts` (`components/layout/sidebar.tsx:207-209`).
   - What RN does: `RowCounts` always shows unread/total (`src/components/SidebarDrawer.tsx:68-79`).
   - Fix hint: add `showFolderTotalCount` to settings-store + LayoutSettings toggle; gate `total` in `RowCounts`.
 
-- [ ] **Create subfolder / choose parent when creating** — `P3` — `partial`
+- [x] **Create subfolder / choose parent when creating** — `P3` — `partial` — fixed in PENDING-D
   - What WEB does: "New subfolder" in the folder context menu and `subfolder_of` in settings (`components/layout/mailbox-context-menu.tsx:187-193`, `components/settings/folder-settings.tsx:408-423`); store `createMailbox(client, name, parentId, accountId)` (`stores/email-store.ts:3753`), incl. creating in a shared account.
   - What RN does: `FolderSettings.saveDraft` always calls `createMailbox({ name })` (`src/components/settings/FolderSettings.tsx:96`) although `createMailbox` in `src/api/email.ts:156` already accepts `parentId` and `accountIdOverride`.
   - Fix hint: add a "Parent folder" select (own folders, or the shared account when creating there) to the editor modal and pass `parentId`.
@@ -37,7 +37,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: fixed role colours always on, `iconFor` knows only inbox/sent/drafts/trash/junk/archive/star (`src/components/SidebarDrawer.tsx:36-66`); no role assignment.
   - Fix hint: low priority; at least extend `iconFor` with the #288 roles (important/memos/scheduled/snoozed/shared) and ideally a role picker in FolderSettings using `updateMailbox(id, { role })` (needs `role` added to the `changes` type).
 
-- [ ] **Hide the server "Scheduled" role folder when the virtual Scheduled row is shown (#495)** — `P3` — `bugfix-parity`
+- [x] **Hide the server "Scheduled" role folder when the virtual Scheduled row is shown (#495)** — `P3` — `bugfix-parity` — fixed in PENDING-D
   - What WEB does: filters `role === 'scheduled'` nodes out of the own tree while the virtual row is rendered (`components/layout/sidebar.tsx:986-990`).
   - What RN does: drawer always renders the virtual "Scheduled" quick row (`src/components/SidebarDrawer.tsx:447-453`) and would also list a Stalwart `role: scheduled` mailbox as a plain folder.
   - Fix hint: skip nodes with `role === 'scheduled'` in `buildMailboxTree`/drawer when `jmapClient.hasDelayedSend()`.
@@ -47,7 +47,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: nothing — the only way is select-all-on-page + delete, page by page.
   - Fix hint: add `emptyMailbox(mailboxId, accountId?)` to `src/api/email.ts` mirroring the WEB loop (stop when `found.length === 0 || destroyed === 0 || found.length < batch`), a confirm `Alert`, a button in the list header when `currentMailbox.role` is trash/junk, then `refreshEmails()` + `fetchMailboxes()` and `dropFromCache`.
 
-- [ ] **Mark folder / folder tree / all folders as read** — `P2` — `missing`
+- [x] **Mark folder / folder tree / all folders as read** — `P2` — `missing` — fixed in PENDING-D
   - What WEB does: folder context menu → `markMailboxAsRead` (paged `Email/query notKeyword $seen` + `Email/set`, `lib/jmap/client.ts:2327-2364`), "mark folder tree read" and "mark all folders read" with confirm (`components/mail/mail-app.tsx:2571-2645`, `client.markAllAsRead` `:2366`); store zeroes unread counters (`stores/email-store.ts:4003-4043`).
   - What RN does: only per-message and batch-on-loaded-page mark read (`EmailListScreen.tsx:456-464`).
   - Fix hint: long-press on a drawer folder row → action sheet (Mark all read / Empty / Rename / Delete / New subfolder); api `markMailboxAsRead(rawId, accountId)` with the paged loop; then `fetchMailboxes()` and, if current, `refreshEmails()`.
@@ -62,49 +62,49 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: every push event awaits `fetchMailboxes()` then `refreshEmails()` (`src/stores/email-store.ts:981-1015`); overlapping pushes, the mount effects (`EmailListScreen.tsx:554-567`) and `archiveEmail`'s follow-up `fetchMailboxes` can all run in parallel; a `RateLimitError` (`src/api/jmap-client.ts:436-440`) is only logged. The tree itself is preserved on failure (`email-store.ts:604-612`), so this is perf/noise rather than data loss.
   - Fix hint: wrap `fetchMailboxes`/`refreshEmails` bodies in a small in-flight map keyed by `activeAccountId` with a single queued re-run, like WEB's `coalesceRefresh`.
 
-- [ ] **Tap the unread count of a folder to open it filtered to unread** — `P3` — `missing`
+- [x] **Tap the unread count of a folder to open it filtered to unread** — `P3` — `missing` — fixed in PENDING-D
   - What WEB does: unread badge is a button that toggles `isUnread: true` on that folder (`components/layout/sidebar.tsx:570`, `components/mail/mail-app.tsx:2533-2567`).
   - What RN does: counts are static text (`SidebarDrawer.tsx:68-79`).
   - Fix hint: make the unread count pressable → `selectMailbox(id)` then `setFilters({ isUnread: true })`.
 
-- [ ] **Shared-account header has no folder actions** — `P3` — `missing`
+- [x] **Shared-account header has no folder actions** — `P3` — `missing` — fixed in PENDING-D
   - What WEB does: right-click on a shared account header offers "New folder" in that account (`components/layout/sidebar.tsx:handleSharedAccountContextMenu`, `mailbox-context-menu.tsx:119-147`; changelog 1.9.0 "route shared-folder management to the owner account").
   - What RN does: `FolderSettings` manages own folders only (`src/components/settings/FolderSettings.tsx:47-50`); the account node in the drawer only expands/collapses (`SidebarDrawer.tsx:499-503`).
   - Fix hint: after the subfolder/move work, add an account picker (own + shared accounts the user `mayCreateChild` in) to the folder editor and pass `accountIdOverride`.
 
 ### Unified mailbox / cross-account views
 
-- [ ] **Unified scope: account-bounded by default, cross-account opt-in; single-account + group inboxes case** — `P2` — `partial`
+- [x] **Unified scope: account-bounded by default, cross-account opt-in; single-account + group inboxes case** — `P2` — `partial` — fixed in PENDING-D
   - What WEB does: unified views stay inside the active account (own + shared/group folders) unless `unifiedCrossAccount` is on *and* the admin gate allows it (`components/mail/mail-app.tsx:465-500`, `stores/settings-store.ts:405-431`); the section is shown with one account as soon as `includeGroupInUnified && hasGroupInboxes` (`components/layout/sidebar.tsx:905-907`).
   - What RN does: "All inboxes" is shown only when `accounts.length > 1` (`src/components/SidebarDrawer.tsx:438-446`) and always spans every account (`src/api/unified-inbox.ts:236-257`). A single account with group inboxes gets no unified view even with "Include Group Inboxes" on (`ReadingSettings.tsx:257`). Admin policy gates do not exist in RN (see N/A).
   - Fix hint: show the row when `accounts.length > 1 || (includeGroupInUnified && mailboxes.some(m => m.isShared))`; add a `unifiedCrossAccount` toggle (default off, like WEB) and pass only the active account id when it is off. Note WEB's default for `includeGroupInUnified` is `true` (`settings-store.ts:639`) while RN defaults to `false` (`src/stores/settings-store.ts:235`).
 
-- [ ] **Unified per-role views (All Sent/Drafts/Junk/Archive/Trash) with live counts** — `P3` — `missing`
+- [x] **Unified per-role views (All Sent/Drafts/Junk/Archive/Trash) with live counts** — `P3` — `missing` — fixed in PENDING-D
   - What WEB does: one row per role present in any account with summed unread/total (`lib/unified-mailbox.ts:295-320`, sidebar rows `components/layout/sidebar.tsx` "unified_*"), counts projected from live mailbox lists.
   - What RN does: inbox only (`src/api/unified-inbox.ts:149`), no counts on the "All inboxes" row.
   - Fix hint: after the per-account mailbox fetch, pick `role` instead of hard-coding inbox; sum `unreadEmails` of each account's inbox for the drawer badge.
 
-- [ ] **All mail / Unread / Starred cross views + per-account folder selection** — `P2` — `missing`
+- [x] **All mail / Unread / Starred cross views + per-account folder selection** — `P2` — `missing` — fixed in PENDING-D
   - What WEB does: `buildCrossFilter` (OR of included mailboxes AND `notKeyword $seen` / `hasKeyword $flagged`) fanned out per account (`lib/unified-mailbox.ts:338-492`); default = inbox + custom folders (`CROSS_EXCLUDED_ROLES`), narrowed by `allMailFolderIds[accountId]` chosen in Layout settings (`components/settings/layout-settings.tsx:291-340`); rows show the source folder chip (`components/email/thread-list-item.tsx:385`, `resolveSourceFolderName` `lib/unified-mailbox.ts:63`).
   - What RN does: none.
   - Fix hint: reuse `fetchInboxEmailsForJmapAccount` with a filter built like `buildCrossFilter` over `Mailbox/get` results minus excluded roles; add a `sourceFolder` label to `UnifiedEmail` rows; folder picker can come later.
 
-- [ ] **Unified list has no pagination ("load more")** — `P2` — `missing`
+- [x] **Unified list has no pagination ("load more")** — `P2` — `missing` — fixed in PENDING-D
   - What WEB does: `loadMoreUnifiedEmails` / cross-view load-more with `position` per account (`stores/email-store.ts:4079-4107`, `1473-1515`).
   - What RN does: fixed `perAccountLimit = 25`, no `position`, no `onEndReached` (`src/api/unified-inbox.ts:236-241`, `src/screens/UnifiedInboxScreen.tsx:175-182`).
   - Fix hint: keep a per-account `position`, add `onEndReached` that re-queries each account at its own offset and merges.
 
-- [ ] **Unified search** — `P3` — `missing`
+- [x] **Unified search** — `P3` — `missing` — fixed in PENDING-D
   - What WEB does: text + advanced filter fan-out in all unified/cross views (`lib/unified-mailbox.ts:177-207`, `455-492`; changelog 1.7.8).
   - What RN does: no search box on `UnifiedInboxScreen`.
   - Fix hint: add the same search bar as `EmailListScreen` and AND `{ text: toWildcardQuery(q) }` into each account's query.
 
-- [ ] **No actions on unified rows (swipe, star, read, delete, archive, spam, selection)** — `P2` — `missing`
+- [x] **No actions on unified rows (swipe, star, read, delete, archive, spam, selection)** — `P2` — `missing` — fixed in PENDING-D
   - What WEB does: every list action resolves the email's own client + owner account via `resolveEmailActionContext` (`stores/email-store.ts:581-640`), incl. batch actions grouped by `sourceAccountId` (`:2634-2660`, `:2740-2760`), archive into the owner's archive (`components/mail/mail-app.tsx:2141-2160`); changelog 1.7.5/1.7.7 "route counter/keyword updates to the email's own account in aggregate views".
   - What RN does: rows are plain `Pressable`s (`src/screens/UnifiedInboxScreen.tsx:95-138`); nothing but open.
   - Fix hint: wrap rows in `SwipeableRow`; because the JMAP client is single-account, actions on a *different registry account* need the detached `jmapPost` path (`unified-inbox.ts:116-131`) with `Email/set` against `email.jmapAccountId`; for the active account and its group accounts route through `setEmailKeywords(..., email.jmapAccountId)` / `moveEmail(...)` overrides.
 
-- [ ] **Unified list stays stale after acting on a message; just-read mail handling** — `P3` — `partial`
+- [x] **Unified list stays stale after acting on a message; just-read mail handling** — `P3` — `partial` — fixed in PENDING-D
   - What WEB does: aggregate views refresh through the fan-out on push (`refreshCurrentMailbox`, #791) and keep just-read/unstarred rows in the Unread/Starred views until re-opened (`retainedInViewIds`, `stores/email-store.ts:1007-1050`).
   - What RN does: `UnifiedInboxScreen` loads once per mount/`includeGroup` change (`:57-59`); after opening (mark read) or deleting in the thread screen and going back, the unread dot/row is stale until pull-to-refresh. No push hookup.
   - Fix hint: `useFocusEffect` → reload, or patch the local list from the thread screen result; when Unread/Starred views are added, keep the WEB retain semantics.
@@ -114,7 +114,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: `UnifiedInboxScreen.onOpen` switches account then navigates to `EmailThread` (`src/screens/UnifiedInboxScreen.tsx:61-86`). `EmailThreadScreen` pages over the *active folder's* `emails` (`src/screens/EmailThreadScreen.tsx:131-133`, FlatList `data={emails}` `:538`, `initialScrollIndex={Math.max(0, findIndex)}`). A group-inbox message (or any message not in the first page of the user's own inbox snapshot) is not in `emails`, so index 0 is shown: the pane renders `emails[0]` while the toolbar/`activeEmailId` (and delete/archive/spam) refer to the message that was tapped; with an empty snapshot the body area is blank. Bare-id `findIndex` also collides across accounts (Stalwart reuses id ranges, #847).
   - Fix hint: when `route.params.emailId` is not found in `emails` (or `jmapAccountId` is set), page over a one-element list `[{ id, threadId }]` instead of `emails`; compare ids together with the owning account.
 
-- [ ] **Unified fetch re-discovers the session and mailboxes on every refresh** — `P3` — `rn-only-bug`
+- [x] **Unified fetch re-discovers the session and mailboxes on every refresh** — `P3` — `rn-only-bug` — fixed in PENDING-D
   - What RN does: `fetchInboxForAccount` does `/.well-known/jmap` + `Mailbox/get` + `Email/query` + `Email/get` per account per load (`src/api/unified-inbox.ts:175-234`); the active account is also fetched detached instead of via the live client/snapshot.
   - Fix hint: cache `apiUrl`/`primaryJmapId`/inbox id per account (keyed by serverUrl+username) for the session; use the live `jmapClient` + existing inbox snapshot for the active account.
 
@@ -130,7 +130,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: `EmailRow` shows no tags; `tagPill/tagDot/tagText` styles exist but are unused (`src/screens/EmailListScreen.tsx:1481-1495`). Tags are only visible inside the thread screen tag menu.
   - Fix hint: compute tag ids from `item.keywords` (`$label:*`, `$color:*`), look up `useKeywordsStore().keywords` for label/colour (unknown ids → grey with raw id), render pills on the subject row; add a `tintListRowsByTag` setting if desired.
 
-- [ ] **Tag view (tap a tag → cross-folder `hasKeyword` list, #175) and tag counts in the drawer** — `P2` — `missing`
+- [x] **Tag view (tap a tag → cross-folder `hasKeyword` list, #175) and tag counts in the drawer** — `P2` — `missing` — fixed in PENDING-D
   - What WEB does: "Tags" sidebar section with unread/total per tag (`fetchTagCounts`, `stores/email-store.ts:1192`), visibility rules (`components/layout/sidebar.tsx:1002-1013`), `selectKeyword` → `getEmails(undefined, …, '$label:<id>')` across all folders (`stores/email-store.ts:1343-1420`, changelog 1.4.13 #175), counts kept in step with read/unread (1.7.8).
   - What RN does: no tag section in `SidebarDrawer`; `EmailFilters` has no keyword field (`src/stores/email-store.ts:140-149`).
   - Fix hint: add `keyword?: string` to `EmailFilters` and a "Tags" section in the drawer; when set, `buildJmapFilter` should omit `inMailbox` (search across folders) and add `{ hasKeyword: '$label:<id>' }`; counts via one `Email/query` (calculateTotal) per tag, optional.
@@ -145,7 +145,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: `togglePin` writes `$important` (`src/stores/email-store.ts:1151-1173`), `isPinned` reads `$important` (`src/screens/EmailListScreen.tsx:47-49`); no icon, no ordering. A pin set in RN is invisible in WEB and vice versa.
   - Fix hint: switch the keyword to `$pinned`; show a pin icon; optionally sort pinned to the top client-side (server sort needs the polarity probe, see next item).
 
-- [x] **Configurable message-list order presets/custom levels (#718) incl. Stalwart `hasKeyword` polarity probe; native issue #5** — `P2` — `partial` — fixed in PENDING-C
+- [x] **Configurable message-list order presets/custom levels (#718) incl. Stalwart `hasKeyword` polarity probe; native issue #5** — `P2` — `partial` — fixed in bea3fc4
   - What WEB does: presets (unread/starred/tagged first) or up to 3 levels mapped to the JMAP sort, Inbox-only or all folders (`lib/message-list-order.ts`, `components/settings/message-list-order-settings.tsx:52-62`, `getMessageListOrderFor` `stores/settings-store.ts:1396`); polarity probe per account because Stalwart inverts `isAscending` on keyword comparators (`lib/jmap/client.ts:1376-1431`), `unsupportedSort` fallback (`:1490-1500`); thread grouping mirrors the order (`lib/thread-utils.ts:82`).
   - What RN does: only `receivedAt` asc/desc via `mailSortAscending` (persisted, header toggle `src/screens/EmailListScreen.tsx:699-711`, store `setSortAscending` `src/stores/email-store.ts:1039-1053`). This satisfies the "per default" part of native issue #5 but nothing else.
   - Fix hint: port `message-list-order.ts` (pure, no deps) and pass `buildEmailSort(levels, …)` as `sort` to `queryEmails`/`getEmailQueryChanges`; probe polarity once per account like `probeKeywordSortPolarity`; add a settings screen with the presets. Keep `setSortAscending`'s snapshot invalidation for any order change.
@@ -219,7 +219,7 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: `formatListDate` follows the app locale only (`src/lib/date-format.ts:17-31`), "Just now"/"m ago" are English (`:38-41`).
   - Fix hint: localize the relative strings via `t()`; add a `dateLocale` select if parity is wanted.
 
-- [x] **Show avatars in Junk (off by default, 1.5.1); avatar priority** — `P3` — `partial` — fixed in PENDING-C
+- [x] **Show avatars in Junk (off by default, 1.5.1); avatar priority** — `P3` — `partial` — fixed in bea3fc4
   - What WEB does: `showAvatarsInJunk` hides favicon/photo images in Junk (`components/email/thread-list-item.tsx:137`); avatar priority contact photo > plugin (Gravatar) > favicon > initials (`components/ui/avatar.tsx:236`).
   - What RN does: favicons always load, including in Junk (`src/components/SenderAvatar.tsx:37`); no contact-photo lookup.
   - Fix hint: pass `disableImages={currentMailbox.role === 'junk' && !showAvatarsInJunk}` into `SenderAvatar`; contact photos optional.
@@ -263,17 +263,17 @@ RN covers the core single-folder loop well (folder tree incl. shared/group accou
   - What RN does: `{ id, label, color }` only (`src/stores/keywords-store.ts:9-13`); `TagSheet` lists defined tags only (`src/components/TagSheet.tsx:76-95`), so a `$label:work/clients` set by WEB can neither be seen nor removed on RN. Tag definitions are device-local (see native issue #1).
   - Fix hint: show unknown `$label:*` ids found on the selected emails at the bottom of `TagSheet`; add `visibility` when the drawer tag section lands; nesting/reorder are lower priority.
 
-- [ ] **"Reset defaults" wipes the tag list with no confirmation (removed in WEB 1.8.1)** — `P3` — `bugfix-parity`
+- [x] **"Reset defaults" wipes the tag list with no confirmation (removed in WEB 1.8.1)** — `P3` — `bugfix-parity` — fixed in PENDING-D
   - What WEB does: removed the button ("one stray click wiped a carefully built tag list", changelog 1.8.1 Changes).
   - What RN does: `KeywordSettings.tsx:94-97` → `resetDefaults()` immediately (`src/stores/keywords-store.ts:85-88`).
   - Fix hint: remove the button or guard with `Alert.alert` confirm.
 
-- [ ] **Scan for keywords no local tag explains (#658)** — `P3` — `missing`
+- [x] **Scan for keywords no local tag explains (#658)** — `P3` — `missing` — fixed in PENDING-D
   - What WEB does: `discoverKeywords` pages `Email/query`+`Email/get keywords` and proposes label/colour for unknown `$label:`/`$color:` ids (`lib/jmap/client.ts:1616-1676`, `lib/keyword-discovery.ts:140`, `components/settings/keyword-settings.tsx:374-490`).
   - What RN does: none; after a reinstall all tags must be re-typed with the exact id.
   - Fix hint: port `discoverKeywords` (cap 5000 like offline sync) + `findUnrecognizedKeywords` (pure) and an "Add" list in `KeywordSettings`.
 
-- [ ] **Keyword palette parity** — `P3` — `partial`
+- [x] **Keyword palette parity** — `P3` — `partial` — fixed in PENDING-D
   - What WEB does: `KEYWORD_PALETTE` keys (`stores/settings-store.ts:226-280`) are the tag ids of the default tags and the colour names used by `suggestKeywordColor`.
   - What RN does: `colors.tags` keys in `src/theme/tokens.ts`; defaults are `important/work/personal/todo` (`src/stores/keywords-store.ts:15-20`) whereas WEB's `DEFAULT_KEYWORDS` (`settings-store.ts:281`) are colour-named. A message tagged on one client with a default tag shows as unknown on the other.
   - Fix hint: verify the key sets match; consider aligning the default ids with WEB's.
