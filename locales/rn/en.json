@@ -299,6 +299,7 @@
       "notice_need_code": "Enter the 6-digit code from your authenticator app",
       "notice_need_credentials": "Enter your email and password",
       "notice_need_server": "We need a server address first",
+      "open_settings": "Open Settings",
       "opening": "Opening {host}",
       "opening_detail": "Finish signing in on the page that just opened. We’ll take it from there.",
       "pairing": "Redeeming your sign-in code",

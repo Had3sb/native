@@ -73,21 +73,28 @@ export function CalendarSidebarDrawer({
   const t = useLocaleStore((s) => s.t);
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
 
+  // Also kicked from the Modal's onShow — the first open fires this effect
+  // before the modal's native view exists, so that animation is dropped and
+  // the drawer stays parked off-screen until the second open.
+  const runOpen = React.useCallback(() => {
+    Animated.parallel([
+      Animated.timing(slideX, {
+        toValue: 0,
+        duration: openDuration,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(overlayOpacity, {
+        toValue: 1,
+        duration: openDuration,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [slideX, overlayOpacity, openDuration]);
+
   React.useEffect(() => {
     if (visible) {
-      Animated.parallel([
-        Animated.timing(slideX, {
-          toValue: 0,
-          duration: openDuration,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(overlayOpacity, {
-          toValue: 1,
-          duration: openDuration,
-          useNativeDriver: true,
-        }),
-      ]).start();
+      runOpen();
     } else {
       setExpandedId(null);
       Animated.parallel([
@@ -104,7 +111,7 @@ export function CalendarSidebarDrawer({
         }),
       ]).start();
     }
-  }, [visible, slideX, overlayOpacity, openDuration, closeDuration]);
+  }, [visible, runOpen, slideX, overlayOpacity, closeDuration]);
 
   const hiddenSet = React.useMemo(() => new Set(hiddenCalendarIds), [hiddenCalendarIds]);
 
@@ -134,6 +141,7 @@ export function CalendarSidebarDrawer({
       animationType="none"
       statusBarTranslucent
       onRequestClose={onClose}
+      onShow={runOpen}
     >
       <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>
         <Pressable style={styles.overlayPress} onPress={onClose} />

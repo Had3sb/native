@@ -248,6 +248,11 @@ export async function getCalendars(): Promise<Calendar[]> {
   return [...own, ...shared.flat()];
 }
 
+const QUERY_PAGE_SIZE = 1000;
+// Backstop against a server that keeps returning full pages; 20 pages is far
+// beyond any real calendar window and keeps a bug from looping forever.
+const QUERY_MAX_PAGES = 20;
+
 /**
  * Query event ids in a date window. `after`/`before` are instants (ISO, as
  * from `Date.toISOString()`) or LocalDateTime strings; they're sent as
@@ -256,6 +261,8 @@ export async function getCalendars(): Promise<Calendar[]> {
  * condition (the plural `inCalendars` fails the whole query with
  * unsupportedFilter on Stalwart); the range and calendar conditions are
  * combined with an AND operator. Without bounds every object is returned.
+ * The result set is paged: a window can hold more events than one page, and
+ * a truncated page must never pass for a complete answer.
  */
 export async function queryEvents(
   calendarIds: string[],
@@ -264,22 +271,36 @@ export async function queryEvents(
   accountId?: string,
 ): Promise<string[]> {
   const account = accountId || jmapClient.accountId;
-  const args: Record<string, unknown> = { accountId: account, limit: 1000 };
   const timeZone = getUserTimeZone();
-  if (timeZone) args.timeZone = timeZone;
   const conditions: Record<string, unknown>[] = [];
   if (calendarIds.length > 0) conditions.push(buildInCalendarFilter(calendarIds));
   const range: Record<string, string> = {};
   if (after) range.after = toLocalDateTime(after, timeZone);
   if (before) range.before = toLocalDateTime(before, timeZone);
   if (Object.keys(range).length > 0) conditions.push(range);
-  if (conditions.length === 1) args.filter = conditions[0];
-  else if (conditions.length > 1) args.filter = { operator: 'AND', conditions };
-  const res = await jmapClient.request(
-    [['CalendarEvent/query', args, '0']],
-    USING,
-  );
-  return methodResult<{ ids: string[] }>(res).ids ?? [];
+  const filter = conditions.length === 1
+    ? conditions[0]
+    : conditions.length > 1
+      ? { operator: 'AND', conditions }
+      : undefined;
+  const ids: string[] = [];
+  for (let page = 0; page < QUERY_MAX_PAGES; page++) {
+    const args: Record<string, unknown> = {
+      accountId: account,
+      limit: QUERY_PAGE_SIZE,
+      position: ids.length,
+    };
+    if (timeZone) args.timeZone = timeZone;
+    if (filter) args.filter = filter;
+    const res = await jmapClient.request(
+      [['CalendarEvent/query', args, '0']],
+      USING,
+    );
+    const batch = methodResult<{ ids: string[] }>(res).ids ?? [];
+    ids.push(...batch);
+    if (batch.length < QUERY_PAGE_SIZE) break;
+  }
+  return ids;
 }
 
 /**

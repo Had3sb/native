@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Pressable, StyleSheet, Modal, Platform } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Modal, Platform, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { X } from 'lucide-react-native';
@@ -25,6 +25,8 @@ export function QrScanModal({ visible, onClose, onScanned }: QrScanModalProps) {
   // Guards against the camera firing onBarcodeScanned dozens of times for the
   // same code before the modal tears down.
   const handled = React.useRef(false);
+  // Once iOS/Android stops letting us re-prompt, the only path left is Settings.
+  const blocked = !!permission && !permission.granted && !permission.canAskAgain;
 
   React.useEffect(() => {
     if (visible) handled.current = false;
@@ -84,12 +86,16 @@ export function QrScanModal({ visible, onClose, onScanned }: QrScanModalProps) {
           {!permission?.granted ? (
             <View style={styles.permissionWrap}>
               <Text style={styles.permissionText}>
-                {permission && !permission.canAskAgain
-                  ? t('login.mobile.camera_disabled', 'Camera access is disabled. Enable it in Settings to scan a sign-in QR code.')
-                  : t('login.mobile.camera_needed', 'Bulwark Mail needs camera access to scan a sign-in QR code.')}
+                {blocked
+                  ? t('login.mobile.camera_disabled', 'Camera access is turned off. Turn it on in Settings to scan a sign-in QR code.')
+                  : t('login.mobile.camera_needed', 'Scanning a sign-in QR code uses the camera. The QR code is read on this device only.')}
               </Text>
-              <Button variant="default" size="md" onPress={() => void requestPermission()}>
-                {t('login.mobile.camera_allow', 'Allow camera access')}
+              <Button
+                variant="default"
+                size="md"
+                onPress={() => void (blocked ? Linking.openSettings() : requestPermission())}
+              >
+                {blocked ? t('login.mobile.open_settings', 'Open Settings') : t('login.mobile.continue', 'Continue')}
               </Button>
             </View>
           ) : null}

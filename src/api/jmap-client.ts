@@ -691,10 +691,21 @@ export class JMAPClient {
   // ── Session Discovery ─────────────────────────────────
 
   private async fetchSession(baseUrl: string): Promise<JMAPSession> {
-    const url = `${baseUrl}/.well-known/jmap`;
-    let response = await this.authenticatedFetch(url, {
-      headers: { Accept: 'application/json' },
-    });
+    // Stalwart's discovery endpoint /.well-known/jmap 307-redirects to
+    // /jmap/session. On iOS, NSURLSession drops the Authorization header when
+    // it auto-follows that redirect, so the app receives an unauthenticated,
+    // empty-accounts session. Request the session endpoint directly so the
+    // header stays attached; fall back to the standard well-known path for
+    // servers that don't serve /jmap/session (#39).
+    const primary = `${baseUrl}/jmap/session`;
+    const fallback = `${baseUrl}/.well-known/jmap`;
+    const fetchSessionDoc = async () => {
+      const r = await this.authenticatedFetch(primary, { headers: { Accept: 'application/json' } });
+      return r.status === 404
+        ? this.authenticatedFetch(fallback, { headers: { Accept: 'application/json' } })
+        : r;
+    };
+    let response = await fetchSessionDoc();
 
     if (response.status === 401) {
       throw new AuthenticationError('Invalid credentials');
@@ -740,6 +751,15 @@ export class JMAPClient {
 
     if (!fetchSessionDescribes(session)) {
       throw new Error('Session discovery failed: response is not a JMAP session');
+    }
+    // Stalwart answers 200 with an empty session (no accounts) for missing or
+    // invalid credentials rather than a 401. Surface that as an auth failure
+    // so the user sees "Invalid credentials" instead of "No account found".
+    const hasAccount =
+      Object.keys(session.primaryAccounts ?? {}).length > 0 ||
+      Object.keys(session.accounts ?? {}).length > 0;
+    if (!hasAccount) {
+      throw new AuthenticationError('Invalid credentials');
     }
     return session;
   }
