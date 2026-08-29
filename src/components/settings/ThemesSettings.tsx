@@ -1,87 +1,92 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
-import { Upload, Check, Palette } from 'lucide-react-native';
-import { SettingsSection, SettingItem } from './settings-section';
-import Button from '../Button';
+import { Check } from 'lucide-react-native';
+import { SettingsSection } from './settings-section';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
-import { useColors } from '../../theme/colors';
+import { resolvePalette, useColors, useResolvedTheme } from '../../theme/colors';
+import { BUILTIN_THEMES } from '../../theme/builtin-themes';
 import { useSettingsStore } from '../../stores/settings-store';
+import { useLocaleStore } from '../../stores/locale-store';
 
-interface Theme {
+interface ThemeCard {
   id: string | null;
   name: string;
-  author: string;
-  builtIn?: boolean;
-  variants?: ('light' | 'dark')[];
+  description: string;
 }
 
-const BUILT_IN: Theme[] = [
-  { id: null,    name: 'Default',  author: 'Bulwark', builtIn: true, variants: ['light', 'dark'] },
-  { id: 'qui',   name: 'Qui',      author: 'Bulwark', builtIn: true, variants: ['dark'] },
-  { id: 'sepia', name: 'Sepia',    author: 'Bulwark', builtIn: true, variants: ['light'] },
-];
-
+/**
+ * Built-in colour themes ported from the webmail (lib/builtin-themes.ts).
+ * Custom zip themes and the marketplace stay webmail-only: the native app has
+ * no CSS pipeline, only the token subset each theme overrides.
+ */
 export function ThemesSettings() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
+  const scheme = useResolvedTheme();
   const hydrated = useSettingsStore((s) => s.hydrated);
   const hydrate = useSettingsStore((s) => s.hydrate);
   const active = useSettingsStore((s) => s.activeThemeId);
   const update = useSettingsStore((s) => s.updateSetting);
-  const [themes] = useState<Theme[]>(BUILT_IN);
 
   useEffect(() => {
     if (!hydrated) void hydrate();
   }, [hydrated, hydrate]);
 
+  const cards: ThemeCard[] = [
+    {
+      id: null,
+      name: t('settings.themes.default_name', 'Bulwark'),
+      description: t('settings.themes.default_description', 'The default light and dark palettes.'),
+    },
+    ...BUILTIN_THEMES.map((theme) => ({ id: theme.id, name: theme.name, description: theme.description })),
+  ];
+
   return (
     <SettingsSection
-      title="Themes"
-      description="Customize the appearance with color themes."
-      experimental
-      experimentalDescription="Themes is an experimental feature. Custom themes may not cover all UI elements, and theme formats could change in future updates."
+      title={t('settings.themes.title', 'Themes')}
+      description={t(
+        'settings.themes.mobile_description',
+        'Pick a colour theme. Themes follow the light/dark setting from Appearance; custom theme packages are managed in the webmail.',
+      )}
     >
       <View style={styles.grid}>
-        {themes.map((theme) => {
-          const isActive = active === theme.id;
+        {cards.map((card) => {
+          const isActive = (active ?? null) === card.id;
+          const preview = resolvePalette(scheme, card.id);
           return (
             <Pressable
-              key={theme.id ?? 'default'}
-              onPress={() => update('activeThemeId', theme.id)}
+              key={card.id ?? 'default'}
+              onPress={() => update('activeThemeId', card.id)}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: isActive, checked: isActive }}
+              accessibilityLabel={card.name}
               style={[styles.card, isActive && styles.cardActive]}
             >
-              <View style={styles.preview}>
-                <Palette size={32} color={c.mutedForeground} style={{ opacity: 0.4 }} />
+              <View style={[styles.preview, { backgroundColor: preview.background, borderColor: preview.border }]}>
+                <View style={[styles.previewRail, { backgroundColor: preview.surface, borderRightColor: preview.border }]} />
+                <View style={styles.previewBody}>
+                  <View style={[styles.previewBar, { backgroundColor: preview.primary, width: '55%' }]} />
+                  <View style={[styles.previewBar, { backgroundColor: preview.text, width: '80%', opacity: 0.8 }]} />
+                  <View style={[styles.previewBar, { backgroundColor: preview.mutedForeground, width: '65%', opacity: 0.6 }]} />
+                  <View style={styles.previewDots}>
+                    {[preview.success, preview.warning, preview.error, preview.info].map((color, i) => (
+                      <View key={i} style={[styles.previewDot, { backgroundColor: color }]} />
+                    ))}
+                  </View>
+                </View>
               </View>
               <View style={{ width: '100%' }}>
                 <View style={styles.cardHeader}>
-                  <Text style={styles.cardName} numberOfLines={1}>{theme.name}</Text>
+                  <Text style={styles.cardName} numberOfLines={1}>{card.name}</Text>
                   {isActive && <Check size={16} color={c.primary} />}
                 </View>
-                <Text style={styles.cardAuthor} numberOfLines={1}>{theme.author}</Text>
-                {theme.variants && (
-                  <View style={styles.variants}>
-                    {theme.variants.map((v) => (
-                      <View key={v} style={styles.variantPill}>
-                        <Text style={styles.variantText}>{v}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
+                <Text style={styles.cardDescription} numberOfLines={2}>{card.description}</Text>
               </View>
             </Pressable>
           );
         })}
       </View>
-
-      <SettingItem
-        label="Upload Theme"
-        description="Install a custom theme from a .zip file."
-      >
-        <Button variant="outline" size="sm" icon={<Upload size={14} color={c.text} />}>
-          Upload .zip
-        </Button>
-      </SettingItem>
     </SettingsSection>
   );
 }
@@ -105,30 +110,27 @@ function makeStyles(c: ThemePalette) {
   },
   cardActive: {
     borderColor: c.primary,
-    backgroundColor: 'rgba(59, 130, 246, 0.05)',
+    backgroundColor: c.primaryBg,
   },
   preview: {
     width: '100%',
     aspectRatio: 16 / 10,
     borderRadius: radius.md,
-    backgroundColor: c.muted,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1,
+    flexDirection: 'row',
+    overflow: 'hidden',
   },
+  previewRail: { width: '22%', borderRightWidth: 1 },
+  previewBody: { flex: 1, padding: spacing.sm, gap: 6, justifyContent: 'center' },
+  previewBar: { height: 6, borderRadius: 3 },
+  previewDots: { flexDirection: 'row', gap: 4, marginTop: 2 },
+  previewDot: { width: 8, height: 8, borderRadius: 4 },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   cardName: { ...typography.bodyMedium, color: c.text, flex: 1 },
-  cardAuthor: { ...typography.caption, color: c.mutedForeground },
-  variants: { flexDirection: 'row', gap: 4, marginTop: 4 },
-  variantPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: radius.xs,
-    backgroundColor: c.muted,
-  },
-  variantText: { fontSize: 10, color: c.mutedForeground },
+  cardDescription: { ...typography.caption, color: c.mutedForeground, marginTop: 2 },
 });
 }

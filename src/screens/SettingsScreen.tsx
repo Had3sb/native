@@ -108,7 +108,7 @@ const TABS: TabDef[] = [
 
   // Advanced
   { id: 'about_data',      label: 'About & Data',       icon: Info,           group: 'advanced',   implemented: true  },
-  { id: 'themes',          label: 'Themes',             icon: Palette,        group: 'advanced',   experimental: true, implemented: true  },
+  { id: 'themes',          label: 'Themes',             icon: Palette,        group: 'advanced',   implemented: true  },
   // Plugins run in the webmail only; the pane is an explainer reachable by
   // deep link, not from the list. Debug logging lives under About & Data.
   { id: 'plugins',         label: 'Plugins',            icon: Puzzle,         group: 'advanced',   experimental: true, implemented: true, hidden: true },

@@ -1,24 +1,47 @@
+import { useMemo } from 'react';
 import { useColorScheme } from 'react-native';
 import { useSettingsStore } from '../stores/settings-store';
 import { LIGHT_COLORS, DARK_COLORS, type ThemePalette } from './tokens';
+import { getBuiltinTheme } from './builtin-themes';
 
 export type { ThemePalette };
 
+const paletteCache = new Map<string, ThemePalette>();
+
+/**
+ * Base light/dark palette with the active built-in theme's overrides applied
+ * (Settings → Themes). Memoised per (scheme, theme) pair so `useColors()`
+ * keeps returning a stable object for `useMemo(() => makeStyles(c), [c])`.
+ */
+export function resolvePalette(scheme: 'light' | 'dark', themeId: string | null): ThemePalette {
+  const base = scheme === 'light' ? LIGHT_COLORS : DARK_COLORS;
+  const theme = getBuiltinTheme(themeId);
+  if (!theme) return base;
+  const key = `${scheme}:${theme.id}`;
+  const cached = paletteCache.get(key);
+  if (cached) return cached;
+  const merged: ThemePalette = { ...base, ...(scheme === 'light' ? theme.light : theme.dark) };
+  paletteCache.set(key, merged);
+  return merged;
+}
+
 /**
  * Returns the active palette for the current render. Resolves the user's
- * theme preference ('light' | 'dark' | 'system') against the OS scheme.
+ * theme preference ('light' | 'dark' | 'system') against the OS scheme and
+ * applies the selected built-in theme.
  *
  * Prefer this hook in new and migrated components. Static `import { colors }`
  * still works for not-yet-migrated code (it always returns the dark palette).
  */
 export function useColors(): ThemePalette {
   const themePref = useSettingsStore((s) => s.theme);
+  const activeThemeId = useSettingsStore((s) => s.activeThemeId);
   const systemScheme = useColorScheme();
   const resolved =
     themePref === 'system'
       ? systemScheme === 'light' ? 'light' : 'dark'
       : themePref;
-  return resolved === 'light' ? LIGHT_COLORS : DARK_COLORS;
+  return useMemo(() => resolvePalette(resolved, activeThemeId), [resolved, activeThemeId]);
 }
 
 /**
