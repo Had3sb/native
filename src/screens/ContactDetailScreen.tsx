@@ -15,6 +15,7 @@ import {
   Clock, KeyRound, FolderInput, Plus,
 } from 'lucide-react-native';
 import type { RootStackParamList } from '../navigation/types';
+import { openExternalUrl } from '../lib/open-url';
 import type { ContactCard } from '../api/types';
 import { useContactsStore } from '../stores/contacts-store';
 import {
@@ -177,7 +178,11 @@ export default function ContactDetailScreen() {
     Linking.openURL(`https://maps.google.com/?q=${encoded}`).catch(() => Alert.alert('Cannot open maps'));
   };
   const openUrl = (uri: string) => {
-    Linking.openURL(uri).catch(() => Alert.alert('Cannot open link'));
+    // Contact data is server-supplied: only hand http(s)/mailto/tel/sms/geo
+    // schemes to the OS, never intent:// / file:// / third-party deep links.
+    void openExternalUrl(uri).then((opened) => {
+      if (!opened) Alert.alert('Cannot open link');
+    });
   };
   const shareValue = (value: string) => {
     Share.share({ message: value }).catch(() => {});
