@@ -78,6 +78,14 @@ export interface Email {
   subject?: string;
   preview?: string;
   hasAttachment: boolean;
+  // RFC 8621 §4.1.2.3 - bare msg-ids without angle brackets. Needed for
+  // reply threading (In-Reply-To / References) and read-receipt dedupe.
+  messageId?: string[] | null;
+  inReplyTo?: string[] | null;
+  references?: string[] | null;
+  // Raw headers (RFC 8621 §4.1.3) when fetched with `headers`; the viewer
+  // derives SPF/DKIM/DMARC chips, List-Unsubscribe, MDN requests from them.
+  headers?: Array<{ name: string; value: string }>;
   textBody?: BodyPart[];
   htmlBody?: BodyPart[];
   bodyValues?: Record<string, { value: string; isEncodingProblem?: boolean }>;
@@ -357,6 +365,12 @@ export interface ContactCard {
   prodId?: string;
   created?: string;
   updated?: string;
+  // Client-only metadata for cards that live in a shared / group account.
+  // Never sent to the server (api/contacts.ts strips them). `id` is
+  // namespaced as `<accountId>:<originalId>` for shared cards.
+  accountId?: string;
+  accountName?: string;
+  isShared?: boolean;
 }
 
 export interface AddressBookRights {
@@ -374,6 +388,15 @@ export interface AddressBook {
   isSubscribed?: boolean;
   sortOrder?: number;
   myRights?: AddressBookRights;
+  // RFC 9610 share map: principal id → rights.
+  shareWith?: Record<string, AddressBookRights> | null;
+  // Client-only metadata for books that live in a shared / group account.
+  // `id` is namespaced as `<accountId>:<originalId>` for shared books so it
+  // cannot collide with the user's own "default" book.
+  originalId?: string;
+  accountId?: string;
+  accountName?: string;
+  isShared?: boolean;
 }
 
 export interface AddressBookWithCount extends AddressBook {
@@ -393,6 +416,8 @@ export interface Participant {
   roles?: Record<string, boolean>;
   participationStatus?: 'needs-action' | 'accepted' | 'declined' | 'tentative' | 'delegated' | string;
   participationComment?: string;
+  // 'server' asks Stalwart to deliver the iTIP messages for this participant.
+  scheduleAgent?: 'server' | 'client' | 'none' | string;
   scheduleStatus?: string[];
   expectReply?: boolean;
   description?: string;
@@ -602,6 +627,17 @@ export interface PushSubscription {
   verificationCode?: string | null;
   expires?: string | null;
   types?: string[] | null;
+  emailPush?: Record<string, EmailPushConfig> | null;
+}
+
+// draft-ietf-jmap-emailpush EmailPushConfig: the server evaluates `filter`
+// against every newly delivered message and only pushes when it matches, so a
+// client can keep spam (Junk) out of its push channel server-side. Keyed by
+// account id on PushSubscription.emailPush.
+export interface EmailPushConfig {
+  filter: Record<string, unknown> | null;
+  properties: string[];
+  urgency?: 'very-low' | 'low' | 'normal' | 'high';
 }
 
 // ─── Capability URNs ────────────────────────────────────
@@ -618,4 +654,5 @@ export const CAPABILITIES = {
   FILES: 'urn:ietf:params:jmap:filenode',
   PRINCIPALS: 'urn:ietf:params:jmap:principals',
   PRINCIPALS_OWNER: 'urn:ietf:params:jmap:principals:owner',
+  EMAIL_PUSH: 'urn:ietf:params:jmap:emailpush',
 } as const;

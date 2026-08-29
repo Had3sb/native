@@ -1,18 +1,28 @@
 import { jmapClient } from './jmap-client';
+import { assertSetResult, batched, requireMethodResult } from './jmap-result';
+import { keywordPointer, mailboxPointer } from './patch-pointer';
 import { CAPABILITIES } from './types';
 import type { Email, EmailAddress, JMAPMethodCall, Mailbox, Thread } from './types';
 import { toWildcardQuery } from '../lib/search-utils';
+import { sanitizeDisplayName } from '../lib/rfc5322-mailbox';
+import { generateMessageId, stripMessageIdBrackets } from '../lib/email-threading';
 
-const EMAIL_LIST_PROPERTIES = [
+export const EMAIL_LIST_PROPERTIES = [
   'id', 'threadId', 'mailboxIds', 'keywords', 'size',
   'receivedAt', 'from', 'to', 'cc', 'subject', 'preview', 'hasAttachment',
 ];
 
-const EMAIL_FULL_PROPERTIES = [
+// The viewer derives reply threading (In-Reply-To/References), Reply-To
+// handling, SPF/DKIM/DMARC chips, List-Unsubscribe and read-receipt requests
+// from these; without `messageId`/`headers` none of that can work.
+export const EMAIL_FULL_PROPERTIES = [
   ...EMAIL_LIST_PROPERTIES,
   'bodyStructure', 'textBody', 'htmlBody', 'bodyValues',
   'attachments', 'blobId', 'bcc', 'replyTo', 'sentAt',
+  'messageId', 'inReplyTo', 'references', 'headers',
 ];
+
+const SUBMISSION_USING = [CAPABILITIES.CORE, CAPABILITIES.MAIL, CAPABILITIES.SUBMISSION];
 
 // Prefix a shared account's folder ids so they can't collide with the user's
 // own. Matches the webmail's `${accountId}:${mailboxId}` scheme.
@@ -50,6 +60,45 @@ function tagMailbox(
   };
 }
 
+function maxInGet(): number {
+  return typeof jmapClient.getMaxObjectsInGet === 'function' ? jmapClient.getMaxObjectsInGet() : 500;
+}
+
+function maxInSet(): number {
+  return typeof jmapClient.getMaxObjectsInSet === 'function' ? jmapClient.getMaxObjectsInSet() : 500;
+}
+
+/**
+ * Run one `Email/set` per `maxObjectsInSet`-sized slice of `update` /
+ * `destroy`, checking every slice for `notUpdated` / `notDestroyed`. Over-limit
+ * requests fail whole (RFC 8620 §3.6.1), so a long multi-select or a big
+ * offline replay must be split before it is sent.
+ */
+async function emailSetBatched(
+  accountId: string,
+  args: { update?: Record<string, Record<string, unknown>>; destroy?: string[] },
+  what = 'email',
+): Promise<{ updated: string[]; destroyed: string[] }> {
+  const out = { updated: [] as string[], destroyed: [] as string[] };
+  const size = maxInSet();
+  const updateEntries = Object.entries(args.update ?? {});
+  for (const slice of batched(updateEntries, size)) {
+    const res = await jmapClient.request([
+      ['Email/set', { accountId, update: Object.fromEntries(slice) }, '0'],
+    ]);
+    const body = requireMethodResult(res, '0', 'Email/set');
+    assertSetResult(body, slice.map(([id]) => id), what);
+    out.updated.push(...Object.keys(body.updated ?? {}));
+  }
+  for (const slice of batched(args.destroy ?? [], size)) {
+    const res = await jmapClient.request([['Email/set', { accountId, destroy: slice }, '0']]);
+    const body = requireMethodResult(res, '0', 'Email/set');
+    assertSetResult(body, slice, what);
+    out.destroyed.push(...((body.destroyed as string[] | undefined) ?? []));
+  }
+  return out;
+}
+
 export async function getMailboxes(accountId?: string): Promise<Mailbox[]> {
   return (await getMailboxesWithState(accountId)).list;
 }
@@ -64,7 +113,7 @@ export async function getMailboxesWithState(
   const res = await jmapClient.request(
     [['Mailbox/get', { accountId }, '0']],
   );
-  const body = res.methodResponses[0][1];
+  const body = requireMethodResult(res, '0', 'Mailbox/get');
   const list = ((body.list as Mailbox[]) ?? []).map((m) =>
     tagMailbox(m, accountId, jmapClient.getAccountName(accountId), isShared),
   );
@@ -112,14 +161,19 @@ export async function getMailboxesByIds(
   if (ids.length === 0) return { list: [], state: '' };
   const accountId = accountIdOverride ?? jmapClient.accountId;
   const isShared = accountId !== jmapClient.accountId;
-  const res = await jmapClient.request(
-    [['Mailbox/get', { accountId, ids }, '0']],
-  );
-  const body = res.methodResponses[0][1];
-  const list = ((body.list as Mailbox[]) ?? []).map((m) =>
-    tagMailbox(m, accountId, jmapClient.getAccountName(accountId), isShared),
-  );
-  return { list, state: body.state as string };
+  const list: Mailbox[] = [];
+  let state = '';
+  for (const slice of batched(ids, maxInGet())) {
+    const res = await jmapClient.request(
+      [['Mailbox/get', { accountId, ids: slice }, '0']],
+    );
+    const body = requireMethodResult(res, '0', 'Mailbox/get');
+    for (const m of (body.list as Mailbox[]) ?? []) {
+      list.push(tagMailbox(m, accountId, jmapClient.getAccountName(accountId), isShared));
+    }
+    state = body.state as string;
+  }
+  return { list, state };
 }
 
 export interface MailboxChangesResult {
@@ -154,23 +208,20 @@ export async function getMailboxChanges(
 }
 
 export async function createMailbox(
-  data: { name: string; parentId?: string | null },
+  data: { name: string; parentId?: string | null; role?: string | null },
   accountIdOverride?: string,
 ): Promise<string> {
   const accountId = accountIdOverride ?? jmapClient.accountId;
   const cid = 'new-mailbox';
+  const create: Record<string, unknown> = {
+    name: data.name,
+    parentId: data.parentId ?? null,
+  };
+  if (data.role !== undefined) create.role = data.role;
   const res = await jmapClient.request([
-    ['Mailbox/set', {
-      accountId,
-      create: {
-        [cid]: {
-          name: data.name,
-          parentId: data.parentId ?? null,
-        },
-      },
-    }, '0'],
+    ['Mailbox/set', { accountId, create: { [cid]: create } }, '0'],
   ]);
-  const result = res.methodResponses[0][1];
+  const result = requireMethodResult(res, '0', 'Mailbox/set');
   if (result.created?.[cid]?.id) return result.created[cid].id as string;
   const failure = result.notCreated?.[cid] as
     | { type?: string; description?: string; properties?: string[] }
@@ -184,14 +235,15 @@ export async function createMailbox(
 
 export async function updateMailbox(
   id: string,
-  changes: { name?: string; parentId?: string | null },
+  changes: { name?: string; parentId?: string | null; role?: string | null; sortOrder?: number },
   accountIdOverride?: string,
 ): Promise<void> {
   const accountId = accountIdOverride ?? jmapClient.accountId;
   const res = await jmapClient.request([
     ['Mailbox/set', { accountId, update: { [id]: changes } }, '0'],
   ]);
-  const failure = res.methodResponses[0][1].notUpdated?.[id] as
+  const body = requireMethodResult(res, '0', 'Mailbox/set');
+  const failure = body.notUpdated?.[id] as
     | { type?: string; description?: string }
     | undefined;
   if (failure) {
@@ -201,12 +253,17 @@ export async function updateMailbox(
   }
 }
 
-export async function deleteMailbox(id: string, accountIdOverride?: string): Promise<void> {
+export async function deleteMailbox(
+  id: string,
+  accountIdOverride?: string,
+  opts?: { onDestroyRemoveEmails?: boolean },
+): Promise<void> {
   const accountId = accountIdOverride ?? jmapClient.accountId;
-  const res = await jmapClient.request([
-    ['Mailbox/set', { accountId, destroy: [id] }, '0'],
-  ]);
-  const failure = res.methodResponses[0][1].notDestroyed?.[id] as
+  const args: Record<string, unknown> = { accountId, destroy: [id] };
+  if (opts?.onDestroyRemoveEmails) args.onDestroyRemoveEmails = true;
+  const res = await jmapClient.request([['Mailbox/set', args, '0']]);
+  const body = requireMethodResult(res, '0', 'Mailbox/set');
+  const failure = body.notDestroyed?.[id] as
     | { type?: string; description?: string }
     | undefined;
   if (failure) {
@@ -216,49 +273,104 @@ export async function deleteMailbox(id: string, accountIdOverride?: string): Pro
   }
 }
 
+/**
+ * Destroy every message in a folder (Empty Trash / Empty Junk), in batches of
+ * at most `maxObjectsInSet`. Never gates on `Email/query.total`: it is only
+ * guaranteed with `calculateTotal`, and Stalwart omits it otherwise, which
+ * used to stop after the first batch (#711). Returns the number destroyed.
+ */
+export async function emptyMailbox(mailboxId: string, accountIdOverride?: string): Promise<number> {
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const batchSize = Math.min(500, maxInSet());
+  let totalDestroyed = 0;
+  for (;;) {
+    const res = await jmapClient.request([
+      ['Email/query', { accountId, filter: { inMailbox: mailboxId }, limit: batchSize }, '0'],
+      ['Email/set', { accountId, '#destroy': { resultOf: '0', name: 'Email/query', path: '/ids' } }, '1'],
+    ]);
+    const query = requireMethodResult(res, '0', 'Email/query');
+    const set = requireMethodResult(res, '1', 'Email/set');
+    const found: string[] = (query.ids as string[]) ?? [];
+    const destroyed = ((set.destroyed as string[] | undefined) ?? []).length;
+    totalDestroyed += destroyed;
+    // Nothing left, or the server refused everything in this batch (missing
+    // permission, immutable mail) - stop instead of looping on the same ids.
+    if (found.length === 0 || destroyed === 0) break;
+    if (found.length < batchSize) break;
+  }
+  return totalDestroyed;
+}
+
+/** Set `$seen` on every unread message in a folder. Returns the count. */
+export async function markMailboxAsRead(mailboxId: string, accountIdOverride?: string): Promise<number> {
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const pageSize = Math.min(500, maxInSet());
+  let total = 0;
+  for (;;) {
+    const res = await jmapClient.request([
+      ['Email/query', {
+        accountId,
+        filter: { operator: 'AND', conditions: [{ inMailbox: mailboxId }, { notKeyword: '$seen' }] },
+        limit: pageSize,
+      }, '0'],
+    ]);
+    const ids = (requireMethodResult(res, '0', 'Email/query').ids as string[]) ?? [];
+    if (ids.length === 0) break;
+    const update = Object.fromEntries(ids.map((id) => [id, { [keywordPointer('$seen')]: true }]));
+    const setRes = await jmapClient.request([['Email/set', { accountId, update }, '0']]);
+    const body = requireMethodResult(setRes, '0', 'Email/set');
+    const marked = Object.keys(body.updated ?? {}).length;
+    total += marked;
+    if (marked === 0 || ids.length < pageSize) break;
+  }
+  return total;
+}
+
 function buildMailboxQueryFilter(
-  mailboxId: string,
+  mailboxId: string | undefined,
   userFilter: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
-  const inMailbox = { inMailbox: mailboxId };
+  // An undefined mailbox means "search every folder" (#788).
+  const inMailbox = mailboxId ? { inMailbox: mailboxId } : {};
   // JMAP filters are either a FilterCondition or a FilterOperator (operator +
   // conditions) — never both. Spreading a FilterOperator next to `inMailbox`
   // produces a hybrid object that servers reduce to the FilterCondition,
   // silently dropping the operator's conditions (e.g. the "unread" toggle).
   if (!userFilter || Object.keys(userFilter).length === 0) return inMailbox;
   if ('operator' in userFilter) {
-    return { operator: 'AND', conditions: [inMailbox, userFilter] };
+    return mailboxId ? { operator: 'AND', conditions: [inMailbox, userFilter] } : userFilter;
   }
   return { ...inMailbox, ...userFilter };
 }
 
 export async function queryEmails(
-  mailboxId: string,
+  mailboxId: string | undefined,
   options?: {
     position?: number;
     limit?: number;
-    sort?: Array<{ property: string; isAscending: boolean }>;
+    sort?: Array<{ property: string; isAscending: boolean; keyword?: string }>;
     filter?: Record<string, unknown>;
     /** Owning JMAP account when the mailbox belongs to a shared account. */
     accountId?: string;
+    collapseThreads?: boolean;
   },
 ): Promise<{ ids: string[]; total: number; queryState?: string }> {
   const accountId = options?.accountId ?? jmapClient.accountId;
   const filter = buildMailboxQueryFilter(mailboxId, options?.filter);
-  const res = await jmapClient.request([
-    ['Email/query', {
-      accountId,
-      filter,
-      sort: options?.sort ?? [{ property: 'receivedAt', isAscending: false }],
-      position: options?.position ?? 0,
-      limit: options?.limit ?? 50,
-      calculateTotal: true,
-    }, '0'],
-  ]);
-  const body = res.methodResponses[0][1];
+  const args: Record<string, unknown> = {
+    accountId,
+    filter,
+    sort: options?.sort ?? [{ property: 'receivedAt', isAscending: false }],
+    position: options?.position ?? 0,
+    limit: options?.limit ?? 50,
+    calculateTotal: true,
+  };
+  if (options?.collapseThreads) args.collapseThreads = true;
+  const res = await jmapClient.request([['Email/query', args, '0']]);
+  const body = requireMethodResult(res, '0', 'Email/query');
   return {
-    ids: body.ids,
-    total: body.total,
+    ids: (body.ids as string[]) ?? [],
+    total: (body.total as number) ?? 0,
     queryState: body.queryState as string | undefined,
   };
 }
@@ -275,10 +387,10 @@ export interface EmailQueryChangesResult {
 // query. Returns null when the server replies with `cannotCalculateChanges`
 // (or any other error) — caller should fall back to a fresh Email/query.
 export async function getEmailQueryChanges(
-  mailboxId: string,
+  mailboxId: string | undefined,
   sinceQueryState: string,
   options?: {
-    sort?: Array<{ property: string; isAscending: boolean }>;
+    sort?: Array<{ property: string; isAscending: boolean; keyword?: string }>;
     filter?: Record<string, unknown>;
     upToId?: string;
     maxChanges?: number;
@@ -311,36 +423,38 @@ export async function getEmailQueryChanges(
 }
 
 export async function getEmails(ids: string[], accountIdOverride?: string): Promise<Email[]> {
-  const accountId = accountIdOverride ?? jmapClient.accountId;
-  const res = await jmapClient.request([
-    ['Email/get', { accountId, ids, properties: EMAIL_LIST_PROPERTIES }, '0'],
-  ]);
-  return res.methodResponses[0][1].list;
+  return (await getEmailsWithState(ids, accountIdOverride)).list;
 }
 
 // Returns the Email/get response with the JMAP `state` token. Used by the
 // store so we can later issue Email/changes(sinceState=…) for incremental
-// updates instead of re-fetching the full list.
+// updates instead of re-fetching the full list. Splits the id list to the
+// server's maxObjectsInGet.
 export async function getEmailsWithState(
   ids: string[],
   accountIdOverride?: string,
 ): Promise<{ list: Email[]; state: string }> {
+  const accountId = accountIdOverride ?? jmapClient.accountId;
   if (ids.length === 0) {
     // Email/get with an empty id list still returns a state token; useful for
     // priming the store after an empty mailbox query.
-    const accountId = accountIdOverride ?? jmapClient.accountId;
     const res = await jmapClient.request([
       ['Email/get', { accountId, ids: [], properties: EMAIL_LIST_PROPERTIES }, '0'],
     ]);
-    const body = res.methodResponses[0][1];
+    const body = requireMethodResult(res, '0', 'Email/get');
     return { list: [], state: body.state as string };
   }
-  const accountId = accountIdOverride ?? jmapClient.accountId;
-  const res = await jmapClient.request([
-    ['Email/get', { accountId, ids, properties: EMAIL_LIST_PROPERTIES }, '0'],
-  ]);
-  const body = res.methodResponses[0][1];
-  return { list: body.list as Email[], state: body.state as string };
+  const list: Email[] = [];
+  let state = '';
+  for (const slice of batched(ids, maxInGet())) {
+    const res = await jmapClient.request([
+      ['Email/get', { accountId, ids: slice, properties: EMAIL_LIST_PROPERTIES }, '0'],
+    ]);
+    const body = requireMethodResult(res, '0', 'Email/get');
+    list.push(...((body.list as Email[]) ?? []));
+    state = body.state as string;
+  }
+  return { list, state };
 }
 
 export interface EmailChangesResult {
@@ -375,44 +489,40 @@ export async function getEmailChanges(
   };
 }
 
+const FULL_BODY_ARGS = {
+  properties: EMAIL_FULL_PROPERTIES,
+  fetchHTMLBodyValues: true,
+  fetchTextBodyValues: true,
+  fetchAllBodyValues: true,
+  maxBodyValueBytes: 512000,
+};
+
 export async function getFullEmail(id: string, accountIdOverride?: string): Promise<Email> {
   // `accountIdOverride` lets the unified inbox open a message that lives under
   // a group/shared account in the same session instead of the user's own.
   const accountId = accountIdOverride ?? jmapClient.accountId;
   const res = await jmapClient.request([
-    ['Email/get', {
-      accountId,
-      ids: [id],
-      properties: EMAIL_FULL_PROPERTIES,
-      fetchHTMLBodyValues: true,
-      fetchTextBodyValues: true,
-      fetchAllBodyValues: true,
-      maxBodyValueBytes: 512000,
-    }, '0'],
+    ['Email/get', { accountId, ids: [id], ...FULL_BODY_ARGS }, '0'],
   ]);
-  const email = res.methodResponses[0][1].list[0];
+  const body = requireMethodResult(res, '0', 'Email/get');
+  const email = (body.list as Email[] | undefined)?.[0];
   if (!email) throw new Error(`Email ${id} not found`);
   return email;
 }
 
-// Batch variant for offline sync. JMAP servers cap how many objects can be
-// returned in a single Email/get; the caller should chunk to that ceiling
-// (the client exposes maxObjectsInGet via getMaxObjectsInGet()).
+// Batch variant for offline sync and the thread view. Splits to the server's
+// maxObjectsInGet ceiling itself.
 export async function getFullEmails(ids: string[], accountIdOverride?: string): Promise<Email[]> {
   if (ids.length === 0) return [];
   const accountId = accountIdOverride ?? jmapClient.accountId;
-  const res = await jmapClient.request([
-    ['Email/get', {
-      accountId,
-      ids,
-      properties: EMAIL_FULL_PROPERTIES,
-      fetchHTMLBodyValues: true,
-      fetchTextBodyValues: true,
-      fetchAllBodyValues: true,
-      maxBodyValueBytes: 512000,
-    }, '0'],
-  ]);
-  return res.methodResponses[0][1].list as Email[];
+  const out: Email[] = [];
+  for (const slice of batched(ids, maxInGet())) {
+    const res = await jmapClient.request([
+      ['Email/get', { accountId, ids: slice, ...FULL_BODY_ARGS }, '0'],
+    ]);
+    out.push(...((requireMethodResult(res, '0', 'Email/get').list as Email[]) ?? []));
+  }
+  return out;
 }
 
 /**
@@ -435,7 +545,7 @@ export async function importEmailBlob(
       },
     }, '0'],
   ]);
-  const result = res.methodResponses[0][1];
+  const result = requireMethodResult(res, '0', 'Email/import');
   const notCreated = result?.notCreated?.['import-0'];
   if (notCreated) {
     throw new Error(notCreated.description || notCreated.type || 'Failed to import email');
@@ -450,7 +560,42 @@ export async function getThread(threadId: string, accountIdOverride?: string): P
   const res = await jmapClient.request(
     [['Thread/get', { accountId, ids: [threadId] }, '0']],
   );
-  return res.methodResponses[0][1].list[0];
+  const thread = (requireMethodResult(res, '0', 'Thread/get').list as Thread[] | undefined)?.[0];
+  if (!thread) throw new Error(`Thread ${threadId} not found`);
+  return thread;
+}
+
+/** Thread/get for many ids at once (chunked). Missing threads are skipped. */
+export async function getThreads(threadIds: string[], accountIdOverride?: string): Promise<Thread[]> {
+  if (threadIds.length === 0) return [];
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const out: Thread[] = [];
+  for (const slice of batched(Array.from(new Set(threadIds)), maxInGet())) {
+    const res = await jmapClient.request([['Thread/get', { accountId, ids: slice }, '0']]);
+    out.push(...((requireMethodResult(res, '0', 'Thread/get').list as Thread[]) ?? []));
+  }
+  return out;
+}
+
+/**
+ * Every message of a thread with full bodies, oldest first, via a
+ * back-referenced Thread/get → Email/get. Powers the conversation view.
+ */
+export async function getThreadEmails(threadId: string, accountIdOverride?: string): Promise<Email[]> {
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const res = await jmapClient.request([
+    ['Thread/get', { accountId, ids: [threadId] }, '0'],
+    ['Email/get', {
+      accountId,
+      '#ids': { resultOf: '0', name: 'Thread/get', path: '/list/*/emailIds' },
+      ...FULL_BODY_ARGS,
+    }, '1'],
+  ]);
+  const thread = (requireMethodResult(res, '0', 'Thread/get').list as Thread[] | undefined)?.[0];
+  const emails = (requireMethodResult(res, '1', 'Email/get').list as Email[]) ?? [];
+  if (!thread) return emails;
+  const order = new Map(thread.emailIds.map((id, i) => [id, i]));
+  return emails.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 }
 
 export async function setEmailKeywords(
@@ -459,9 +604,24 @@ export async function setEmailKeywords(
   accountIdOverride?: string,
 ): Promise<void> {
   const accountId = accountIdOverride ?? jmapClient.accountId;
-  await jmapClient.request([
-    ['Email/set', { accountId, update: { [emailId]: { keywords } } }, '0'],
-  ]);
+  await emailSetBatched(accountId, { update: { [emailId]: { keywords } } });
+}
+
+/** Patch individual keywords (`{ $seen: true, $junk: null }`) on many messages. */
+export async function patchKeywordsForEmails(
+  ids: string[],
+  patch: Record<string, boolean | null>,
+  accountIdOverride?: string,
+): Promise<void> {
+  if (ids.length === 0) return;
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const pointerPatch: Record<string, unknown> = {};
+  for (const [keyword, value] of Object.entries(patch)) {
+    pointerPatch[keywordPointer(keyword)] = value === false ? null : value;
+  }
+  const update: Record<string, Record<string, unknown>> = {};
+  for (const id of ids) update[id] = { ...pointerPatch };
+  await emailSetBatched(accountId, { update });
 }
 
 export async function moveEmail(
@@ -470,21 +630,11 @@ export async function moveEmail(
   toMailboxId: string,
   accountIdOverride?: string,
 ): Promise<void> {
-  const accountId = accountIdOverride ?? jmapClient.accountId;
-  await jmapClient.request([
-    ['Email/set', {
-      accountId,
-      update: {
-        [emailId]: {
-          [`mailboxIds/${fromMailboxId}`]: null,
-          [`mailboxIds/${toMailboxId}`]: true,
-        },
-      },
-    }, '0'],
-  ]);
+  await moveEmails([emailId], fromMailboxId, toMailboxId, accountIdOverride);
 }
 
-// Move several emails from one mailbox to another in a single Email/set.
+// Move several emails from one mailbox to another. Pointer keys are JSON
+// Pointer escaped so a mailbox id containing `/` or `~` cannot break the patch.
 export async function moveEmails(
   ids: string[],
   fromMailboxId: string,
@@ -496,11 +646,55 @@ export async function moveEmails(
   const update: Record<string, Record<string, unknown>> = {};
   for (const id of ids) {
     update[id] = {
-      [`mailboxIds/${fromMailboxId}`]: null,
-      [`mailboxIds/${toMailboxId}`]: true,
+      [mailboxPointer(fromMailboxId)]: null,
+      [mailboxPointer(toMailboxId)]: true,
     };
   }
-  await jmapClient.request([['Email/set', { accountId, update }, '0']]);
+  await emailSetBatched(accountId, { update });
+}
+
+/**
+ * File messages into Junk and flip `$junk`/`$notjunk` so the server's
+ * classifier and other clients learn (#850). Optionally also marks them read
+ * (the "trash-and-read" delete action).
+ */
+export async function markAsSpam(
+  ids: string[],
+  junkMailboxId: string,
+  accountIdOverride?: string,
+  opts?: { markRead?: boolean },
+): Promise<void> {
+  if (ids.length === 0) return;
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const update: Record<string, Record<string, unknown>> = {};
+  for (const id of ids) {
+    update[id] = {
+      mailboxIds: { [junkMailboxId]: true },
+      [keywordPointer('$junk')]: true,
+      [keywordPointer('$notjunk')]: null,
+      ...(opts?.markRead ? { [keywordPointer('$seen')]: true } : {}),
+    };
+  }
+  await emailSetBatched(accountId, { update });
+}
+
+/** Inverse of {@link markAsSpam}: restore into `targetMailboxId` with `$notjunk`. */
+export async function undoSpam(
+  ids: string[],
+  targetMailboxId: string,
+  accountIdOverride?: string,
+): Promise<void> {
+  if (ids.length === 0) return;
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const update: Record<string, Record<string, unknown>> = {};
+  for (const id of ids) {
+    update[id] = {
+      mailboxIds: { [targetMailboxId]: true },
+      [keywordPointer('$junk')]: null,
+      [keywordPointer('$notjunk')]: true,
+    };
+  }
+  await emailSetBatched(accountId, { update });
 }
 
 // Batch delete: destroy outright when already in trash, otherwise move to trash.
@@ -512,14 +706,13 @@ export async function deleteEmails(
 ): Promise<void> {
   if (ids.length === 0) return;
   if (currentMailboxId === trashMailboxId) {
-    const accountId = accountIdOverride ?? jmapClient.accountId;
-    await jmapClient.request([['Email/set', { accountId, destroy: ids }, '0']]);
+    await destroyEmails(ids, accountIdOverride);
   } else {
     await moveEmails(ids, currentMailboxId, trashMailboxId, accountIdOverride);
   }
 }
 
-// Apply keyword maps to several emails in one round-trip.
+// Apply keyword maps to several emails in one round-trip (chunked).
 export async function setKeywordsForEmails(
   updates: Array<{ id: string; keywords: Record<string, boolean> }>,
   accountIdOverride?: string,
@@ -528,7 +721,7 @@ export async function setKeywordsForEmails(
   const accountId = accountIdOverride ?? jmapClient.accountId;
   const update: Record<string, { keywords: Record<string, boolean> }> = {};
   for (const u of updates) update[u.id] = { keywords: u.keywords };
-  await jmapClient.request([['Email/set', { accountId, update }, '0']]);
+  await emailSetBatched(accountId, { update });
 }
 
 // Restore each email's mailboxIds to the snapshot supplied. Used by undo to
@@ -548,9 +741,7 @@ export async function restoreEmailMailboxes(
     }
     update[item.id] = { mailboxIds: onlyTrue };
   }
-  await jmapClient.request([
-    ['Email/set', { accountId, update }, '0'],
-  ]);
+  await emailSetBatched(accountId, { update });
 }
 
 // Replace one email's full mailboxIds map. JMAP "mailboxIds" assigns the whole
@@ -566,11 +757,22 @@ export async function setEmailMailboxes(
 }
 
 // Permanently destroy emails (no move-to-trash). Idempotent: destroying an
-// already-gone id is a no-op on replay.
+// already-gone id is a no-op on replay (a `notFound` is tolerated).
 export async function destroyEmails(ids: string[], accountIdOverride?: string): Promise<void> {
   if (ids.length === 0) return;
   const accountId = accountIdOverride ?? jmapClient.accountId;
-  await jmapClient.request([['Email/set', { accountId, destroy: ids }, '0']]);
+  for (const slice of batched(ids, maxInSet())) {
+    const res = await jmapClient.request([['Email/set', { accountId, destroy: slice }, '0']]);
+    const body = requireMethodResult(res, '0', 'Email/set');
+    const notDestroyed = (body.notDestroyed ?? {}) as Record<string, { type?: string; description?: string }>;
+    const real = Object.entries(notDestroyed).filter(([, err]) => err?.type !== 'notFound');
+    if (real.length > 0) {
+      const [id, err] = real[0];
+      throw new Error(
+        `Failed to delete ${real.length} email(s), first: ${id} – ${err.type || 'unknown'}${err.description ? ` (${err.description})` : ''}`,
+      );
+    }
+  }
 }
 
 // Archive one or more emails into the archive mailbox, optionally auto-sorting
@@ -590,9 +792,7 @@ export async function archiveEmails(
     const updates = Object.fromEntries(
       emails.map((e) => [e.id, { mailboxIds: { [archiveMailboxId]: true } }]),
     );
-    await jmapClient.request([
-      ['Email/set', { accountId, update: updates }, '0'],
-    ]);
+    await emailSetBatched(accountId, { update: updates });
     return;
   }
 
@@ -653,41 +853,64 @@ export async function archiveEmails(
     updates[emailId] = { mailboxIds: { [destId]: true } };
   }
 
-  const methodCalls: JMAPMethodCall[] = [];
+  // Creation ids are scoped to the request that introduced them (RFC 8620
+  // §3.3), so "#<cid>" only resolves in the request carrying the Mailbox/set:
+  // the folders are created alongside the first batch of messages, and the
+  // ids they were assigned are substituted into every later batch.
+  const updateBatches = batched(Object.entries(updates), maxInSet());
   const hasCreates = Object.keys(createEntries).length > 0;
-  if (hasCreates) {
-    methodCalls.push(['Mailbox/set', { accountId, create: createEntries }, '0']);
-  }
-  methodCalls.push(['Email/set', { accountId, update: updates }, String(methodCalls.length)]);
+  let createdIdFor: Record<string, string> = {};
 
-  const response = await jmapClient.request(methodCalls);
+  for (let i = 0; i < updateBatches.length; i++) {
+    const batch: Array<[string, { mailboxIds: Record<string, true> }]> = i === 0
+      ? updateBatches[i]
+      : updateBatches[i].map(([emailId, patch]) => {
+        const [destId] = Object.keys(patch.mailboxIds);
+        const resolved = createdIdFor[destId];
+        return [emailId, resolved ? { mailboxIds: { [resolved]: true } as Record<string, true> } : patch];
+      });
 
-  if (hasCreates) {
-    const mailboxResult = response.methodResponses?.[0]?.[1];
-    const notCreated = mailboxResult?.notCreated as
-      | Record<string, { type?: string; properties?: string[]; description?: string }>
-      | undefined;
-    const failures = notCreated ? Object.entries(notCreated) : [];
-    if (failures.length > 0) {
-      const [cid, err] = failures[0];
-      const parts = [err.type || 'unknown'];
-      if (err.properties?.length) parts.push(`properties=[${err.properties.join(', ')}]`);
-      if (err.description) parts.push(err.description);
-      throw new Error(`Failed to create archive folder '${cid}': ${parts.join(' – ')}`);
+    const methodCalls: JMAPMethodCall[] = [];
+    const withCreates = hasCreates && i === 0;
+    if (withCreates) {
+      methodCalls.push(['Mailbox/set', { accountId, create: createEntries }, '0']);
     }
-  }
+    methodCalls.push(['Email/set', { accountId, update: Object.fromEntries(batch) }, String(methodCalls.length)]);
 
-  const emailIdx = hasCreates ? 1 : 0;
-  const emailResult = response.methodResponses?.[emailIdx]?.[1];
-  const notUpdated = emailResult?.notUpdated as
-    | Record<string, { type?: string; description?: string }>
-    | undefined;
-  const emailFailures = notUpdated ? Object.entries(notUpdated) : [];
-  if (emailFailures.length > 0) {
-    const [id, err] = emailFailures[0];
-    throw new Error(
-      `Failed to archive ${emailFailures.length} email(s), first: ${id} – ${err.type || 'unknown'}${err.description ? ` (${err.description})` : ''}`,
-    );
+    const response = await jmapClient.request(methodCalls);
+
+    if (withCreates) {
+      const mailboxResult = requireMethodResult(response, '0', 'Mailbox/set');
+      const notCreated = mailboxResult?.notCreated as
+        | Record<string, { type?: string; properties?: string[]; description?: string }>
+        | undefined;
+      const failures = notCreated ? Object.entries(notCreated) : [];
+      if (failures.length > 0) {
+        const [cid, err] = failures[0];
+        const parts = [err.type || 'unknown'];
+        if (err.properties?.length) parts.push(`properties=[${err.properties.join(', ')}]`);
+        if (err.description) parts.push(err.description);
+        throw new Error(`Failed to create archive folder '${cid}': ${parts.join(' – ')}`);
+      }
+      const created = (mailboxResult?.created || {}) as Record<string, { id?: string }>;
+      createdIdFor = Object.fromEntries(
+        Object.entries(created)
+          .filter(([, mailbox]) => !!mailbox?.id)
+          .map(([cid, mailbox]) => [`#${cid}`, mailbox.id!]),
+      );
+    }
+
+    const emailResult = requireMethodResult(response, String(withCreates ? 1 : 0), 'Email/set');
+    const notUpdated = emailResult?.notUpdated as
+      | Record<string, { type?: string; description?: string }>
+      | undefined;
+    const emailFailures = notUpdated ? Object.entries(notUpdated) : [];
+    if (emailFailures.length > 0) {
+      const [id, err] = emailFailures[0];
+      throw new Error(
+        `Failed to archive ${emailFailures.length} email(s), first: ${id} – ${err.type || 'unknown'}${err.description ? ` (${err.description})` : ''}`,
+      );
+    }
   }
 }
 
@@ -697,14 +920,7 @@ export async function deleteEmail(
   currentMailboxId: string,
   accountIdOverride?: string,
 ): Promise<void> {
-  if (currentMailboxId === trashMailboxId) {
-    const accountId = accountIdOverride ?? jmapClient.accountId;
-    await jmapClient.request([
-      ['Email/set', { accountId, destroy: [emailId] }, '0'],
-    ]);
-  } else {
-    await moveEmail(emailId, currentMailboxId, trashMailboxId, accountIdOverride);
-  }
+  await deleteEmails([emailId], trashMailboxId, currentMailboxId, accountIdOverride);
 }
 
 export async function searchEmails(
@@ -725,7 +941,7 @@ export async function searchEmails(
       limit,
     }, '0'],
   ]);
-  return res.methodResponses[0][1].ids;
+  return (requireMethodResult(res, '0', 'Email/query').ids as string[]) ?? [];
 }
 
 // Cross-mailbox query with an arbitrary JMAP filter (used by contact activity
@@ -733,8 +949,9 @@ export async function searchEmails(
 export async function queryEmailsByFilter(
   filter: Record<string, unknown>,
   limit = 5,
+  accountIdOverride?: string,
 ): Promise<string[]> {
-  const accountId = jmapClient.accountId;
+  const accountId = accountIdOverride ?? jmapClient.accountId;
   const res = await jmapClient.request([
     ['Email/query', {
       accountId,
@@ -743,7 +960,7 @@ export async function queryEmailsByFilter(
       limit,
     }, '0'],
   ]);
-  return res.methodResponses[0][1].ids;
+  return (requireMethodResult(res, '0', 'Email/query').ids as string[]) ?? [];
 }
 
 export interface OutgoingAttachment {
@@ -755,6 +972,25 @@ export interface OutgoingAttachment {
   cid?: string;
 }
 
+export interface OutgoingEmail {
+  from: EmailAddress[];
+  to: EmailAddress[];
+  cc?: EmailAddress[];
+  bcc?: EmailAddress[];
+  replyTo?: EmailAddress[];
+  subject: string;
+  htmlBody?: string;
+  textBody?: string;
+  attachments?: OutgoingAttachment[];
+  // RFC 5322 threading: bare msg-ids (angle brackets are stripped). A legacy
+  // whitespace-separated string is accepted and split.
+  inReplyTo?: string[] | string;
+  references?: string[] | string;
+  // Pre-assigned Message-ID (e.g. when re-sending a draft); generated when absent.
+  messageId?: string;
+  requestReadReceipt?: boolean;
+}
+
 export interface SendEmailResult {
   /** True when the message was deferred (HOLDFOR / FUTURERELEASE). */
   scheduled: boolean;
@@ -762,37 +998,55 @@ export interface SendEmailResult {
   sendAt?: string;
   emailId?: string;
   emailSubmissionId?: string;
+  /** Post-send filing/cleanup problem (message did go out). */
+  filingWarning?: string;
 }
 
-export async function sendEmail(
-  email: {
-    from: EmailAddress[];
-    to: EmailAddress[];
-    cc?: EmailAddress[];
-    bcc?: EmailAddress[];
-    subject: string;
-    htmlBody?: string;
-    textBody?: string;
-    attachments?: OutgoingAttachment[];
-    inReplyTo?: string;
-    references?: string;
-  },
-  identityId: string,
-  sentMailboxId: string,
-  // When > 0 the message is held for this many seconds before delivery via the
-  // SMTP HOLDFOR parameter (FUTURERELEASE). Used for both explicit "send later"
-  // scheduling and the global send-delay (undo-send) window.
-  holdForSeconds?: number,
-): Promise<SendEmailResult> {
-  const accountId = jmapClient.accountId;
+function toMessageIdList(value: string[] | string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  const raw = Array.isArray(value) ? value : value.split(/[\s,]+/);
+  const ids = raw.map(stripMessageIdBrackets).filter(Boolean);
+  return ids.length ? ids : undefined;
+}
+
+function cleanAddresses(list: EmailAddress[] | undefined): EmailAddress[] | undefined {
+  if (!list) return undefined;
+  const out = list
+    .map((a) => {
+      const email = a.email?.trim();
+      if (!email) return null;
+      const name = sanitizeDisplayName(a.name);
+      return name ? { name, email } : { email };
+    })
+    .filter((a): a is EmailAddress => a !== null);
+  // RFC 5322 §3.6.3: an empty address-list header is malformed; omit instead.
+  return out.length ? out : undefined;
+}
+
+function dedupeAddresses(list: EmailAddress[] | undefined): EmailAddress[] | undefined {
+  if (!list) return undefined;
+  const seen = new Set<string>();
+  const out: EmailAddress[] = [];
+  for (const a of list) {
+    const key = a.email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(a);
+  }
+  return out.length ? out : undefined;
+}
+
+/** The JMAP `Email/set` create object for an outgoing message or draft. */
+function buildEmailCreate(email: OutgoingEmail): Record<string, unknown> {
+  const from = cleanAddresses(email.from) ?? email.from;
   const emailCreate: Record<string, unknown> = {
-    from: email.from,
-    to: email.to,
-    cc: email.cc,
-    bcc: email.bcc,
+    from,
+    to: cleanAddresses(email.to) ?? [],
+    cc: cleanAddresses(email.cc),
+    bcc: dedupeAddresses(cleanAddresses(email.bcc)),
+    replyTo: cleanAddresses(email.replyTo),
     subject: email.subject,
-    mailboxIds: { [sentMailboxId]: true },
-    keywords: { $seen: true },
+    messageId: [email.messageId ? stripMessageIdBrackets(email.messageId) : generateMessageId(from[0]?.email ?? 'localhost')],
   };
 
   const bodyValues: Record<string, { value: string }> = {};
@@ -820,9 +1074,55 @@ export async function sendEmail(
     });
   }
 
-  if (email.inReplyTo) {
-    emailCreate['header:In-Reply-To:asText'] = email.inReplyTo;
-    emailCreate['header:References:asText'] = email.references ?? email.inReplyTo;
+  // Per RFC 8621 §4.1.2.3 inReplyTo/references are arrays of bare msg-ids.
+  const inReplyTo = toMessageIdList(email.inReplyTo);
+  const references = toMessageIdList(email.references);
+  if (inReplyTo) emailCreate.inReplyTo = inReplyTo;
+  if (references) emailCreate.references = references;
+  else if (inReplyTo) emailCreate.references = inReplyTo;
+
+  if (email.requestReadReceipt && from[0]?.email) {
+    // RFC 8098: ask the recipient's client to return a Message Disposition
+    // Notification to our address.
+    emailCreate['header:Disposition-Notification-To:asText'] = from[0].email;
+  }
+
+  return emailCreate;
+}
+
+export interface SendEmailOptions {
+  /**
+   * Drafts folder id. When given, the message is created there with `$draft`
+   * and moved to Sent by `onSuccessUpdateEmail` on the submission, so the
+   * SMTP send happens before it lands in Sent (#188) and a failed submission
+   * leaves it in Drafts instead of faking a sent copy.
+   */
+  draftsMailboxId?: string;
+  /** Previous draft version to destroy once the submission succeeded (#849). */
+  draftId?: string;
+  /** Submitting account (shared/group account); defaults to the primary. */
+  accountId?: string;
+}
+
+export async function sendEmail(
+  email: OutgoingEmail,
+  identityId: string,
+  sentMailboxId: string,
+  // When > 0 the message is held for this many seconds before delivery via the
+  // SMTP HOLDFOR parameter (FUTURERELEASE). Used for both explicit "send later"
+  // scheduling and the global send-delay (undo-send) window.
+  holdForSeconds?: number,
+  opts?: SendEmailOptions,
+): Promise<SendEmailResult> {
+  const accountId = opts?.accountId ?? jmapClient.accountId;
+  const emailCreate = buildEmailCreate(email);
+  const viaDrafts = !!opts?.draftsMailboxId;
+  if (viaDrafts) {
+    emailCreate.mailboxIds = { [opts!.draftsMailboxId!]: true };
+    emailCreate.keywords = { $seen: true, $draft: true };
+  } else {
+    emailCreate.mailboxIds = { [sentMailboxId]: true };
+    emailCreate.keywords = { $seen: true };
   }
 
   const submissionCreate: Record<string, unknown> = { emailId: '#draft', identityId };
@@ -843,28 +1143,49 @@ export async function sendEmail(
     };
   }
 
+  const submissionArgs: Record<string, unknown> = {
+    accountId,
+    create: { 'sub-1': submissionCreate },
+  };
+  if (viaDrafts) {
+    submissionArgs.onSuccessUpdateEmail = {
+      '#sub-1': {
+        mailboxIds: { [sentMailboxId]: true },
+        [keywordPointer('$draft')]: null,
+      },
+    };
+  }
+
   const res = await jmapClient.request(
     [
       ['Email/set', { accountId, create: { draft: emailCreate } }, '0'],
-      ['EmailSubmission/set', {
-        accountId,
-        create: { 'sub-1': submissionCreate },
-      }, '1'],
+      ['EmailSubmission/set', submissionArgs, '1'],
     ],
-    [CAPABILITIES.CORE, CAPABILITIES.MAIL, CAPABILITIES.SUBMISSION],
+    SUBMISSION_USING,
   );
 
   let emailId: string | undefined;
   let emailSubmissionId: string | undefined;
   let sendAt: string | undefined;
+  let filingWarning: string | undefined;
   for (const [methodName, result] of res.methodResponses) {
-    if (methodName.endsWith('/error')) {
+    if (methodName === 'error' || methodName.endsWith('/error')) {
       throw new Error((result as { description?: string }).description ?? 'Send failed');
     }
     if (methodName === 'Email/set') {
-      const notCreated = (result as { notCreated?: Record<string, { description?: string; type?: string }> }).notCreated?.draft;
-      if (notCreated) throw new Error(notCreated.description ?? notCreated.type ?? 'Failed to create message');
+      const notCreated = (result as { notCreated?: Record<string, { description?: string; type?: string; properties?: string[] }> }).notCreated?.draft;
+      if (notCreated) {
+        const props = notCreated.properties?.length ? ` (properties: ${notCreated.properties.join(', ')})` : '';
+        throw new Error(`${notCreated.description ?? notCreated.type ?? 'Failed to create message'}${props}`);
+      }
       emailId = (result as { created?: Record<string, { id?: string }> }).created?.draft?.id;
+      // Filing problems from onSuccessUpdateEmail come back on the implicit
+      // Email/set; the message already left, so warn rather than fail.
+      const notUpdated = (result as { notUpdated?: Record<string, { description?: string; type?: string }> }).notUpdated;
+      if (notUpdated && Object.keys(notUpdated).length) {
+        const first = Object.values(notUpdated)[0];
+        filingWarning = filingWarning ?? (first?.description || first?.type || 'post-send filing failed');
+      }
     }
     if (methodName === 'EmailSubmission/set') {
       const notCreated = (result as { notCreated?: Record<string, { description?: string; type?: string }> }).notCreated?.['sub-1'];
@@ -875,12 +1196,59 @@ export async function sendEmail(
     }
   }
 
+  // The message is out (or scheduled) - now it is safe to drop the old draft.
+  // A failure here leaves an orphan in Drafts, which is a filing warning
+  // rather than a failed send (#849).
+  if (opts?.draftId && emailSubmissionId) {
+    try {
+      await destroyEmails([opts.draftId], accountId);
+    } catch (err) {
+      filingWarning = filingWarning ?? `old draft cleanup failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
   return {
     scheduled: !!(holdForSeconds && holdForSeconds > 0),
     sendAt,
     emailId,
     emailSubmissionId,
+    filingWarning,
   };
+}
+
+/**
+ * Save a draft into the Drafts folder (`$draft` + `$seen`). When `previousDraftId`
+ * is given it is destroyed only AFTER the replacement was created (#849): a
+ * combined create+destroy would delete the last good copy when the create
+ * fails (e.g. blobNotFound on a re-opened draft's attachments). Returns the
+ * new draft id.
+ */
+export async function createDraft(
+  email: OutgoingEmail,
+  draftsMailboxId: string,
+  previousDraftId?: string,
+  accountIdOverride?: string,
+): Promise<string> {
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const emailCreate = buildEmailCreate(email);
+  emailCreate.mailboxIds = { [draftsMailboxId]: true };
+  emailCreate.keywords = { $seen: true, $draft: true };
+  const res = await jmapClient.request([
+    ['Email/set', { accountId, create: { draft: emailCreate } }, '0'],
+  ]);
+  const body = requireMethodResult(res, '0', 'Email/set');
+  const notCreated = body.notCreated?.draft as { description?: string; type?: string } | undefined;
+  if (notCreated) throw new Error(notCreated.description || notCreated.type || 'Failed to save draft');
+  const id = body.created?.draft?.id as string | undefined;
+  if (!id) throw new Error('Draft save returned no id');
+  if (previousDraftId && previousDraftId !== id) {
+    try {
+      await destroyEmails([previousDraftId], accountId);
+    } catch (err) {
+      console.warn('[email] failed to destroy previous draft version:', err);
+    }
+  }
+  return id;
 }
 
 export interface ScheduledEmail {
@@ -909,45 +1277,52 @@ export async function listScheduledEmails(): Promise<ScheduledEmail[]> {
     [CAPABILITIES.CORE, CAPABILITIES.SUBMISSION],
   );
   const [queryName, queryBody] = queryRes.methodResponses[0];
-  if (queryName.endsWith('/error')) return [];
+  if (queryName === 'error' || queryName.endsWith('/error')) return [];
   const ids = (queryBody.ids as string[]) ?? [];
   if (ids.length === 0) return [];
 
-  const subRes = await jmapClient.request(
-    [['EmailSubmission/get', {
-      accountId,
-      ids,
-      properties: ['id', 'emailId', 'identityId', 'threadId', 'sendAt', 'undoStatus'],
-    }, '0']],
-    [CAPABILITIES.CORE, CAPABILITIES.SUBMISSION],
-  );
-  const submissions = ((subRes.methodResponses[0][1].list as Array<{
+  const submissions: Array<{
     id: string;
     emailId: string;
     identityId: string;
     threadId?: string;
     sendAt?: string;
     undoStatus?: string;
-  }>) ?? []).filter((s) => {
+  }> = [];
+  for (const slice of batched(ids, maxInGet())) {
+    const subRes = await jmapClient.request(
+      [['EmailSubmission/get', {
+        accountId,
+        ids: slice,
+        properties: ['id', 'emailId', 'identityId', 'threadId', 'sendAt', 'undoStatus'],
+      }, '0']],
+      [CAPABILITIES.CORE, CAPABILITIES.SUBMISSION],
+    );
+    submissions.push(...((requireMethodResult(subRes, '0', 'EmailSubmission/get').list as typeof submissions) ?? []));
+  }
+  const pending = submissions.filter((s) => {
     if (s.undoStatus !== 'pending' || !s.sendAt) return false;
     const t = new Date(s.sendAt).getTime();
     return Number.isFinite(t) && t > now;
   });
-  if (submissions.length === 0) return [];
+  if (pending.length === 0) return [];
 
-  const emailIds = Array.from(new Set(submissions.map((s) => s.emailId)));
-  const emailRes = await jmapClient.request([
-    ['Email/get', {
-      accountId,
-      ids: emailIds,
-      properties: ['id', 'subject', 'to', 'from', 'preview', 'threadId'],
-    }, '0'],
-  ]);
-  const emailById = new Map(
-    ((emailRes.methodResponses[0][1].list as Email[]) ?? []).map((e) => [e.id, e]),
-  );
+  const emailIds = Array.from(new Set(pending.map((s) => s.emailId)));
+  const emailById = new Map<string, Email>();
+  for (const slice of batched(emailIds, maxInGet())) {
+    const emailRes = await jmapClient.request([
+      ['Email/get', {
+        accountId,
+        ids: slice,
+        properties: ['id', 'subject', 'to', 'from', 'preview', 'threadId'],
+      }, '0'],
+    ]);
+    for (const e of (requireMethodResult(emailRes, '0', 'Email/get').list as Email[]) ?? []) {
+      emailById.set(e.id, e);
+    }
+  }
 
-  return submissions
+  return pending
     .map((s): ScheduledEmail | null => {
       const e = emailById.get(s.emailId);
       if (!s.sendAt) return null;
@@ -979,10 +1354,51 @@ export async function cancelScheduledSend(emailSubmissionId: string): Promise<vo
     }, '0']],
     [CAPABILITIES.CORE, CAPABILITIES.SUBMISSION],
   );
-  const failure = res.methodResponses[0][1].notUpdated?.[emailSubmissionId] as
+  const body = requireMethodResult(res, '0', 'EmailSubmission/set');
+  const failure = body.notUpdated?.[emailSubmissionId] as
     | { type?: string; description?: string }
     | undefined;
   if (failure) {
     throw new Error(failure.description ?? failure.type ?? 'Failed to cancel scheduled send');
   }
+}
+
+/**
+ * Change when a scheduled message goes out (or send it now with `holdForSeconds`
+ * = 0): cancel the pending submission and create a replacement for the same
+ * Email with a fresh HOLDFOR envelope, in one request. Returns the new
+ * submission id and resolved send time.
+ */
+export async function rescheduleScheduledSend(
+  scheduled: { emailSubmissionId: string; emailId: string; identityId: string; from?: EmailAddress[]; to?: EmailAddress[] },
+  holdForSeconds: number,
+  recipients?: EmailAddress[],
+): Promise<{ emailSubmissionId?: string; sendAt?: string }> {
+  const accountId = jmapClient.accountId;
+  const create: Record<string, unknown> = { emailId: scheduled.emailId, identityId: scheduled.identityId };
+  if (holdForSeconds > 0) {
+    const rcpt = (recipients ?? scheduled.to ?? []).map((r) => ({ email: r.email.trim() })).filter((r) => r.email);
+    create.envelope = {
+      mailFrom: {
+        email: scheduled.from?.[0]?.email,
+        parameters: { HOLDFOR: String(Math.ceil(holdForSeconds)) },
+      },
+      rcptTo: rcpt,
+    };
+  }
+  const res = await jmapClient.request(
+    [['EmailSubmission/set', {
+      accountId,
+      update: { [scheduled.emailSubmissionId]: { undoStatus: 'canceled' } },
+      create: { replacement: create },
+    }, '0']],
+    [CAPABILITIES.CORE, CAPABILITIES.SUBMISSION],
+  );
+  const body = requireMethodResult(res, '0', 'EmailSubmission/set');
+  const notUpdated = body.notUpdated?.[scheduled.emailSubmissionId] as { description?: string; type?: string } | undefined;
+  if (notUpdated) throw new Error(notUpdated.description ?? notUpdated.type ?? 'Failed to cancel the previous schedule');
+  const notCreated = body.notCreated?.replacement as { description?: string; type?: string } | undefined;
+  if (notCreated) throw new Error(notCreated.description ?? notCreated.type ?? 'Failed to reschedule');
+  const created = body.created?.replacement as { id?: string; sendAt?: string } | undefined;
+  return { emailSubmissionId: created?.id, sendAt: created?.sendAt };
 }

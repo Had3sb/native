@@ -36,9 +36,15 @@ describe('identity operations', () => {
   describe('createIdentity', () => {
     it('should create a new identity', async () => {
       const created = { id: 'id-new', name: 'Work', email: 'work@example.com' };
-      mockRequest.mockResolvedValue({
-        methodResponses: [['Identity/set', { created: { 'new-identity': created } }, '0']],
-      });
+      // The create echo carries only server-set properties; the API re-reads
+      // the full identity afterwards.
+      mockRequest
+        .mockResolvedValueOnce({
+          methodResponses: [['Identity/set', { created: { 'new-identity': { id: 'id-new' } } }, '0']],
+        })
+        .mockResolvedValueOnce({
+          methodResponses: [['Identity/get', { list: [created] }, '0']],
+        });
 
       const result = await createIdentity({ name: 'Work', email: 'work@example.com' });
       expect(result).toEqual(created);

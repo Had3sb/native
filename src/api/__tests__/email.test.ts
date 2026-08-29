@@ -8,6 +8,8 @@ vi.mock('../jmap-client', () => ({
     getAccountName: vi.fn(() => 'me@example.com'),
     getSharedMailAccounts: vi.fn(() => []),
     getMaxCallsInRequest: vi.fn(() => 16),
+    getMaxObjectsInGet: vi.fn(() => 500),
+    getMaxObjectsInSet: vi.fn(() => 500),
   },
 }));
 
@@ -394,16 +396,18 @@ describe('email operations', () => {
           to: [{ email: 'you@example.com' }],
           subject: 'Re: Hello',
           textBody: 'replying',
-          inReplyTo: '<msg-1@example.com>',
-          references: '<msg-0@example.com> <msg-1@example.com>',
+          inReplyTo: ['<msg-1@example.com>'],
+          references: ['<msg-0@example.com>', '<msg-1@example.com>'],
         },
         'identity-1',
         'sent-mb',
       );
 
       const emailCreate = mockRequest.mock.calls[0][0][0][1].create.draft;
-      expect(emailCreate['header:In-Reply-To:asText']).toBe('<msg-1@example.com>');
-      expect(emailCreate['header:References:asText']).toBe('<msg-0@example.com> <msg-1@example.com>');
+      // RFC 8621 §4.1.2.3: JMAP arrays of bare msg-ids, brackets stripped.
+      expect(emailCreate.inReplyTo).toEqual(['msg-1@example.com']);
+      expect(emailCreate.references).toEqual(['msg-0@example.com', 'msg-1@example.com']);
+      expect(emailCreate['header:In-Reply-To:asText']).toBeUndefined();
     });
   });
 });
