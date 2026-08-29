@@ -7,22 +7,22 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
 
 ### Login flow
 
-- [ ] **TOTP / 2FA password login is impossible** — `P1` — `missing`
+- [x] **TOTP / 2FA password login is impossible** — `P1` — `missing` — fixed in b52768e
   - What WEB does: login form has a TOTP field (auto-shown when the server answers 402 "MFA code required", `lib/jmap/client.ts:956-966` → `TOTP_REQUIRED`). With a code it calls `/api/auth/totp-token-exchange` which performs Stalwart's structured login `POST {server}/api/auth {type:'authCode', accountName, accountSecret, mfaToken, clientId, redirectUri, codeChallenge, codeChallengeMethod:'S256'}` then `POST {server}/auth/token` (authorization_code + PKCE) and continues as a bearer session (`app/api/auth/totp-token-exchange/route.ts:26-28, 90-93, 125, 150`; `stores/auth-store.ts:651-706`; changelog 1.7.5 "Support MFA login via the structured auth endpoint"). Legacy `password$totp` basic-auth fallback for pre-0.16 servers (`auth-store.ts:696-702`).
   - What RN does: `JMAPClient.connect` only does HTTP Basic with the raw password (`src/api/jmap-client.ts:88-106`, `363-383`). A 402 becomes `"Session discovery failed: 402 …"`, which `describeLoginError` only maps for 403/404 (`src/lib/login-errors.ts:57`) so the user sees a generic "Sign-in failed". The 401 copy tells 2FA users to create an app password (`login-errors.ts:39-44`) — that is the only workaround today.
   - Fix hint: detect 402 with a title containing `totp`/`mfa` in `fetchSession`, show a code step, then implement the two-step exchange directly on device (no CORS on native): `/api/auth` with `mfaToken` + `clientId: 'bulwark-webmail'` + PKCE, then `/auth/token`; persist the result as an OAuth bundle (`tokenEndpoint = ${server}/auth/token`, `clientId`) so `connectWithOAuth` and the existing refresh path take over.
 
-- [ ] **Webmail password handoff breaks for TOTP-protected accounts** — `P1` — `bug` (cross-repo)
+- [x] **Webmail password handoff breaks for TOTP-protected accounts** — `P1` — `bug` (cross-repo) — fixed in 0d94d76 (RN retries the handed-off password with a code prompt; the webmail-side flow=oauth hand-off is still open)
   - What WEB does: in mobile-handoff mode the login page always hands back `flow=password` with the raw password the user typed (`app/(main)/[locale]/login/page.tsx:638-642, 282`) even when the webmail itself upgraded that login to token auth via TOTP (`stores/auth-store.ts:651-706`, `upgradedToOAuth`).
   - What RN does: `loginViaWebmail` feeds the password into `login()` → Basic auth (`src/stores/auth-store.ts:226-229`) → Stalwart 402 → "Sign-in failed". The user completed 2FA in the browser and still cannot sign in.
   - Fix hint: WEB should hand off `flow=oauth` (access/refresh token, `token_endpoint`, `client_id`) when the password login was TOTP-upgraded (the mobile SSO branch in `app/api/auth/sso/complete/route.ts:66-97` already returns that shape); RN needs no change once WEB does that. Alternatively RN implements the previous finding and retries with a TOTP prompt when the handed-off password is rejected with 402.
 
-- [ ] **No direct OAuth/OIDC (PKCE) against the mail server — a Bulwark webmail at the JMAP origin is assumed** — `P2` — `missing`
+- [x] **No direct OAuth/OIDC (PKCE) against the mail server — a Bulwark webmail at the JMAP origin is assumed** — `P2` — `missing` — fixed in 4bebf70
   - What WEB does: discovers `/.well-known/oauth-authorization-server` or `openid-configuration` (`lib/oauth/discovery.ts:150-175`), runs client-side PKCE (`login/page.tsx:569-621`, `lib/oauth/pkce.ts`) or server-side SSO; works against Stalwart's built-in OAuth (default client id `bulwark-webmail`, `lib/oauth/token-exchange.ts:14`), Keycloak, Authentik.
   - What RN does: `ConfirmStep → runHandoff(serverUrl)` opens `${serverUrl}/login?mobile_redirect_uri=…` (`src/lib/oauth.ts:49-56`, `src/screens/LoginScreen.tsx:128-135`). `serverUrl` comes from probing `/.well-known/jmap` on `domain`, `mail.domain`, `webmail.domain` (`src/lib/server-discovery.ts:70-72, 143-170`) — i.e. it finds the Stalwart host, and then assumes a Bulwark webmail lives at that same origin. When webmail is on another host (or the server only runs Stalwart), the browser opens a 404/Stalwart admin page and the only way in is the password step.
   - Fix hint: either (a) do PKCE natively with `expo-web-browser`/`expo-auth-session` against the discovered `authorization_endpoint` (redirect `bulwarkmobile://auth/callback`, client id `bulwark-webmail`, scopes `openid email profile`), or (b) probe `${serverUrl}/api/config` before opening the handoff and ask for the webmail address when it is not a Bulwark instance.
 
-- [ ] **Login error classification is thinner than WEB** — `P3` — `partial`
+- [x] **Login error classification is thinner than WEB** — `P3` — `partial` — fixed in b52768e
   - What WEB does: `classifyLoginError` maps invalid credentials, network, 5xx `server_error`, `totp_required`; 429 is a `RateLimitError` with retry-after (`stores/auth-store.ts:71-96`, `lib/jmap/client.ts:849-853`).
   - What RN does: `describeLoginError` (`src/lib/login-errors.ts`) has no 402 (MFA), 429 or 5xx branches; `RateLimitError('Rate limited by server')` falls to the generic "Sign-in failed" with the raw message.
   - Fix hint: add branches for `402` → 2FA copy, `429`/`RateLimitError` → "try again in N s", `5xx` → "server error, try later".
@@ -37,7 +37,7 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
   - What RN does: `LoginScreen.tsx`, all `src/screens/login/*.tsx`, `QrScanModal.tsx` and `login-errors.ts` use literal English while `SettingsScreen` already uses `useLocaleStore().t` (`src/screens/SettingsScreen.tsx:169-190`).
   - Fix hint: route through `t()` with `login.*` keys (the i18n audit may cover this; listed here so it is not lost).
 
-- [ ] **QR hint copy points to a settings page that does not exist** — `P3` — `bug`
+- [x] **QR hint copy points to a settings page that does not exist** — `P3` — `bug` — fixed in b52768e
   - What WEB does: the pairing QR is generated in Settings → Security ("Link device", `components/settings/account-security-settings.tsx:894-1026`).
   - What RN does: hints say "Settings → Devices → Add phone" (`src/components/QrScanModal.tsx:66`) and "Settings → Devices" (`src/screens/LoginScreen.tsx:221`).
   - Fix hint: change the copy to Settings → Security → Link device.
@@ -49,59 +49,59 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
 
 ### Session
 
-- [ ] **Relative session URLs are not resolved** — `P2` — `bugfix-parity` (changelog 1.9.0 "Resolve relative session URLs without corrupting URI templates")
+- [x] **Relative session URLs are not resolved** — `P2` — `bugfix-parity` (changelog 1.9.0 "Resolve relative session URLs without corrupting URI templates") — fixed in 0b1c240 (unified-inbox.ts copy is with the mail-list agent)
   - What WEB does: `rewriteSessionUrl` prefixes the connected origin when `apiUrl`/`downloadUrl`/`uploadUrl`/`eventSourceUrl` have no scheme, and rewrites the origin of absolute ones without touching `{accountId}`/`{blobId}` templates (`lib/jmap/client.ts:1091-1110`).
   - What RN does: `rewriteSessionUrls` only rewrites absolute URLs; `extractOrigin` returns null for `/jmap/` so the relative value is passed through unchanged and `secureFetch('/jmap/')` fails (`src/api/jmap-client.ts:320-340`). Same in the unified inbox `rewriteApiUrl` (`src/api/unified-inbox.ts:55-60`).
   - Fix hint: when the URL has no `^https?://`, return `serverOrigin + (url.startsWith('/') ? url : '/' + url)`; keep the plain string splitting (the comment about the RN URL polyfill corrupting templates still applies).
 
-- [ ] **Redirected session fetch may lose the Authorization header** — `P3` — `partial`
+- [x] **Redirected session fetch may lose the Authorization header** — `P3` — `partial` — fixed in 0b1c240
   - What WEB does: `fetchSessionResponse` detects a redirected 200 with no accounts/username (Safari and some auth proxies drop `Authorization` on redirect) and refetches `response.url` with the header (`lib/jmap/client.ts:911-925`).
   - What RN does: `fetchSession` trusts the redirected response (`src/api/jmap-client.ts:363-383`); Stalwart 0.16.19 answers `/.well-known/jmap` with a 307 to `/jmap/session` (verified against stw-test19), and iOS `NSURLSession` can strip the header on redirect, which ends in `resolveAccountId` throwing "No account found in JMAP session".
   - Fix hint: mirror the WEB check (`response.redirected` and empty `accounts`/`username` → refetch `response.url` with the header).
 
-- [ ] **Transient token-endpoint failure evicts the account** — `P2` — `bugfix-parity` (changelog 1.7.6 "Keep the session when the auth server is briefly unreachable", 1.7.8 "End refresh loops on sign-out and back off failed retries")
+- [x] **Transient token-endpoint failure evicts the account** — `P2` — `bugfix-parity` (changelog 1.7.6 "Keep the session when the auth server is briefly unreachable", 1.7.8 "End refresh loops on sign-out and back off failed retries") — fixed in 2c0dbd1
   - What WEB does: only a definitive 400/401/403 from the token endpoint drops the refresh token (`app/api/auth/token/route.ts:143`); 5xx/network → 503 and the client keeps the account and retries with backoff (`stores/auth-store.ts:1209-1226`, `1792-1799`, `isTransientAuthError` at `:106`).
   - What RN does: `refreshOAuthAccessToken` throws `HandoffError` for any non-OK status or network error (`src/lib/oauth.ts:239-241`); `forceRefreshToken` turns every failure into `false` (`src/api/jmap-client.ts:211-221`) so an expired access token + a 5xx/offline token endpoint becomes `AuthenticationError`, and `restoreSession`/`switchAccount`/`retrySession` then delete the keychain entry (`src/stores/auth-store.ts:397-405, 505-512, 569-586`).
   - Fix hint: in `refreshOAuthAccessToken` throw a distinct transient error for network failures, 429 and 5xx; in `fetchSession`/`request` rethrow it as `NetworkError` instead of `AuthenticationError`; only 400/401/403 from the token endpoint are definitive.
 
-- [ ] **A revoked/expired refresh token never leads back to the login screen** — `P2` — `rn-only-bug`
+- [x] **A revoked/expired refresh token never leads back to the login screen** — `P2` — `rn-only-bug` — fixed in b52768e
   - What WEB does: a 401 from refresh marks the session expired, logs out and redirects to login with a "session expired" banner (`stores/auth-store.ts:1209-1214`, `markSessionExpired`, `login/page.tsx` `session_expired` banner).
   - What RN does: `request()` throws `AuthenticationError('Session expired')` (`src/api/jmap-client.ts:433`) but nothing outside `auth-store`/`login-errors` handles that class (grep over `src/`); the email store just records the message. `retrySession` returns early because `get().session` is still the stale object (`src/stores/auth-store.ts:554`). The user is stuck on a dead session until a relaunch.
   - Fix hint: give `JMAPClient` an `onAuthFailure` callback (set by auth-store) that runs the `AuthenticationError` branch of `retrySession` (clear creds for the active account, `isAuthenticated:false`, error "Session expired"); or clear `session` in the store on that error so `retrySession` can run.
 
-- [ ] **Logout does not revoke the OAuth refresh token** — `P3` — `partial`
+- [x] **Logout does not revoke the OAuth refresh token** — `P3` — `partial` — fixed in 4bebf70 (pairing bundles are deliberately not revoked)
   - What WEB does: `DELETE /api/auth/token` posts the refresh token to the IdP `revocation_endpoint` on logout/remove/logout-all (`app/api/auth/token/route.ts:181-254`).
   - What RN does: `logout`/`logoutAll` only delete the SecureStore entry (`src/stores/auth-store.ts:286-357`, `src/api/jmap-client.ts:350-361`); the refresh token stays valid server-side.
   - Fix hint: discover `revocation_endpoint` from `${serverUrl}/.well-known/oauth-authorization-server` and POST `token=<refresh>&token_type_hint=refresh_token&client_id=…` best-effort. Caveat: a QR-paired phone shares the desktop's refresh token (`app/api/auth/pair/create/route.ts:18-22`), so revoking it would also sign out the desktop — only revoke bundles that came from the browser handoff, or accept that behaviour deliberately.
 
-- [ ] **No request deadline on JMAP calls** — `P3` — `partial` (changelog 1.8.1 "Time out stalled JMAP requests so a send can't hang forever (#702)")
+- [x] **No request deadline on JMAP calls** — `P3` — `partial` (changelog 1.8.1 "Time out stalled JMAP requests so a send can't hang forever (#702)") — fixed in 0b1c240
   - What WEB does: `timedFetch` aborts when no response headers arrive within 30 s (300 s for blob transfers) and does not retry timed-out non-idempotent requests (`lib/jmap/client.ts:786-816`).
   - What RN does: `request()`/`fetchSession` use bare `secureFetch` with no timeout (`src/api/jmap-client.ts:363-383, 410-445`); only the native-cert path (30 s) and the discovery probe (2.5 s) have deadlines.
   - Fix hint: add an `AbortController` timeout in `request()` (and blob helpers), surfacing a distinct timeout error; do not auto-retry sends.
 
-- [ ] **SSE stream is opened without a token freshness check** — `P3` — `partial` (verify with the push audit)
+- [x] **SSE stream is opened without a token freshness check** — `P3` — `partial` (verify with the push audit) — fixed in edc26ce
   - What WEB does: SSE uses `authenticatedFetch`, so a 401 triggers the refresh path.
   - What RN does: `connectEventSource` reads `jmapClient.authHeader` once (`src/api/push.ts:137`) without `ensureFreshToken` (private, `src/api/jmap-client.ts:195`), so a nearly-expired access token can be used for a long-lived stream.
   - Fix hint: expose an `ensureFreshToken()`-then-header helper on the client and call it before connecting/reconnecting the stream.
 
 ### Multi-account
 
-- [ ] **A failed "add account" destroys the active session** — `P1` — `rn-only-bug`
+- [x] **A failed "add account" destroys the active session** — `P1` — `rn-only-bug` — fixed in b52768e
   - What WEB does: connects the new account with a fresh `JMAPClient` and only snapshots/clears the previous account after `connect()` succeeded (`stores/auth-store.ts:709-716`, `957-962`).
   - What RN does: `login()` and `completeOAuthHandoff` call `jmapClient.reset()` and reset contacts/calendar *before* connecting (`src/stores/auth-store.ts:110-114, 175-180`). On failure the store still says the previous account is active, but the singleton now holds the wrong credentials and no session; cancelling the modal (`App.tsx:470-481`) restores nothing, so every request throws "Not connected" until relaunch.
   - Fix hint: connect with a throwaway `new JMAPClient()` (or keep the current creds/session in locals) and only adopt the new connection into the singleton after success; on failure `await jmapClient.loadAccount(previousActive)`.
 
-- [ ] **A failed account switch leaves the client half-switched** — `P2` — `rn-only-bug`
+- [x] **A failed account switch leaves the client half-switched** — `P2` — `rn-only-bug` — fixed in b52768e
   - What WEB does: on restore failure the previous account's client is re-activated (`stores/auth-store.ts:1546-1565`); rate-limited/transient failures keep both accounts.
   - What RN does: `loadAccount(target)` overwrites `credentials` and nulls `session`/`_accountId` on failure (`src/api/jmap-client.ts:244-273`); `switchAccount` restores only the email-store view (`src/stores/auth-store.ts:393-411`) and leaves the store's `session` set, so `retrySession` short-circuits (`:554`) and the previous account is dead.
   - Fix hint: in the catch, `await jmapClient.loadAccount(previousActive)` (or restore the saved in-memory creds/session) before returning; alternatively set `session: null` so the network-recovery watcher re-establishes it.
 
-- [ ] **Account display name is never refreshed from the server (#900)** — `P2` — `missing` (changelog 1.9.0 "Refresh the account display name from the Stalwart principal on login, restore, and switch")
+- [x] **Account display name is never refreshed from the server (#900)** — `P2` — `missing` (changelog 1.9.0 "Refresh the account display name from the Stalwart principal on login, restore, and switch") — fixed in b52768e
   - What WEB does: seeds `displayName`/`email` from the primary identity at login, then `syncAccountDisplayName` reads `x:Account/get` (principal "Full name") on login, restore and switch and updates the registry (`stores/auth-store.ts:146-176, 741-751`; `lib/stalwart/principal.ts`).
   - What RN does: `addAccount({ displayName: username, email: username })` (`src/stores/auth-store.ts:123-131, 186-193`) and nothing ever updates it; the drawer header shows the raw username (`src/components/SidebarDrawer.tsx:297`). `fetchPrincipal` already exists (`src/api/account-security.ts:157-176`) but only feeds the security screen, and saving a new display name there does not touch the registry.
   - Fix hint: after each successful connect run `Identity/get` (name/email) and, when `urn:stalwart:jmap` is in the account's `accountCapabilities`, `fetchPrincipal()`; `accountStore.updateAccount(id, { displayName, email })`; also update on `updateDisplayName` success.
 
-- [ ] **OAuth account id/email derived from the raw JMAP username** — `P3` — `partial`
+- [x] **OAuth account id/email derived from the raw JMAP username** — `P3` — `partial` — fixed in b52768e (email refreshed from the primary identity; registry id unchanged)
   - What WEB does: prefers the primary identity email over `Session.username` for OAuth/SSO because OIDC `preferred_username` may not be an address (`stores/auth-store.ts:946-951, 1096`).
   - What RN does: `connectWithOAuth` uses `session.username || accessToken.slice(0, 8)` (`src/api/jmap-client.ts:135-136`), so the same mailbox logged in via password and via OAuth can produce two registry entries, and the drawer synthesizes `username@host`.
   - Fix hint: read `Identity/get` after connect and use the primary identity email for `email` (and ideally for the registry id).
@@ -143,7 +143,7 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
 
 ### Account security settings
 
-- [ ] **Account Security screen is dead against every Stalwart server (native issue #47)** — `P1` — `rn-only-bug`
+- [x] **Account Security screen is dead against every Stalwart server (native issue #47)** — `P1` — `rn-only-bug` — fixed in 032732c
   - What WEB does: probes `client.hasAccountCapability('urn:stalwart:jmap')`, i.e. the *account-level* capability map (`stores/account-security-store.ts:276-290`, `lib/jmap/client.ts:4173-4177`, `lib/stalwart/principal.ts:33`).
   - What RN does: `isStalwartSupported()` checks the *session-level* `session.capabilities` (`src/api/account-security.ts:51-54`). Verified against Stalwart 0.16.19 (stw-test19): `urn:stalwart:jmap` is present only under `accounts[<id>].accountCapabilities`, not in the top-level `capabilities`. So `AccountSecuritySettings` always renders "Account security management requires a Stalwart server" (`src/components/settings/AccountSecuritySettings.tsx:584, 622`). The same effect also shows that copy when the session is merely offline (`:583`).
   - Fix hint: `const acc = session.accounts?.[jmapClient.accountId]; return !!acc?.accountCapabilities?.[STALWART_CAPABILITY] || STALWART_CAPABILITY in (session.capabilities ?? {})`; show an "offline" notice instead of the Stalwart notice when `currentSession` is null.
@@ -158,7 +158,7 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
   - What RN does: read-only `EncryptionSection` showing the `@type` only (`AccountSecuritySettings.tsx:539-555`; `src/api/account-security.ts:150-155`).
   - Fix hint: port the four store methods to `src/api/account-security.ts` and add a key list + encryption picker.
 
-- [ ] **OAuth `state` is generated with `Math.random`** — `P3` — `rn-only-bug`
+- [x] **OAuth `state` is generated with `Math.random`** — `P3` — `rn-only-bug` — fixed in 2c0dbd1
   - What WEB does: `crypto.getRandomValues` for verifier/state (`lib/oauth/pkce.ts:11-27`).
   - What RN does: `randomState()` uses `Math.random` (`src/lib/oauth.ts:41-46`) although a CSPRNG helper with `getRandomValues`/`randomUUID` fallbacks already exists in `src/lib/totp.ts:16-46`. The state is the only guard against a forged `bulwarkmobile://` redirect delivering foreign credentials.
   - Fix hint: export `randomBytes` from `totp.ts` (or a shared `random.ts`) and use it here.
