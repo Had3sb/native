@@ -25,8 +25,17 @@ vi.mock('../../api/email', () => ({
   deleteEmail: vi.fn(),
   deleteEmails: vi.fn(),
   searchEmails: vi.fn(),
+  markAsSpam: vi.fn(),
+  undoSpam: vi.fn(),
   unprefixMailboxId: (id: string, accountId?: string) =>
     (accountId && id.startsWith(`${accountId}:`) ? id.slice(accountId.length + 1) : id),
+}));
+
+// locale-store pulls in expo-localization / react-native I18nManager; the
+// store only needs t() for toast labels.
+vi.mock('../locale-store', () => ({
+  t: (_key: string, fallback?: string) => fallback ?? _key,
+  useLocaleStore: { getState: () => ({ locale: 'en', t: (_k: string, f?: string) => f ?? _k }) },
 }));
 
 // The mutations now route through the offline outbox. In tests we want the
@@ -359,10 +368,9 @@ describe('email-store', () => {
       expect(mockGetEmailQueryChanges).not.toHaveBeenCalled();
       const [mailboxId, opts] = mockQueryEmails.mock.calls[0];
       expect(mailboxId).toBe('mb-1');
-      expect(opts.filter).toEqual({
-        operator: 'AND',
-        conditions: [{ inMailbox: 'mb-1' }, { notKeyword: '$seen' }],
-      });
+      // The folder scope travels as the first argument (queryEmails adds the
+      // inMailbox condition); the user filter is passed on its own.
+      expect(opts.filter).toEqual({ notKeyword: '$seen' });
       // Filter results must not leak into the base-view snapshot.
       expect(useEmailStore.getState().mailboxSnapshots['mb-1'].emails).toEqual([{ id: 'e9' }]);
     });
@@ -569,6 +577,208 @@ describe('email-store', () => {
       expect(result).toEqual(fullEmail);
     });
   });
+
+  // ── Search scope (#788), tag view, keeping the search across folders (#553)
+  describe('search scope', () => {
+    it('searches every folder by default when a text query is active (#788)', async () => {
+      useEmailStore.setState({ currentMailboxId: 'mb-1', searchQuery: 'invoice', filters: {} });
+      mockQueryEmails.mockResolvedValue({ ids: [], total: 0, queryState: 'q' });
+
+      await useEmailStore.getState().refreshEmails();
+
+      const [mailboxId, opts] = mockQueryEmails.mock.calls[0];
+      expect(mailboxId).toBeUndefined();
+      expect(opts.filter).toEqual({ text: 'invoice*' });
+    });
+
+    it('scopes a search to the open folder or a picked folder when asked', async () => {
+      useEmailStore.setState({
+        currentMailboxId: 'mb-1',
+        mailboxes: [
+          { id: 'mb-1', name: 'Inbox', isShared: false } as any,
+          { id: 'mb-2', name: 'Receipts', isShared: false } as any,
+        ],
+        searchQuery: 'invoice',
+        filters: { folder: 'current' },
+      });
+      mockQueryEmails.mockResolvedValue({ ids: [], total: 0, queryState: 'q' });
+      await useEmailStore.getState().refreshEmails();
+      expect(mockQueryEmails.mock.calls[0][0]).toBe('mb-1');
+
+      useEmailStore.setState({ filters: { folder: 'mb-2' } });
+      await useEmailStore.getState().refreshEmails();
+      expect(mockQueryEmails.mock.calls[1][0]).toBe('mb-2');
+    });
+
+    it('a tag view queries hasKeyword across all folders', async () => {
+      useEmailStore.setState({ currentMailboxId: 'mb-1', searchQuery: '', filters: { keyword: '$label:work' } });
+      mockQueryEmails.mockResolvedValue({ ids: [], total: 0, queryState: 'q' });
+
+      await useEmailStore.getState().refreshEmails();
+
+      const [mailboxId, opts] = mockQueryEmails.mock.calls[0];
+      expect(mailboxId).toBeUndefined();
+      expect(opts.filter).toEqual({ hasKeyword: '$label:work' });
+    });
+
+    it('keeps the search when switching folders (#553)', async () => {
+      useEmailStore.setState({
+        currentMailboxId: 'mb-1',
+        mailboxes: [
+          { id: 'mb-1', name: 'Inbox', isShared: false } as any,
+          { id: 'mb-2', name: 'Receipts', isShared: false } as any,
+        ],
+        searchQuery: 'invoice',
+        filters: { folder: 'current' },
+        emails: [{ id: 'hit' } as any],
+      });
+      mockQueryEmails.mockResolvedValue({ ids: [], total: 0, queryState: 'q' });
+
+      await useEmailStore.getState().selectMailbox('mb-2');
+
+      expect(useEmailStore.getState().searchQuery).toBe('invoice');
+      expect(mockQueryEmails.mock.calls[0][0]).toBe('mb-2');
+      expect(mockQueryEmails.mock.calls[0][1].filter).toEqual({ text: 'invoice*' });
+    });
+  });
+
+  describe('list hygiene', () => {
+    it('load-more drops ids that are already on screen', async () => {
+      useEmailStore.setState({
+        currentMailboxId: 'mb-1',
+        emails: [{ id: 'e1' } as any, { id: 'e2' } as any],
+        totalEmails: 10,
+      });
+      mockQueryEmails.mockResolvedValue({ ids: ['e2', 'e3'], total: 10 });
+      mockGetEmails.mockResolvedValue([{ id: 'e3' }]);
+
+      await useEmailStore.getState().loadMoreEmails();
+
+      expect(mockGetEmails).toHaveBeenCalledWith(['e3'], undefined);
+      expect(useEmailStore.getState().emails.map((e) => e.id)).toEqual(['e1', 'e2', 'e3']);
+    });
+
+    it('drains Email/changes while hasMoreChanges is set', async () => {
+      const mockGetEmailChanges = emailApi.getEmailChanges as ReturnType<typeof vi.fn>;
+      useEmailStore.setState({
+        currentMailboxId: 'mb-1',
+        emails: [{ id: 'e1', keywords: {} } as any],
+        totalEmails: 1,
+        queryState: 'q-1',
+        emailStates: { '@primary': 'em-1' },
+        mailboxSnapshots: { 'mb-1': { emails: [{ id: 'e1', keywords: {} } as any], total: 1, queryState: 'q-1' } },
+      });
+      mockGetEmailQueryChanges.mockResolvedValue({
+        oldQueryState: 'q-1', newQueryState: 'q-2', total: 1, removed: [], added: [],
+      });
+      mockGetEmailChanges
+        .mockResolvedValueOnce({ oldState: 'em-1', newState: 'em-2', hasMoreChanges: true, created: [], updated: ['e1'], destroyed: [] })
+        .mockResolvedValueOnce({ oldState: 'em-2', newState: 'em-3', hasMoreChanges: false, created: [], updated: [], destroyed: [] });
+      mockGetEmailsWithState.mockResolvedValue({ list: [{ id: 'e1', keywords: { $seen: true } }], state: 'em-3' });
+
+      await useEmailStore.getState().refreshEmails();
+
+      expect(mockGetEmailChanges).toHaveBeenCalledTimes(2);
+      expect(mockGetEmailChanges.mock.calls[1][0]).toBe('em-2');
+      expect(useEmailStore.getState().emailStates['@primary']).toBe('em-3');
+      expect(useEmailStore.getState().emails[0].keywords).toEqual({ $seen: true });
+    });
+
+    it('keeps a just-read row in an open Unread view until it is re-opened', async () => {
+      useEmailStore.setState({
+        currentMailboxId: 'mb-1',
+        filters: { isUnread: true },
+        emails: [{ id: 'e1', keywords: {} } as any, { id: 'e2', keywords: {} } as any],
+        totalEmails: 2,
+      });
+      await useEmailStore.getState().markRead('e1');
+      expect(useEmailStore.getState().retainedIds).toEqual(['e1']);
+
+      mockQueryEmails.mockResolvedValue({ ids: ['e2'], total: 1, queryState: 'q' });
+      mockGetEmailsWithState.mockResolvedValue({ list: [{ id: 'e2', keywords: {} }], state: 's' });
+      await useEmailStore.getState().refreshEmails();
+      expect(useEmailStore.getState().emails.map((e) => e.id)).toEqual(['e1', 'e2']);
+
+      // Re-opening the view (new filters) forgets the retained rows.
+      useEmailStore.getState().setFilters({ isUnread: true });
+      expect(useEmailStore.getState().retainedIds).toEqual([]);
+    });
+
+    it('coalesces overlapping refreshes into one run plus one re-run', async () => {
+      useEmailStore.setState({ currentMailboxId: 'mb-1' });
+      mockGetEmailQueryChanges.mockResolvedValue(null);
+      let resolveQuery: (v: unknown) => void = () => {};
+      mockQueryEmails.mockImplementationOnce(() => new Promise((r) => { resolveQuery = r; }));
+      mockQueryEmails.mockResolvedValue({ ids: [], total: 0, queryState: 'q' });
+
+      const first = useEmailStore.getState().refreshEmails();
+      const second = useEmailStore.getState().refreshEmails();
+      const third = useEmailStore.getState().refreshEmails();
+      expect(second).toBe(first);
+      expect(third).toBe(first);
+      resolveQuery({ ids: [], total: 0, queryState: 'q' });
+      await first;
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockQueryEmails).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('pin and spam keywords', () => {
+    it('togglePin writes $pinned, not $important', async () => {
+      useEmailStore.setState({ emails: [{ id: 'e1', keywords: {} } as any] });
+      await useEmailStore.getState().togglePin('e1', true);
+      expect(mockSetKeywords).toHaveBeenCalledWith('e1', { $pinned: true }, undefined);
+      await useEmailStore.getState().togglePin('e1', false);
+      expect(mockSetKeywords).toHaveBeenLastCalledWith('e1', {}, undefined);
+    });
+
+    const RIGHTS = {} as any;
+    const inbox = { id: 'mb-1', name: 'Inbox', role: 'inbox', myRights: RIGHTS, isShared: false } as any;
+    const junk = { id: 'mb-junk', name: 'Junk', role: 'junk', myRights: RIGHTS, isShared: false } as any;
+
+    it('markSpam files into Junk flipping $junk/$notjunk and offers an undo that restores keywords', async () => {
+      const mockMarkAsSpam = emailApi.markAsSpam as ReturnType<typeof vi.fn>;
+      const mockRestore = emailApi.restoreEmailMailboxes as ReturnType<typeof vi.fn>;
+      const mockSetKeywordsForEmails = emailApi.setKeywordsForEmails as ReturnType<typeof vi.fn>;
+      useSettingsStore.getState().updateSetting('deleteAction', 'trash-and-read');
+      useEmailStore.setState({
+        mailboxes: [inbox, junk],
+        currentMailboxId: 'mb-1',
+        emails: [{ id: 'e1', keywords: { $notjunk: true }, mailboxIds: { 'mb-1': true } } as any],
+      });
+
+      await useEmailStore.getState().markSpam(['e1']);
+
+      expect(mockMarkAsSpam).toHaveBeenCalledWith(['e1'], 'mb-junk', undefined, { markRead: true });
+      expect(useEmailStore.getState().emails).toHaveLength(0);
+      const undo = useEmailStore.getState().pendingUndo!;
+      expect(undo.kind).toBe('spam');
+      expect(undo.items[0].originalKeywords).toEqual({ $notjunk: true });
+
+      await useEmailStore.getState().undoLast();
+      expect(mockRestore).toHaveBeenCalledWith([{ id: 'e1', mailboxIds: { 'mb-1': true } }], undefined);
+      expect(mockSetKeywordsForEmails).toHaveBeenCalledWith([{ id: 'e1', keywords: { $notjunk: true } }], undefined);
+      expect(useEmailStore.getState().emails.map((e) => e.id)).toEqual(['e1']);
+      useSettingsStore.getState().updateSetting('deleteAction', 'trash');
+    });
+
+    it('unmarkSpam moves back to Inbox with $notjunk', async () => {
+      const mockUndoSpam = emailApi.undoSpam as ReturnType<typeof vi.fn>;
+      useEmailStore.setState({
+        mailboxes: [inbox, junk],
+        currentMailboxId: 'mb-junk',
+        emails: [{ id: 'e1', keywords: { $junk: true }, mailboxIds: { 'mb-junk': true } } as any],
+      });
+
+      await useEmailStore.getState().unmarkSpam(['e1']);
+
+      expect(mockUndoSpam).toHaveBeenCalledWith(['e1'], 'mb-1', undefined);
+      expect(useEmailStore.getState().emails).toHaveLength(0);
+      expect(useEmailStore.getState().pendingUndo?.items[0].originalKeywords).toEqual({ $junk: true });
+    });
+  });
+
   // ── Shared (Stalwart group account) mailboxes ────────────────────────────
   describe('shared mailboxes', () => {
     const RIGHTS = {
@@ -621,7 +831,6 @@ describe('email-store', () => {
 
       expect(mockQueryEmails).toHaveBeenCalledWith('s-inbox', expect.objectContaining({
         accountId: 'grp-1',
-        filter: { inMailbox: 's-inbox' },
       }));
       expect(mockGetEmailsWithState).toHaveBeenCalledWith(['e1'], 'grp-1');
       // Email state tokens are per-account, so the shared account gets its own.

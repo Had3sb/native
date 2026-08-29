@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Identity } from '../api/types';
 import { getIdentities as fetchIdentities } from '../api/identity';
+import type { SortLevel, MessageListOrderScope } from '../lib/message-list-order';
 
 export type ExternalContentPolicy = 'allow' | 'block' | 'ask';
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -179,6 +180,18 @@ interface PersistedSettings {
   // (the JMAP Email/query sorts by receivedAt).
   mailSortAscending: boolean;
   disableThreading: boolean;
+  // Configurable list order (#718): presets / up to 3 levels mapped onto the
+  // JMAP sort, applied to the Inbox only or to every folder. Same shape as
+  // the webmail so a settings blob round-trips.
+  messageListOrder: SortLevel[];
+  messageListOrderScope: MessageListOrderScope;
+  // Load sender favicons inside Junk (off by default, webmail 1.5.1).
+  showAvatarsInJunk: boolean;
+  // Show the "/ total" part of the folder counts in the drawer (#498).
+  showFolderTotalCount: boolean;
+  // Unified views span every logged-in account instead of just the active
+  // one (own + its shared/group folders). Off by default like the webmail.
+  unifiedCrossAccount: boolean;
   mailAttachmentAction: MailAttachmentAction;
   attachmentPosition: AttachmentPosition;
   // Reader body: font for text/plain bodies (#830), gutter around the body,
@@ -336,6 +349,11 @@ const DEFAULT_PERSISTED: PersistedSettings = {
   emailsPerPage: 25,
   mailSortAscending: false,
   disableThreading: false,
+  messageListOrder: [],
+  messageListOrderScope: 'inbox',
+  showAvatarsInJunk: false,
+  showFolderTotalCount: true,
+  unifiedCrossAccount: false,
   mailAttachmentAction: 'preview',
   attachmentPosition: 'beside-sender',
   plainTextFont: 'sans',
@@ -498,6 +516,9 @@ const VALIDATORS: Partial<Record<keyof PersistedSettings, (v: unknown) => boolea
   dateFormat: oneOf(['smart', 'relative', 'full']),
   timeFormat: oneOf(['12h', '24h']),
   theme: oneOf(['light', 'dark', 'system']),
+  messageListOrderScope: oneOf(['inbox', 'all']),
+  // Levels are sanitized by the consumer (lib/message-list-order sanitizeSortLevels).
+  messageListOrder: (v) => Array.isArray(v),
   fontSize: oneOf(['small', 'medium', 'large']),
   density: oneOf(['extra-compact', 'compact', 'regular', 'comfortable']),
   attachmentReminderKeywords: stringArray,

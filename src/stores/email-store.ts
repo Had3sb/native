@@ -25,14 +25,49 @@ import {
   deleteEmails as apiDeleteEmails,
   restoreEmailMailboxes,
   searchEmails as apiSearchEmails,
+  markAsSpam as apiMarkAsSpam,
+  undoSpam as apiUndoSpam,
   unprefixMailboxId,
 } from '../api/email';
-import { mailboxesForSiblingOf } from '../lib/mailbox-tree';
+import { mailboxesForSiblingOf, findJunkMailbox } from '../lib/mailbox-tree';
 import { toWildcardQuery } from '../lib/search-utils';
 import { generateAccountId } from '../lib/account-utils';
+import { t } from './locale-store';
 import { useSettingsStore } from './settings-store';
 import { useOfflineCacheStore } from './offline-cache-store';
 import { useOutboxStore, applyOrQueue, applyOrQueueBatch, type OutboxOp } from './outbox-store';
+
+// ── Refresh coalescing ─────────────────────────────────────────────────
+// Push events, mount effects and post-action follow-ups all call
+// fetchMailboxes()/refreshEmails(); overlapping runs only multiply requests
+// (and trip maxConcurrentRequests / 429 on Stalwart). Share the in-flight run
+// per key and queue at most one re-run, like the webmail's `coalesceRefresh`
+// (#780).
+const inflightRefresh = new Map<string, Promise<void>>();
+const queuedRefresh = new Set<string>();
+
+function coalesceRefresh(key: string, run: () => Promise<void>): Promise<void> {
+  const current = inflightRefresh.get(key);
+  if (current) {
+    queuedRefresh.add(key);
+    return current;
+  }
+  const p = (async () => {
+    try {
+      await run();
+    } finally {
+      inflightRefresh.delete(key);
+      if (queuedRefresh.delete(key)) void coalesceRefresh(key, run);
+    }
+  })();
+  inflightRefresh.set(key, p);
+  return p;
+}
+
+// Accounts that already got their one automatic mailbox re-fetch after an
+// empty/failed first load (Stalwart provisions folders lazily at first login,
+// #217). Keyed by the registry account id.
+const provisionRetried = new Set<string>();
 
 // Keep the offline body cache consistent with an optimistic/queued mutation so
 // re-opening a message while offline shows the change. Fire-and-forget.
@@ -137,15 +172,34 @@ function jmapClientServesActiveAccount(activeAccountId: string | null): boolean 
   return generateAccountId(username, serverUrl) === activeAccountId;
 }
 
+/** Folder scope of a search/filter: every folder, the open one, or a store mailbox id. */
+export type SearchFolderScope = 'all' | 'current' | (string & {});
+
 export interface EmailFilters {
   from?: string;
   to?: string;
   subject?: string;
+  body?: string;
   dateAfter?: string;  // YYYY-MM-DD
   dateBefore?: string; // YYYY-MM-DD
   hasAttachment?: boolean; // undefined = unset, true = with, false = without
   isStarred?: boolean;
   isUnread?: boolean;
+  /**
+   * Folder scope. Unset means "all folders" while a text query is active
+   * (#788) and "the open folder" otherwise; explicit values come from the
+   * folder chip in the filter panel.
+   */
+  folder?: SearchFolderScope;
+  /** Tag view (#175): messages carrying this JMAP keyword, across all folders. */
+  keyword?: string;
+}
+
+/** The folder scope a query runs in, resolving the unset default. */
+export function effectiveFolderScope(searchQuery: string, filters: EmailFilters): SearchFolderScope {
+  if (filters.keyword) return 'all';
+  if (filters.folder) return filters.folder;
+  return searchQuery.trim() ? 'all' : 'current';
 }
 
 // Snapshot of an action that can still be reversed via the undo snackbar.
@@ -159,8 +213,16 @@ export interface UndoEntry {
   createdAt: number;
   /** JMAP account the messages live under; unset for the user's own mail. */
   accountId?: string;
-  /** Each item is one email's pre-action mailboxIds, used to restore it. */
-  items: Array<{ email: Email; originalMailboxIds: Record<string, boolean> }>;
+  /**
+   * Each item is one email's pre-action mailboxIds, used to restore it.
+   * `originalKeywords` is set when the action also changed keywords
+   * (spam / not spam flip `$junk`/`$notjunk`) so undo puts them back too.
+   */
+  items: Array<{
+    email: Email;
+    originalMailboxIds: Record<string, boolean>;
+    originalKeywords?: Record<string, boolean>;
+  }>;
 }
 
 // Cached emails for one mailbox (the base view: no search query, no filters).
@@ -210,6 +272,13 @@ export interface EmailState {
   searchQuery: string;
   filters: EmailFilters;
   pendingUndo: UndoEntry | null;
+  /**
+   * Rows the user just read/unstarred/untagged while an Unread/Starred/tag
+   * view was open. They stay in the list until the view is re-opened even
+   * though the server query no longer matches them (webmail 1.9.0
+   * `retainedInViewIds`).
+   */
+  retainedIds: string[];
 
   // ── Actions ────────────────────────────────────────────────────
   setActiveAccount: (accountId: string | null) => void;
@@ -232,6 +301,14 @@ export interface EmailState {
   moveToMailbox: (emailId: string, fromMailboxId: string, toMailboxId: string) => Promise<void>;
   archiveEmail: (emailId: string) => Promise<void>;
   deleteEmail: (emailId: string, trashMailboxId: string, currentMailboxId: string) => Promise<void>;
+  /**
+   * File messages into the current account's Junk and flip `$junk`/`$notjunk`
+   * (#850); honours the "trash-and-read" delete action by also marking read.
+   * Works for one id or a selection; offers undo.
+   */
+  markSpam: (emailIds: string[]) => Promise<void>;
+  /** Inverse of markSpam: back to Inbox with `$notjunk`. */
+  unmarkSpam: (emailIds: string[]) => Promise<void>;
   // ── Batch (multi-select) actions ──────────────────────────────
   archiveEmailsBatch: (emailIds: string[]) => Promise<void>;
   moveEmailsToMailbox: (emailIds: string[], toMailboxId: string) => Promise<void>;
@@ -243,23 +320,29 @@ export interface EmailState {
   setSearchQuery: (query: string) => void;
   setFilters: (filters: EmailFilters) => void;
   setSortAscending: (ascending: boolean) => void;
+  /**
+   * Drop every cached queryState/snapshot window (they were built under the
+   * previous order) and re-query. Call after any change to the list order.
+   */
+  invalidateListOrder: () => void;
   clearSearchAndFilters: () => void;
   reset: () => void;
 }
 
 function buildJmapFilter(
-  mailboxId: string,
   searchQuery: string,
   filters: EmailFilters,
-): Record<string, unknown> {
-  const conditions: Record<string, unknown>[] = [{ inMailbox: mailboxId }];
+): Record<string, unknown> | undefined {
+  const conditions: Record<string, unknown>[] = [];
 
   const trimmed = searchQuery.trim();
   if (trimmed) conditions.push({ text: toWildcardQuery(trimmed) });
 
+  if (filters.keyword) conditions.push({ hasKeyword: filters.keyword });
   if (filters.from) conditions.push({ from: filters.from });
   if (filters.to) conditions.push({ to: filters.to });
   if (filters.subject) conditions.push({ subject: filters.subject });
+  if (filters.body) conditions.push({ body: filters.body });
 
   if (filters.dateAfter) {
     const d = new Date(filters.dateAfter);
@@ -282,8 +365,30 @@ function buildJmapFilter(
   if (filters.isStarred === true) conditions.push({ hasKeyword: '$flagged' });
   else if (filters.isStarred === false) conditions.push({ notKeyword: '$flagged' });
 
+  if (conditions.length === 0) return undefined;
   if (conditions.length === 1) return conditions[0];
   return { operator: 'AND', conditions };
+}
+
+// The raw mailbox id an Email/query is scoped to: the open folder, an
+// explicitly picked folder, or undefined for "all folders" (#788).
+function queryScope(state: EmailState, current: MailboxRef): { mailboxId: string | undefined; accountId?: string } {
+  const scope = effectiveFolderScope(state.searchQuery, state.filters);
+  if (scope === 'current') return { mailboxId: current.id, accountId: current.accountId };
+  if (scope === 'all') return { mailboxId: undefined, accountId: current.accountId };
+  const ref = refFor(state.mailboxes, scope);
+  return { mailboxId: ref.id, accountId: ref.accountId };
+}
+
+// Filter keys that don't narrow the query on their own: a folder scope of
+// "current" is the default and must not count as an active filter.
+function activeFilterKeys(filters: EmailFilters): string[] {
+  return Object.keys(filters).filter((k) => {
+    const v = (filters as Record<string, unknown>)[k];
+    if (v === undefined || v === '') return false;
+    if (k === 'folder' && v === 'current') return false;
+    return true;
+  });
 }
 
 // True when the user has no search/filters active. Only in this case do we
@@ -291,7 +396,27 @@ function buildJmapFilter(
 // filter is in play, the queryState belongs to a different query and the
 // cached list no longer represents what's on screen.
 function isBaseView(searchQuery: string, filters: EmailFilters): boolean {
-  return !searchQuery.trim() && Object.keys(filters).length === 0;
+  return !searchQuery.trim() && activeFilterKeys(filters).length === 0;
+}
+
+// The Email/query sort for the current settings. Extended by the message-list
+// order presets; today it's the receivedAt direction only.
+function currentSort(): Array<{ property: string; isAscending: boolean; keyword?: string }> {
+  return [{ property: 'receivedAt', isAscending: useSettingsStore.getState().mailSortAscending }];
+}
+
+// Splice rows the user just read/unstarred back into a freshly re-queried
+// Unread/Starred view at their previous position (webmail `mergeRetainedRows`).
+function mergeRetainedRows(previous: Email[], fresh: Email[], retainedIds: string[]): Email[] {
+  if (retainedIds.length === 0) return fresh;
+  const freshIds = new Set(fresh.map((e) => e.id));
+  const retained = new Set(retainedIds);
+  const out = [...fresh];
+  previous.forEach((e, index) => {
+    if (!retained.has(e.id) || freshIds.has(e.id)) return;
+    out.splice(Math.min(index, out.length), 0, e);
+  });
+  return out;
 }
 
 // View fields to apply when returning from a search/filter to the base view:
@@ -423,6 +548,7 @@ export const useEmailStore = create<EmailState>()(
   searchQuery: '',
   filters: {},
   pendingUndo: null,
+  retainedIds: [],
 
   // Swap which account's data is currently visible. The previous account's
   // view is tucked into accountSnapshots so a return-trip can restore it
@@ -449,6 +575,7 @@ export const useEmailStore = create<EmailState>()(
       searchQuery: '',
       filters: {},
       pendingUndo: null,
+      retainedIds: [],
       error: null,
       loading: false,
     });
@@ -513,7 +640,7 @@ export const useEmailStore = create<EmailState>()(
     void useOutboxStore.getState().setAccount(null);
   },
 
-  fetchMailboxes: async () => {
+  fetchMailboxes: () => {
     // Skip silently when there's no live session, or when jmapClient is
     // mid-transition to a different account (see jmapClientServesActiveAccount).
     // Screens fire this from mount-time useEffects, and on cold start
@@ -523,94 +650,8 @@ export const useEmailStore = create<EmailState>()(
     // switch — return the *previous* account's mailboxes and stamp them
     // into the new account's snapshot.
     const activeAccountId = get().activeAccountId;
-    if (!jmapClientServesActiveAccount(activeAccountId)) return;
-
-    const prevState = get().mailboxState;
-    // Swap in a freshly-synced set of own folders while leaving the shared
-    // (group account) ones alone, and vice versa — the two are fetched by
-    // separate calls and must not clobber each other.
-    const replaceOwn = (own: Mailbox[], mailboxState?: string) => {
-      set({
-        mailboxes: [...own, ...get().mailboxes.filter((m) => m.isShared)],
-        ...(mailboxState !== undefined ? { mailboxState } : {}),
-      });
-    };
-
-    try {
-      let drainAgain = false;
-
-      // Incremental path: ask for just what changed since last time. Fall
-      // through to a full refetch when the server can't compute the diff or
-      // we have no previous state to compare against.
-      let syncedOwn = false;
-      if (prevState) {
-        const changes = await getMailboxChanges(prevState);
-        // Bail if the user switched accounts during the await — anything we
-        // set() now would land in the wrong account's bucket.
-        if (get().activeAccountId !== activeAccountId) return;
-        if (changes) {
-          syncedOwn = true;
-          // No changes at all — keep the cached list, just bump the state.
-          if (
-            changes.created.length === 0 &&
-            changes.updated.length === 0 &&
-            changes.destroyed.length === 0
-          ) {
-            set({ mailboxState: changes.newState });
-          } else {
-            const toFetch = [...changes.created, ...changes.updated];
-            const fetched = toFetch.length > 0
-              ? (await getMailboxesByIds(toFetch)).list
-              : [];
-            if (get().activeAccountId !== activeAccountId) return;
-            const destroyed = new Set(changes.destroyed);
-            const byId = new Map<string, Mailbox>();
-            for (const m of get().mailboxes) {
-              if (!m.isShared) byId.set(m.id, m);
-            }
-            for (const m of fetched) byId.set(m.id, m);
-            for (const id of destroyed) byId.delete(id);
-            replaceOwn(
-              Array.from(byId.values()),
-              changes.hasMoreChanges ? prevState : changes.newState,
-            );
-            // hasMoreChanges = there are still pending changes past the
-            // server's response cap. Run the same path again to drain.
-            drainAgain = changes.hasMoreChanges;
-          }
-        }
-        // changes === null → cannotCalculateChanges. Fall through to full.
-      }
-
-      if (!syncedOwn) {
-        const { list, state } = await getMailboxesWithState();
-        if (get().activeAccountId !== activeAccountId) return;
-        replaceOwn(list, state);
-      }
-
-      // Shared/group accounts have their own Mailbox state tokens, and there
-      // are only ever a handful of them, so they're re-read in full rather
-      // than diffed. Failing to reach one must not lose the own folders we
-      // just synced, hence the separate try.
-      try {
-        const shared = await getSharedMailboxes();
-        if (get().activeAccountId !== activeAccountId) return;
-        set({ mailboxes: [...get().mailboxes.filter((m) => !m.isShared), ...shared] });
-      } catch (err) {
-        console.warn('[email-store] shared mailbox fetch failed:', err);
-      }
-
-      if (drainAgain) void get().fetchMailboxes();
-    } catch (err) {
-      console.warn('[email-store] fetchMailboxes failed:', err);
-      if (get().activeAccountId !== activeAccountId) return;
-      // Don't overwrite the cached list on a transient failure — the user
-      // can still navigate folders. Only surface the error when we have no
-      // mailboxes at all to show.
-      if (get().mailboxes.length === 0) {
-        set({ error: err instanceof Error ? err.message : 'Failed to load mailboxes' });
-      }
-    }
+    if (!jmapClientServesActiveAccount(activeAccountId)) return Promise.resolve();
+    return coalesceRefresh(`${activeAccountId}:mailboxes`, () => fetchMailboxesImpl(activeAccountId!));
   },
 
   selectMailbox: async (mailboxId) => {
@@ -620,11 +661,8 @@ export const useEmailStore = create<EmailState>()(
     // a filter or search makes the visible list unrepresentative of the
     // cached "no-filter" snapshot.
     let mailboxSnapshots = state.mailboxSnapshots;
-    if (
-      state.currentMailboxId &&
-      state.currentMailboxId !== mailboxId &&
-      isBaseView(state.searchQuery, state.filters)
-    ) {
+    const baseView = isBaseView(state.searchQuery, state.filters);
+    if (state.currentMailboxId && state.currentMailboxId !== mailboxId && baseView) {
       mailboxSnapshots = {
         ...mailboxSnapshots,
         [state.currentMailboxId]: {
@@ -640,11 +678,13 @@ export const useEmailStore = create<EmailState>()(
     // snapshot, fall through to the offline cache as a second-best seed;
     // if that's also empty we render the empty-state, not a spinner over
     // a blank list — better than the previous flash to "Loading…".
-    let seededEmails: Email[] = incoming?.emails ?? [];
-    let seededTotal = incoming?.total ?? 0;
-    let seededQueryState = incoming?.queryState;
+    // With a search/filter active the search is kept and re-run in the new
+    // folder (#553), so the current results stay on screen until it lands.
+    let seededEmails: Email[] = baseView ? incoming?.emails ?? [] : state.emails;
+    let seededTotal = baseView ? incoming?.total ?? 0 : state.totalEmails;
+    const seededQueryState = baseView ? incoming?.queryState : undefined;
 
-    if (seededEmails.length === 0) {
+    if (baseView && seededEmails.length === 0) {
       const cacheStore = useOfflineCacheStore.getState();
       if (!cacheStore.hydrated) await cacheStore.hydrate();
       if (cacheStore.totalCount() > 0) {
@@ -673,9 +713,8 @@ export const useEmailStore = create<EmailState>()(
       mailboxSnapshots,
       loading: true,
       error: null,
-      searchQuery: '',
-      filters: {},
       pendingUndo: null,
+      retainedIds: [],
     });
 
     // Stop here if there's no live session OR jmapClient is mid-transition
@@ -691,29 +730,31 @@ export const useEmailStore = create<EmailState>()(
   },
 
   loadMoreEmails: async () => {
-    const { currentMailboxId, emails, totalEmails, loading, searchQuery, filters, activeAccountId } = get();
+    const state = get();
+    const { currentMailboxId, emails, totalEmails, loading, searchQuery, filters, activeAccountId } = state;
     if (!currentMailboxId || loading || emails.length >= totalEmails) return;
     if (!jmapClientServesActiveAccount(activeAccountId)) return;
 
     set({ loading: true });
     try {
-      const ref = refFor(get().mailboxes, currentMailboxId);
-      const filter = buildJmapFilter(ref.id, searchQuery, filters);
+      const scope = queryScope(state, refFor(state.mailboxes, currentMailboxId));
+      const filter = buildJmapFilter(searchQuery, filters);
       const limit = useSettingsStore.getState().emailsPerPage;
-      const { ids } = await queryEmails(ref.id, {
+      const { ids } = await queryEmails(scope.mailboxId, {
         position: emails.length,
         limit,
-        sort: [{
-          property: 'receivedAt',
-          isAscending: useSettingsStore.getState().mailSortAscending,
-        }],
+        sort: currentSort(),
         filter,
-        accountId: ref.accountId,
+        accountId: scope.accountId,
       });
       if (get().activeAccountId !== activeAccountId || get().currentMailboxId !== currentMailboxId) return;
-      const newEmails = ids.length > 0 ? await fetchEmailsChunked(ids, ref.accountId) : [];
+      // A message that arrived between pages shifts positions and would come
+      // back a second time — drop ids we already show (duplicate keys).
+      const existingIds = new Set(get().emails.map((e) => e.id));
+      const fresh = ids.filter((id) => !existingIds.has(id));
+      const newEmails = fresh.length > 0 ? await fetchEmailsChunked(fresh, scope.accountId) : [];
       if (get().activeAccountId !== activeAccountId || get().currentMailboxId !== currentMailboxId) return;
-      const merged = [...emails, ...newEmails];
+      const merged = [...get().emails, ...newEmails];
       const updates: Partial<EmailState> = { emails: merged, loading: false };
       if (isBaseView(searchQuery, filters)) {
         updates.mailboxSnapshots = {
@@ -767,215 +808,11 @@ export const useEmailStore = create<EmailState>()(
     return { imported, failed };
   },
 
-  refreshEmails: async () => {
-    const state = get();
-    const { currentMailboxId, searchQuery, filters, emails: existing, activeAccountId } = state;
-    if (!currentMailboxId) return;
-    if (!jmapClientServesActiveAccount(activeAccountId)) return;
-    set({ loading: true, error: null });
-
-    // A shared (group account) folder is queried against its owning account
-    // with its unprefixed id; own folders resolve to no override at all.
-    const ref = refFor(state.mailboxes, currentMailboxId);
-    const emailState = state.emailStates[stateKey(ref.accountId)];
-    const filter = buildJmapFilter(ref.id, searchQuery, filters);
-    const { emailsPerPage: limit, mailSortAscending: sortAscending } =
-      useSettingsStore.getState();
-    const sort = [{ property: 'receivedAt', isAscending: sortAscending }];
-    const baseView = isBaseView(searchQuery, filters);
-
-    // A response that lands after the user switched account/mailbox or
-    // changed search/filters/sort must not overwrite the newer view.
-    const viewChanged = () =>
-      get().activeAccountId !== activeAccountId ||
-      get().currentMailboxId !== currentMailboxId ||
-      get().searchQuery !== searchQuery ||
-      get().filters !== filters ||
-      useSettingsStore.getState().mailSortAscending !== sortAscending;
-
-    // The incremental path diffs against the *base-view* list, which lives in
-    // the per-mailbox snapshot — NOT `emails`, which may still hold search or
-    // filter results (right after clearing a search, or after a cold start
-    // that rehydrated a persisted search-result list). Diffing against a
-    // non-base list lets Email/queryChanges "confirm" the search results as
-    // the whole mailbox and bakes them into the snapshot (issue #10). The
-    // snapshot is only trusted when its window is plausibly complete —
-    // anything shorter can't be patched incrementally and needs the full
-    // re-query below to rebuild it.
-    const snap = state.mailboxSnapshots[currentMailboxId];
-
-    try {
-      // Incremental sync path: requires the base unfiltered view AND a known
-      // queryState (so Email/queryChanges has something to diff against).
-      // Anything else — search, filter active, first-ever load — falls
-      // through to a full re-query.
-      if (
-        baseView &&
-        snap?.queryState &&
-        snap.emails.length >= Math.min(limit, snap.total)
-      ) {
-        const baseEmails = snap.emails;
-        const queryChanges = await getEmailQueryChanges(ref.id, snap.queryState, {
-          sort,
-          filter: undefined,
-          accountId: ref.accountId,
-        });
-        if (queryChanges) {
-          // What's in the visible window now: drop removed ids, then apply
-          // added (id, index) entries. Newly added ids need bodies fetched.
-          const removed = new Set(queryChanges.removed);
-          const addedIds = queryChanges.added.map((a) => a.id);
-
-          // Email/changes catches updates to messages already in our list
-          // (e.g. another device toggled $seen) that queryChanges wouldn't
-          // report. Skipped when we have no emailState yet — first refresh
-          // after a cold start primes it from the Email/get below.
-          let updatedIds: string[] = [];
-          let destroyedExtra: string[] = [];
-          let nextEmailState: string | undefined = emailState;
-          if (emailState) {
-            const ec = await getEmailChanges(emailState, undefined, ref.accountId);
-            if (ec) {
-              updatedIds = ec.updated;
-              destroyedExtra = ec.destroyed;
-              nextEmailState = ec.newState;
-            } else {
-              // cannotCalculateChanges → forget the state and rely on the
-              // next full re-sync to repopulate it.
-              nextEmailState = undefined;
-            }
-          }
-
-          // Fetch only what we don't already have. `addedIds` are new to the
-          // window; `updatedIds` may already be in the base list but their
-          // keywords/mailboxIds need refreshing.
-          const existingById = new Map(baseEmails.map((e) => [e.id, e]));
-          const idsToFetch = [
-            ...addedIds.filter((id) => !existingById.has(id)),
-            ...updatedIds.filter((id) => existingById.has(id)),
-          ];
-          let fetchState: string | undefined;
-          let fetched: Email[] = [];
-          if (idsToFetch.length > 0) {
-            const res = await getEmailsWithState(idsToFetch, ref.accountId);
-            fetched = res.list;
-            fetchState = res.state;
-          }
-
-          // Rebuild the visible window order: start with existing emails,
-          // drop removed/destroyed, then splice added at their indices.
-          const allDestroyed = new Set([...destroyedExtra, ...removed]);
-          const kept = baseEmails.filter((e) => !allDestroyed.has(e.id));
-          // Map updated entries onto kept array
-          const fetchedById = new Map(fetched.map((e) => [e.id, e]));
-          const updatedKept = kept.map((e) => fetchedById.get(e.id) ?? e);
-
-          // Insert added entries at the indices the server gave us. Sort
-          // ascending by index so each splice lands at the right offset.
-          const sortedAdded = [...queryChanges.added].sort((a, b) => a.index - b.index);
-          const out = [...updatedKept];
-          for (const entry of sortedAdded) {
-            const email = fetchedById.get(entry.id);
-            if (!email) continue;
-            const idx = Math.min(entry.index, out.length);
-            out.splice(idx, 0, email);
-          }
-          // Cap the visible list to the user's page size — Email/queryChanges
-          // can push entries past the original window if many were added.
-          const trimmed = out.slice(0, Math.max(limit, out.length));
-
-          const nextQueryState = queryChanges.newQueryState;
-          const nextTotal = queryChanges.total;
-
-          if (viewChanged()) return;
-
-          set({
-            emails: trimmed,
-            totalEmails: nextTotal,
-            queryState: nextQueryState,
-            emailStates: withEmailState(
-              get().emailStates,
-              ref.accountId,
-              nextEmailState ?? fetchState ?? emailState,
-            ),
-            loading: false,
-            mailboxSnapshots: {
-              ...get().mailboxSnapshots,
-              [currentMailboxId]: {
-                emails: trimmed,
-                total: nextTotal,
-                queryState: nextQueryState,
-              },
-            },
-          });
-          return;
-        }
-        // queryChanges === null → cannotCalculateChanges. Drop our queryState
-        // and fall through to a full re-query, which will repopulate it.
-      }
-
-      // Full re-query path. Used when there's no prior queryState, when the
-      // user has search/filters active (queryState only tracks the base
-      // query), or when the server returned cannotCalculateChanges above.
-      const queryRes = await queryEmails(ref.id, { limit, sort, filter, accountId: ref.accountId });
-      const fetched = queryRes.ids.length > 0
-        ? await getEmailsWithState(queryRes.ids, ref.accountId)
-        : { list: [], state: undefined as string | undefined };
-
-      if (viewChanged()) return;
-
-      const updates: Partial<EmailState> = {
-        emails: fetched.list,
-        totalEmails: queryRes.total,
-        loading: false,
-      };
-      if (baseView) {
-        updates.queryState = queryRes.queryState;
-        updates.emailStates = withEmailState(get().emailStates, ref.accountId, fetched.state);
-        updates.mailboxSnapshots = {
-          ...get().mailboxSnapshots,
-          [currentMailboxId]: {
-            emails: fetched.list,
-            total: queryRes.total,
-            queryState: queryRes.queryState,
-          },
-        };
-      }
-      set(updates);
-    } catch (err) {
-      console.warn('[email-store] refreshEmails failed:', err);
-      if (get().activeAccountId !== activeAccountId || get().currentMailboxId !== currentMailboxId) return;
-      // Keep whatever's visible; only surface the error when the list is
-      // empty. With cached emails on screen the OfflineBanner already
-      // tells the user the data is stale.
-      if (existing.length === 0) {
-        try {
-          const cacheStore = useOfflineCacheStore.getState();
-          if (!cacheStore.hydrated) await cacheStore.hydrate();
-          if (cacheStore.totalCount() > 0) {
-            const cached = await cacheStore.getEmailsInMailbox(
-              ref.id,
-              Math.max(limit, 50),
-            );
-            if (sortAscending) cached.reverse();
-            if (
-              get().activeAccountId === activeAccountId &&
-              get().currentMailboxId === currentMailboxId &&
-              cached.length > 0
-            ) {
-              set({ emails: cached, totalEmails: cached.length, loading: false, error: null });
-              return;
-            }
-          }
-        } catch (cacheErr) {
-          console.warn('[email-store] refresh cache fallback failed:', cacheErr);
-        }
-      }
-      set({
-        loading: false,
-        error: existing.length > 0 ? null : (err instanceof Error ? err.message : 'Failed to load emails'),
-      });
-    }
+  refreshEmails: () => {
+    const { currentMailboxId, activeAccountId } = get();
+    if (!currentMailboxId) return Promise.resolve();
+    if (!jmapClientServesActiveAccount(activeAccountId)) return Promise.resolve();
+    return coalesceRefresh(`${activeAccountId}:emails`, refreshEmailsImpl);
   },
 
   handleStateChange: async (change) => {
@@ -1016,10 +853,12 @@ export const useEmailStore = create<EmailState>()(
 
   setSearchQuery: (query) => {
     const state = get();
+    if (state.searchQuery === query) return;
     const backToBase =
       !isBaseView(state.searchQuery, state.filters) && isBaseView(query, state.filters);
     set({
       searchQuery: query,
+      retainedIds: [],
       ...(backToBase ? restoredBaseView(state) : {}),
     });
     void get().refreshEmails();
@@ -1031,6 +870,7 @@ export const useEmailStore = create<EmailState>()(
       !isBaseView(state.searchQuery, state.filters) && isBaseView(state.searchQuery, filters);
     set({
       filters,
+      retainedIds: [],
       ...(backToBase ? restoredBaseView(state) : {}),
     });
     void get().refreshEmails();
@@ -1040,9 +880,13 @@ export const useEmailStore = create<EmailState>()(
     const settings = useSettingsStore.getState();
     if (settings.mailSortAscending === ascending) return;
     settings.updateSetting('mailSortAscending', ascending);
+    get().invalidateListOrder();
+  },
+
+  invalidateListOrder: () => {
     // Every cached queryState and snapshot window was built under the old
-    // sort order — drop them all (active view and tucked-away accounts) so
-    // the next refresh does a full re-query instead of running
+    // order — drop them all (active view and tucked-away accounts) so the
+    // next refresh does a full re-query instead of running
     // Email/queryChanges against a differently-sorted query.
     const accountSnapshots: Record<string, AccountSnapshot> = {};
     for (const [id, acc] of Object.entries(get().accountSnapshots)) {
@@ -1054,8 +898,8 @@ export const useEmailStore = create<EmailState>()(
 
   clearSearchAndFilters: () => {
     const state = get();
-    if (!state.searchQuery && Object.keys(state.filters).length === 0) return;
-    set({ searchQuery: '', filters: {}, ...restoredBaseView(state) });
+    if (!state.searchQuery && activeFilterKeys(state.filters).length === 0) return;
+    set({ searchQuery: '', filters: {}, retainedIds: [], ...restoredBaseView(state) });
     void get().refreshEmails();
   },
 
@@ -1101,6 +945,7 @@ export const useEmailStore = create<EmailState>()(
       emails: get().emails.map((e) =>
         e.id === emailId ? { ...e, keywords: nextKeywords } : e,
       ),
+      ...(state.filters.isUnread === true ? { retainedIds: retain(get().retainedIds, [emailId]) } : {}),
     });
     patchCache(emailId, { keywords: nextKeywords });
   },
@@ -1120,6 +965,7 @@ export const useEmailStore = create<EmailState>()(
       emails: get().emails.map((e) =>
         e.id === emailId ? { ...e, keywords: rest } : e,
       ),
+      ...(state.filters.isUnread === false ? { retainedIds: retain(get().retainedIds, [emailId]) } : {}),
     });
     patchCache(emailId, { keywords: rest });
   },
@@ -1144,6 +990,9 @@ export const useEmailStore = create<EmailState>()(
       emails: get().emails.map((e) =>
         e.id === emailId ? { ...e, keywords } : e,
       ),
+      ...(state.filters.isStarred !== undefined && state.filters.isStarred !== starred
+        ? { retainedIds: retain(get().retainedIds, [emailId]) }
+        : {}),
     });
     patchCache(emailId, { keywords });
   },
@@ -1152,11 +1001,13 @@ export const useEmailStore = create<EmailState>()(
     const state = get();
     const email = state.emails.find((e) => e.id === emailId);
     if (!email) return;
+    // `$pinned` is what the webmail reads and writes; a pin set as
+    // `$important` was invisible to it (and vice versa).
     const keywords = { ...email.keywords };
     if (pinned) {
-      keywords.$important = true;
+      keywords.$pinned = true;
     } else {
-      delete keywords.$important;
+      delete keywords.$pinned;
     }
     await applyOrQueue({
       kind: 'keywords',
@@ -1172,6 +1023,96 @@ export const useEmailStore = create<EmailState>()(
     patchCache(emailId, { keywords });
   },
 
+  markSpam: async (emailIds) => {
+    const state = get();
+    const targets = state.emails.filter((e) => emailIds.includes(e.id));
+    if (targets.length === 0) return;
+    const scoped = mailboxesForSiblingOf(state.mailboxes, state.currentMailboxId);
+    const junkMailbox = findJunkMailbox(scoped);
+    if (!junkMailbox) {
+      set({ error: t('email_list.no_junk_folder', 'Could not find a Spam/Junk folder on the server.') });
+      return;
+    }
+    const junk = refFor(state.mailboxes, junkMailbox.id);
+    const markRead = useSettingsStore.getState().deleteAction === 'trash-and-read';
+    const junkTarget = { [junk.id]: true };
+    const nextKeywords = new Map(targets.map((e) => {
+      const { $notjunk: _drop, ...rest } = e.keywords ?? {};
+      return [e.id, { ...rest, $junk: true, ...(markRead ? { $seen: true } : {}) }];
+    }));
+    const items = targets.map((e) => ({
+      email: e,
+      originalMailboxIds: { ...e.mailboxIds },
+      originalKeywords: { ...e.keywords },
+    }));
+
+    await applyOrQueueBatch(
+      targets.flatMap((e): OutboxOp[] => [
+        { kind: 'mailboxes', emailId: e.id, accountId: junk.accountId, mailboxIds: junkTarget },
+        { kind: 'keywords', emailId: e.id, accountId: junk.accountId, keywords: nextKeywords.get(e.id)! },
+      ]),
+      () => apiMarkAsSpam(targets.map((e) => e.id), junk.id, junk.accountId, { markRead }),
+    );
+
+    const removed = new Set(targets.map((e) => e.id));
+    set({
+      emails: get().emails.filter((e) => !removed.has(e.id)),
+      pendingUndo: {
+        kind: 'spam',
+        label: targets.length === 1
+          ? t('email_list.marked_as_spam', 'Marked as spam')
+          : t('email_list.marked_as_spam_count', `${targets.length} emails marked as spam`, { count: targets.length }),
+        createdAt: Date.now(),
+        accountId: junk.accountId,
+        items,
+      },
+    });
+    for (const e of targets) patchCache(e.id, { mailboxIds: junkTarget, keywords: nextKeywords.get(e.id) });
+  },
+
+  unmarkSpam: async (emailIds) => {
+    const state = get();
+    const targets = state.emails.filter((e) => emailIds.includes(e.id));
+    if (targets.length === 0) return;
+    const scoped = mailboxesForSiblingOf(state.mailboxes, state.currentMailboxId);
+    const inboxMailbox = scoped.find((m) => m.role === 'inbox');
+    if (!inboxMailbox) return;
+    const inbox = refFor(state.mailboxes, inboxMailbox.id);
+    const inboxTarget = { [inbox.id]: true };
+    const nextKeywords = new Map(targets.map((e) => {
+      const { $junk: _drop, ...rest } = e.keywords ?? {};
+      return [e.id, { ...rest, $notjunk: true }];
+    }));
+    const items = targets.map((e) => ({
+      email: e,
+      originalMailboxIds: { ...e.mailboxIds },
+      originalKeywords: { ...e.keywords },
+    }));
+
+    await applyOrQueueBatch(
+      targets.flatMap((e): OutboxOp[] => [
+        { kind: 'mailboxes', emailId: e.id, accountId: inbox.accountId, mailboxIds: inboxTarget },
+        { kind: 'keywords', emailId: e.id, accountId: inbox.accountId, keywords: nextKeywords.get(e.id)! },
+      ]),
+      () => apiUndoSpam(targets.map((e) => e.id), inbox.id, inbox.accountId),
+    );
+
+    const removed = new Set(targets.map((e) => e.id));
+    set({
+      emails: get().emails.filter((e) => !removed.has(e.id)),
+      pendingUndo: {
+        kind: 'spam',
+        label: targets.length === 1
+          ? t('email_list.marked_not_spam', 'Marked as not spam')
+          : t('email_list.marked_not_spam_count', `${targets.length} emails marked as not spam`, { count: targets.length }),
+        createdAt: Date.now(),
+        accountId: inbox.accountId,
+        items,
+      },
+    });
+    for (const e of targets) patchCache(e.id, { mailboxIds: inboxTarget, keywords: nextKeywords.get(e.id) });
+  },
+
   moveToMailbox: async (emailId, fromMailboxId, toMailboxId) => {
     const state = get();
     const email = state.emails.find((e) => e.id === emailId);
@@ -1181,7 +1122,7 @@ export const useEmailStore = create<EmailState>()(
     // the user's own folders and a shared account's (or between two shared
     // accounts) — that would be a copy-then-delete across accounts.
     if (from.accountId !== to.accountId) {
-      set({ error: 'Messages can only be moved within the same account' });
+      set({ error: t('email_list.move_same_account', 'Messages can only be moved within the same account') });
       return;
     }
     const original = email ? { ...email.mailboxIds } : null;
@@ -1195,11 +1136,13 @@ export const useEmailStore = create<EmailState>()(
     patchCache(emailId, { mailboxIds: target });
 
     if (email && original) {
-      const targetName = get().mailboxes.find((m) => m.id === toMailboxId)?.name;
+      const targetName = mailboxPath(get().mailboxes, toMailboxId);
       set({
         pendingUndo: {
           kind: 'move',
-          label: targetName ? `Email moved to ${targetName}` : 'Email moved',
+          label: targetName
+            ? t('notifications.moved_to_mailbox', `Email moved to ${targetName}`, { mailbox: targetName })
+            : t('notifications.email_moved', 'Email moved'),
           createdAt: Date.now(),
           accountId: from.accountId,
           items: [{ email, originalMailboxIds: original }],
@@ -1249,7 +1192,7 @@ export const useEmailStore = create<EmailState>()(
       emails: get().emails.filter((e) => e.id !== emailId),
       pendingUndo: {
         kind: 'archive',
-        label: 'Email archived',
+        label: t('notifications.email_archived', 'Email archived'),
         createdAt: Date.now(),
         accountId: archive.accountId,
         items: [{ email, originalMailboxIds: original }],
@@ -1325,7 +1268,7 @@ export const useEmailStore = create<EmailState>()(
       set({
         pendingUndo: {
           kind: 'delete',
-          label: 'Email moved to Trash',
+          label: t('email_list.moved_to_trash', 'Email moved to Trash'),
           createdAt: Date.now(),
           accountId: source.accountId,
           items: [{ email, originalMailboxIds: original }],
@@ -1376,7 +1319,9 @@ export const useEmailStore = create<EmailState>()(
       emails: get().emails.filter((e) => !removed.has(e.id)),
       pendingUndo: {
         kind: 'archive',
-        label: targets.length === 1 ? 'Email archived' : `${targets.length} emails archived`,
+        label: targets.length === 1
+          ? t('notifications.email_archived', 'Email archived')
+          : t('email_list.emails_archived_count', `${targets.length} emails archived`, { count: targets.length }),
         createdAt: Date.now(),
         accountId: archive.accountId,
         items,
@@ -1394,7 +1339,7 @@ export const useEmailStore = create<EmailState>()(
     const to = refFor(mailboxes, toMailboxId);
     // See moveToMailbox: one Email/set can't span two accounts.
     if (source.accountId !== to.accountId) {
-      set({ error: 'Messages can only be moved within the same account' });
+      set({ error: t('email_list.move_same_account', 'Messages can only be moved within the same account') });
       return;
     }
     const targets = emails.filter((e) => emailIds.includes(e.id));
@@ -1416,14 +1361,16 @@ export const useEmailStore = create<EmailState>()(
     for (const e of targets) {
       patchCache(e.id, { mailboxIds: mailboxesAfterMove(e.mailboxIds, source.id, to.id) });
     }
-    const targetName = mailboxes.find((m) => m.id === toMailboxId)?.name;
+    const targetName = mailboxPath(mailboxes, toMailboxId);
     set({
       emails: get().emails.filter((e) => !removed.has(e.id)),
       pendingUndo: {
         kind: 'move',
         label: targetName
-          ? `${targets.length === 1 ? 'Email' : `${targets.length} emails`} moved to ${targetName}`
-          : 'Emails moved',
+          ? (targets.length === 1
+            ? t('notifications.moved_to_mailbox', `Email moved to ${targetName}`, { mailbox: targetName })
+            : t('email_list.emails_moved_to', `${targets.length} emails moved to ${targetName}`, { count: targets.length, mailbox: targetName }))
+          : t('notifications.emails_moved', 'Emails moved'),
         createdAt: Date.now(),
         accountId: source.accountId,
         items,
@@ -1517,7 +1464,9 @@ export const useEmailStore = create<EmailState>()(
       set({
         pendingUndo: {
           kind: 'delete',
-          label: toTrash.length === 1 ? 'Email moved to Trash' : `${toTrash.length} emails moved to Trash`,
+          label: toTrash.length === 1
+            ? t('email_list.moved_to_trash', 'Email moved to Trash')
+            : t('email_list.moved_to_trash_count', `${toTrash.length} emails moved to Trash`, { count: toTrash.length }),
           createdAt: Date.now(),
           accountId: source.accountId,
           items: toTrash.map((e) => ({ email: e, originalMailboxIds: { ...e.mailboxIds } })),
@@ -1551,6 +1500,10 @@ export const useEmailStore = create<EmailState>()(
       emails: get().emails.map((e) =>
         byId.has(e.id) ? { ...e, keywords: byId.get(e.id)! } : e,
       ),
+      // Untagging inside that tag's view keeps the rows until it's re-opened.
+      ...(!on && state.filters.keyword === token
+        ? { retainedIds: retain(get().retainedIds, updates.map((u) => u.id)) }
+        : {}),
     });
     for (const u of updates) patchCache(u.id, { keywords: u.keywords });
   },
@@ -1573,11 +1526,31 @@ export const useEmailStore = create<EmailState>()(
           entry.accountId,
         ),
       );
+      // Spam / not-spam also flipped `$junk`/`$notjunk` (and maybe `$seen`):
+      // put the keywords back as they were.
+      const withKeywords = entry.items.filter((it) => it.originalKeywords);
+      if (withKeywords.length > 0) {
+        await applyOrQueueBatch(
+          withKeywords.map((it): OutboxOp => ({
+            kind: 'keywords',
+            emailId: it.email.id,
+            accountId: entry.accountId,
+            keywords: it.originalKeywords!,
+          })),
+          () => setKeywordsForEmails(
+            withKeywords.map((it) => ({ id: it.email.id, keywords: it.originalKeywords! })),
+            entry.accountId,
+          ),
+        );
+      }
       for (const it of entry.items) {
-        patchCache(it.email.id, { mailboxIds: it.originalMailboxIds });
+        patchCache(it.email.id, {
+          mailboxIds: it.originalMailboxIds,
+          ...(it.originalKeywords ? { keywords: it.originalKeywords } : {}),
+        });
       }
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Undo failed' });
+      set({ error: err instanceof Error ? err.message : t('email_list.undo_failed', 'Undo failed') });
       return;
     }
 
@@ -1589,7 +1562,11 @@ export const useEmailStore = create<EmailState>()(
       const currentRawId = rawMailboxId(mailboxes, currentMailboxId);
       const restored = entry.items
         .filter((it) => it.originalMailboxIds[currentRawId])
-        .map((it) => ({ ...it.email, mailboxIds: it.originalMailboxIds }));
+        .map((it) => ({
+          ...it.email,
+          mailboxIds: it.originalMailboxIds,
+          ...(it.originalKeywords ? { keywords: it.originalKeywords } : {}),
+        }));
       if (restored.length > 0) {
         const ascending = useSettingsStore.getState().mailSortAscending;
         const merged = [...restored, ...emails].sort((a, b) => {
@@ -1625,6 +1602,7 @@ export const useEmailStore = create<EmailState>()(
     error: null,
     searchQuery: '',
     filters: {},
+    retainedIds: [],
   }),
     }),
     {
@@ -1705,3 +1683,351 @@ export const useEmailStore = create<EmailState>()(
     },
   ),
 );
+
+// ── Refresh implementations (wrapped by coalesceRefresh above) ─────────
+
+function retain(current: string[], ids: string[]): string[] {
+  const set = new Set(current);
+  for (const id of ids) set.add(id);
+  return [...set];
+}
+
+/** "Parent / Child" path of a folder for toasts, like the webmail (1.5.0). */
+function mailboxPath(mailboxes: Mailbox[], mailboxId: string): string | undefined {
+  const byId = new Map(mailboxes.map((m) => [m.id, m]));
+  let node = byId.get(mailboxId);
+  if (!node) return undefined;
+  const parts = [node.name];
+  let guard = 0;
+  while (node?.parentId && guard++ < 16) {
+    node = byId.get(node.parentId);
+    if (node) parts.unshift(node.name);
+  }
+  return parts.join(' / ');
+}
+
+async function fetchMailboxesImpl(activeAccountId: string): Promise<void> {
+  const get = useEmailStore.getState;
+  const set = useEmailStore.setState;
+    const prevState = get().mailboxState;
+    // Swap in a freshly-synced set of own folders while leaving the shared
+    // (group account) ones alone, and vice versa — the two are fetched by
+    // separate calls and must not clobber each other.
+    const replaceOwn = (own: Mailbox[], mailboxState?: string) => {
+      set({
+        mailboxes: [...own, ...get().mailboxes.filter((m) => m.isShared)],
+        ...(mailboxState !== undefined ? { mailboxState } : {}),
+      });
+    };
+
+    try {
+      let drainAgain = false;
+
+      // Incremental path: ask for just what changed since last time. Fall
+      // through to a full refetch when the server can't compute the diff or
+      // we have no previous state to compare against.
+      let syncedOwn = false;
+      if (prevState) {
+        const changes = await getMailboxChanges(prevState);
+        // Bail if the user switched accounts during the await — anything we
+        // set() now would land in the wrong account's bucket.
+        if (get().activeAccountId !== activeAccountId) return;
+        if (changes) {
+          syncedOwn = true;
+          // No changes at all — keep the cached list, just bump the state.
+          if (
+            changes.created.length === 0 &&
+            changes.updated.length === 0 &&
+            changes.destroyed.length === 0
+          ) {
+            set({ mailboxState: changes.newState });
+          } else {
+            const toFetch = [...changes.created, ...changes.updated];
+            const fetched = toFetch.length > 0
+              ? (await getMailboxesByIds(toFetch)).list
+              : [];
+            if (get().activeAccountId !== activeAccountId) return;
+            const destroyed = new Set(changes.destroyed);
+            const byId = new Map<string, Mailbox>();
+            for (const m of get().mailboxes) {
+              if (!m.isShared) byId.set(m.id, m);
+            }
+            for (const m of fetched) byId.set(m.id, m);
+            for (const id of destroyed) byId.delete(id);
+            replaceOwn(
+              Array.from(byId.values()),
+              changes.hasMoreChanges ? prevState : changes.newState,
+            );
+            // hasMoreChanges = there are still pending changes past the
+            // server's response cap. Run the same path again to drain.
+            drainAgain = changes.hasMoreChanges;
+          }
+        }
+        // changes === null → cannotCalculateChanges. Fall through to full.
+      }
+
+      if (!syncedOwn) {
+        const { list, state } = await getMailboxesWithState();
+        if (get().activeAccountId !== activeAccountId) return;
+        replaceOwn(list, state);
+      }
+
+      // Shared/group accounts have their own Mailbox state tokens, and there
+      // are only ever a handful of them, so they're re-read in full rather
+      // than diffed. Failing to reach one must not lose the own folders we
+      // just synced, hence the separate try.
+      try {
+        const shared = await getSharedMailboxes();
+        if (get().activeAccountId !== activeAccountId) return;
+        set({ mailboxes: [...get().mailboxes.filter((m) => !m.isShared), ...shared] });
+      } catch (err) {
+        console.warn('[email-store] shared mailbox fetch failed:', err);
+      }
+
+      if (drainAgain) void get().fetchMailboxes();
+    } catch (err) {
+      console.warn('[email-store] fetchMailboxes failed:', err);
+      if (get().activeAccountId !== activeAccountId) return;
+      // Don't overwrite the cached list on a transient failure — the user
+      // can still navigate folders. Only surface the error when we have no
+      // mailboxes at all to show.
+      if (get().mailboxes.length === 0) {
+        set({ error: err instanceof Error ? err.message : 'Failed to load mailboxes' });
+      }
+    }
+
+  // Stalwart provisions the system folders lazily on first login (#217): an
+  // empty or failed first Mailbox/get gets one automatic retry after ~2 s.
+  if (get().mailboxes.length === 0 && !provisionRetried.has(activeAccountId)) {
+    provisionRetried.add(activeAccountId);
+    setTimeout(() => {
+      if (get().activeAccountId === activeAccountId && get().mailboxes.length === 0) {
+        void get().fetchMailboxes();
+      }
+    }, 2000);
+  }
+}
+
+async function refreshEmailsImpl(): Promise<void> {
+  const get = useEmailStore.getState;
+  const set = useEmailStore.setState;
+    const state = get();
+    const { currentMailboxId, searchQuery, filters, emails: existing, activeAccountId } = state;
+    if (!currentMailboxId) return;
+    if (!jmapClientServesActiveAccount(activeAccountId)) return;
+    set({ loading: true, error: null });
+
+    // A shared (group account) folder is queried against its owning account
+    // with its unprefixed id; own folders resolve to no override at all.
+    const ref = refFor(state.mailboxes, currentMailboxId);
+    const emailState = state.emailStates[stateKey(ref.accountId)];
+    const scope = queryScope(state, ref);
+    const filter = buildJmapFilter(searchQuery, filters);
+    const { emailsPerPage: limit, mailSortAscending: sortAscending } =
+      useSettingsStore.getState();
+    const sort = currentSort();
+    const baseView = isBaseView(searchQuery, filters);
+
+    // A response that lands after the user switched account/mailbox or
+    // changed search/filters/sort must not overwrite the newer view.
+    const viewChanged = () =>
+      get().activeAccountId !== activeAccountId ||
+      get().currentMailboxId !== currentMailboxId ||
+      get().searchQuery !== searchQuery ||
+      get().filters !== filters ||
+      useSettingsStore.getState().mailSortAscending !== sortAscending;
+
+    // The incremental path diffs against the *base-view* list, which lives in
+    // the per-mailbox snapshot — NOT `emails`, which may still hold search or
+    // filter results (right after clearing a search, or after a cold start
+    // that rehydrated a persisted search-result list). Diffing against a
+    // non-base list lets Email/queryChanges "confirm" the search results as
+    // the whole mailbox and bakes them into the snapshot (issue #10). The
+    // snapshot is only trusted when its window is plausibly complete —
+    // anything shorter can't be patched incrementally and needs the full
+    // re-query below to rebuild it.
+    const snap = state.mailboxSnapshots[currentMailboxId];
+
+    try {
+      // Incremental sync path: requires the base unfiltered view AND a known
+      // queryState (so Email/queryChanges has something to diff against).
+      // Anything else — search, filter active, first-ever load — falls
+      // through to a full re-query.
+      if (
+        baseView &&
+        snap?.queryState &&
+        snap.emails.length >= Math.min(limit, snap.total)
+      ) {
+        const baseEmails = snap.emails;
+        const queryChanges = await getEmailQueryChanges(ref.id, snap.queryState, {
+          sort,
+          filter: undefined,
+          accountId: ref.accountId,
+        });
+        if (queryChanges) {
+          // What's in the visible window now: drop removed ids, then apply
+          // added (id, index) entries. Newly added ids need bodies fetched.
+          const removed = new Set(queryChanges.removed);
+          const addedIds = queryChanges.added.map((a) => a.id);
+
+          // Email/changes catches updates to messages already in our list
+          // (e.g. another device toggled $seen) that queryChanges wouldn't
+          // report. Skipped when we have no emailState yet — first refresh
+          // after a cold start primes it from the Email/get below.
+          let updatedIds: string[] = [];
+          let destroyedExtra: string[] = [];
+          let nextEmailState: string | undefined = emailState;
+          if (emailState) {
+            // Drain `hasMoreChanges`: the server caps one response, so keep
+            // asking from the returned state until the delta is complete
+            // (bounded so a runaway server can't loop us forever).
+            let since: string | undefined = emailState;
+            for (let round = 0; since && round < 10; round++) {
+              const ec = await getEmailChanges(since, undefined, ref.accountId);
+              if (!ec) {
+                // cannotCalculateChanges → forget the state and rely on the
+                // next full re-sync to repopulate it.
+                nextEmailState = undefined;
+                break;
+              }
+              updatedIds.push(...ec.updated);
+              destroyedExtra.push(...ec.destroyed);
+              nextEmailState = ec.newState;
+              since = ec.hasMoreChanges && ec.newState !== since ? ec.newState : undefined;
+            }
+          }
+
+          // Fetch only what we don't already have. `addedIds` are new to the
+          // window; `updatedIds` may already be in the base list but their
+          // keywords/mailboxIds need refreshing.
+          const existingById = new Map(baseEmails.map((e) => [e.id, e]));
+          const idsToFetch = [
+            ...addedIds.filter((id) => !existingById.has(id)),
+            ...updatedIds.filter((id) => existingById.has(id)),
+          ];
+          let fetchState: string | undefined;
+          let fetched: Email[] = [];
+          if (idsToFetch.length > 0) {
+            const res = await getEmailsWithState(idsToFetch, ref.accountId);
+            fetched = res.list;
+            fetchState = res.state;
+          }
+
+          // Rebuild the visible window order: start with existing emails,
+          // drop removed/destroyed, then splice added at their indices.
+          const allDestroyed = new Set([...destroyedExtra, ...removed]);
+          const kept = baseEmails.filter((e) => !allDestroyed.has(e.id));
+          // Map updated entries onto kept array
+          const fetchedById = new Map(fetched.map((e) => [e.id, e]));
+          const updatedKept = kept.map((e) => fetchedById.get(e.id) ?? e);
+
+          // Insert added entries at the indices the server gave us. Sort
+          // ascending by index so each splice lands at the right offset.
+          const sortedAdded = [...queryChanges.added].sort((a, b) => a.index - b.index);
+          const out = [...updatedKept];
+          for (const entry of sortedAdded) {
+            const email = fetchedById.get(entry.id);
+            if (!email) continue;
+            const idx = Math.min(entry.index, out.length);
+            out.splice(idx, 0, email);
+          }
+          // Keep the window at what the user had scrolled to (at least one
+          // page) — Email/queryChanges can push entries past the original
+          // window when many were added; `total` still drives load-more.
+          const trimmed = out.slice(0, Math.max(limit, baseEmails.length));
+
+          const nextQueryState = queryChanges.newQueryState;
+          const nextTotal = queryChanges.total;
+
+          if (viewChanged()) return;
+
+          set({
+            emails: trimmed,
+            totalEmails: nextTotal,
+            queryState: nextQueryState,
+            emailStates: withEmailState(
+              get().emailStates,
+              ref.accountId,
+              nextEmailState ?? fetchState ?? emailState,
+            ),
+            loading: false,
+            mailboxSnapshots: {
+              ...get().mailboxSnapshots,
+              [currentMailboxId]: {
+                emails: trimmed,
+                total: nextTotal,
+                queryState: nextQueryState,
+              },
+            },
+          });
+          return;
+        }
+        // queryChanges === null → cannotCalculateChanges. Drop our queryState
+        // and fall through to a full re-query, which will repopulate it.
+      }
+
+      // Full re-query path. Used when there's no prior queryState, when the
+      // user has search/filters active (queryState only tracks the base
+      // query), or when the server returned cannotCalculateChanges above.
+      const queryRes = await queryEmails(scope.mailboxId, { limit, sort, filter, accountId: scope.accountId });
+      const fetched = queryRes.ids.length > 0
+        ? await getEmailsWithState(queryRes.ids, scope.accountId)
+        : { list: [], state: undefined as string | undefined };
+
+      if (viewChanged()) return;
+
+      const updates: Partial<EmailState> = {
+        // Rows the user just read/unstarred in this filtered view stay put
+        // until the view is re-opened, instead of vanishing under them.
+        emails: baseView ? fetched.list : mergeRetainedRows(get().emails, fetched.list, get().retainedIds),
+        totalEmails: queryRes.total,
+        loading: false,
+      };
+      if (baseView) {
+        updates.queryState = queryRes.queryState;
+        updates.emailStates = withEmailState(get().emailStates, ref.accountId, fetched.state);
+        updates.mailboxSnapshots = {
+          ...get().mailboxSnapshots,
+          [currentMailboxId]: {
+            emails: fetched.list,
+            total: queryRes.total,
+            queryState: queryRes.queryState,
+          },
+        };
+      }
+      set(updates);
+    } catch (err) {
+      console.warn('[email-store] refreshEmails failed:', err);
+      if (get().activeAccountId !== activeAccountId || get().currentMailboxId !== currentMailboxId) return;
+      // Keep whatever's visible; only surface the error when the list is
+      // empty. With cached emails on screen the OfflineBanner already
+      // tells the user the data is stale.
+      if (existing.length === 0) {
+        try {
+          const cacheStore = useOfflineCacheStore.getState();
+          if (!cacheStore.hydrated) await cacheStore.hydrate();
+          if (cacheStore.totalCount() > 0) {
+            const cached = await cacheStore.getEmailsInMailbox(
+              ref.id,
+              Math.max(limit, 50),
+            );
+            if (sortAscending) cached.reverse();
+            if (
+              get().activeAccountId === activeAccountId &&
+              get().currentMailboxId === currentMailboxId &&
+              cached.length > 0
+            ) {
+              set({ emails: cached, totalEmails: cached.length, loading: false, error: null });
+              return;
+            }
+          }
+        } catch (cacheErr) {
+          console.warn('[email-store] refresh cache fallback failed:', cacheErr);
+        }
+      }
+      set({
+        loading: false,
+        error: existing.length > 0 ? null : (err instanceof Error ? err.message : 'Failed to load emails'),
+      });
+    }
+}
