@@ -5,8 +5,9 @@ import { SettingsSection, SettingItem, ToggleSwitch } from './settings-section';
 import Button from '../Button';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
-import { useSettingsStore } from '../../stores/settings-store';
+import { useSettingsStore, type SignaturePosition } from '../../stores/settings-store';
 import { useLocaleStore } from '../../stores/locale-store';
+import { SUPPORTED_SUB_ADDRESS_DELIMITERS } from '../../lib/sub-addressing';
 
 export function ComposingSettings() {
   const c = useColors();
@@ -19,6 +20,13 @@ export function ComposingSettings() {
   const attachmentReminderKeywords = useSettingsStore((s) => s.attachmentReminderKeywords);
   const setAttachmentReminderKeywords = useSettingsStore((s) => s.setAttachmentReminderKeywords);
   const sendDelaySeconds = useSettingsStore((s) => s.sendDelaySeconds);
+  const plainTextMode = useSettingsStore((s) => s.plainTextMode);
+  const signaturePosition = useSettingsStore((s) => s.signaturePosition);
+  const signatureSeparatorEnabled = useSettingsStore((s) => s.signatureSeparatorEnabled);
+  const requestReadReceiptDefault = useSettingsStore((s) => s.requestReadReceiptDefault);
+  const emptySubjectWarningEnabled = useSettingsStore((s) => s.emptySubjectWarningEnabled);
+  const autoSaveDraftInterval = useSettingsStore((s) => s.autoSaveDraftInterval);
+  const subAddressDelimiter = useSettingsStore((s) => s.subAddressDelimiter);
   const updateSetting = useSettingsStore((s) => s.updateSetting);
   const hydrated = useSettingsStore((s) => s.hydrated);
   const hydrate = useSettingsStore((s) => s.hydrate);
@@ -49,6 +57,41 @@ export function ComposingSettings() {
     { label: t('settings.email_behavior.send_delay.seconds', '{seconds} seconds', { seconds: 60 }), value: 60 },
   ];
 
+  const AUTOSAVE_OPTIONS: { label: string; value: number }[] = [
+    { label: t('settings.composer.autosave.30s', 'Every 30 seconds'), value: 30000 },
+    { label: t('settings.composer.autosave.1m', 'Every minute'), value: 60000 },
+    { label: t('settings.composer.autosave.2m', 'Every 2 minutes'), value: 120000 },
+    { label: t('settings.composer.autosave.5m', 'Every 5 minutes'), value: 300000 },
+  ];
+
+  const SIGNATURE_POSITIONS: { label: string; value: SignaturePosition }[] = [
+    { label: t('settings.email_behavior.signature_position.above_quote', 'Before quoted text'), value: 'above_quote' },
+    { label: t('settings.email_behavior.signature_position.below_quote', 'After quoted text'), value: 'below_quote' },
+  ];
+
+  const segmented = <T extends string | number>(
+    options: { label: string; value: T }[],
+    current: T,
+    onPick: (value: T) => void,
+  ) => (
+    <View style={styles.segmentRow}>
+      {options.map((opt) => {
+        const active = current === opt.value;
+        return (
+          <Pressable
+            key={String(opt.value)}
+            onPress={() => onPick(opt.value)}
+            style={[styles.segment, active && styles.segmentActive]}
+          >
+            <Text style={[styles.segmentText, active && styles.segmentTextActive]} numberOfLines={1}>
+              {opt.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+
   return (
     <SettingsSection
       title={t('settings.composer.title', "Composer")}
@@ -61,27 +104,68 @@ export function ComposingSettings() {
         <ToggleSwitch checked={autoSelectReplyIdentity} onChange={setAutoSelectReplyIdentity} />
       </SettingItem>
 
+      <SettingItem
+        label={t('settings.email_behavior.plain_text_mode.label', "Plain Text Only")}
+        description={t('settings.email_behavior.plain_text_mode.description', "Disable the rich text editor and send all emails as plain text only, including replies and forwards")}
+      >
+        <ToggleSwitch checked={plainTextMode} onChange={(v) => updateSetting('plainTextMode', v)} />
+      </SettingItem>
+
+      <SettingItem
+        label={t('settings.email_behavior.request_read_receipt.label', "Request read receipts by default")}
+        description={t('settings.email_behavior.request_read_receipt.description', "Pre-enable the read-receipt request when composing a new message.")}
+      >
+        <ToggleSwitch checked={requestReadReceiptDefault} onChange={(v) => updateSetting('requestReadReceiptDefault', v)} />
+      </SettingItem>
+
+      <SettingItem
+        label={t('settings.email_behavior.empty_subject_warning.label', "Empty subject warning")}
+        description={t('settings.email_behavior.empty_subject_warning.description', "Ask for confirmation before sending a message with no subject.")}
+      >
+        <ToggleSwitch checked={emptySubjectWarningEnabled} onChange={(v) => updateSetting('emptySubjectWarningEnabled', v)} />
+      </SettingItem>
+
+      <View style={styles.subBlock}>
+        <Text style={styles.subLabel}>{t('settings.email_behavior.signature_position.label', "Signature Position")}</Text>
+        <Text style={styles.subDescription}>
+          {t('settings.email_behavior.signature_position.description', "Where to insert your signature in replies and forwards. Above the quoted text reads naturally as a closing for the reply; below keeps the original message contiguous.")}
+        </Text>
+        {segmented(SIGNATURE_POSITIONS, signaturePosition, (v) => updateSetting('signaturePosition', v))}
+      </View>
+
+      <SettingItem
+        label={t('settings.email_behavior.signature_separator.label', "Signature Delimiter")}
+        description={t('settings.email_behavior.signature_separator.description', 'Prefix the signature with the standard "-- " delimiter line (RFC 3676). Turn off if you\'d rather flow straight from your message into the signature.')}
+      >
+        <ToggleSwitch checked={signatureSeparatorEnabled} onChange={(v) => updateSetting('signatureSeparatorEnabled', v)} />
+      </SettingItem>
+
+      <View style={styles.subBlock}>
+        <Text style={styles.subLabel}>{t('settings.composer.autosave.label', "Auto-save Interval")}</Text>
+        <Text style={styles.subDescription}>
+          {t('settings.composer.autosave.description', "How often to save drafts automatically")}
+        </Text>
+        {segmented(AUTOSAVE_OPTIONS, autoSaveDraftInterval, (v) => updateSetting('autoSaveDraftInterval', v))}
+      </View>
+
+      <View style={styles.subBlock}>
+        <Text style={styles.subLabel}>{t('settings.email_behavior.sub_address_delimiter.label', "Sub-Address Delimiter")}</Text>
+        <Text style={styles.subDescription}>
+          {t('settings.email_behavior.sub_address_delimiter.description', "Character separating your username from a sub-address tag. Match the delimiter your mail server uses (e.g. user{delimiter}tag@domain.com).", { delimiter: subAddressDelimiter })}
+        </Text>
+        {segmented(
+          SUPPORTED_SUB_ADDRESS_DELIMITERS.map((d) => ({ label: `user${d}tag`, value: d as string })),
+          subAddressDelimiter,
+          (v) => updateSetting('subAddressDelimiter', v),
+        )}
+      </View>
+
       <View style={styles.subBlock}>
         <Text style={styles.subLabel}>{t('settings.email_behavior.send_delay.label', "Undo send / send delay")}</Text>
         <Text style={styles.subDescription}>
           {t('settings.email_behavior.send_delay.description_mobile', "Hold outgoing mail for a few seconds so you can cancel it. Requires server support.")}
         </Text>
-        <View style={styles.segmentRow}>
-          {SEND_DELAY_OPTIONS.map((opt) => {
-            const active = sendDelaySeconds === opt.value;
-            return (
-              <Pressable
-                key={opt.value}
-                onPress={() => updateSetting('sendDelaySeconds', opt.value)}
-                style={[styles.segment, active && styles.segmentActive]}
-              >
-                <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                  {opt.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+        {segmented(SEND_DELAY_OPTIONS, sendDelaySeconds, (v) => updateSetting('sendDelaySeconds', v))}
       </View>
 
       <SettingItem
@@ -150,6 +234,7 @@ function makeStyles(c: ThemePalette) {
     flex: 1,
     alignItems: 'center',
     paddingVertical: 8,
+    paddingHorizontal: 4,
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: c.border,

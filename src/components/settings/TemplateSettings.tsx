@@ -10,8 +10,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Download, FileText, Plus, Trash2, Upload, X } from 'lucide-react-native';
-import { SettingsSection } from './settings-section';
+import { Download, FileText, Plus, Star, Trash2, Upload, X } from 'lucide-react-native';
+import { SettingsSection, ToggleSwitch } from './settings-section';
 import Button from '../Button';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
@@ -37,6 +37,9 @@ export function TemplateSettings() {
   const [draftName, setDraftName] = useState('');
   const [draftSubject, setDraftSubject] = useState('');
   const [draftBody, setDraftBody] = useState('');
+  const [draftCategory, setDraftCategory] = useState('');
+  const [draftFavorite, setDraftFavorite] = useState(false);
+  const [draftIsHtml, setDraftIsHtml] = useState(false);
 
   useEffect(() => {
     if (!hydrated) void hydrate();
@@ -56,6 +59,9 @@ export function TemplateSettings() {
     setDraftName('');
     setDraftSubject('');
     setDraftBody('');
+    setDraftCategory('');
+    setDraftFavorite(false);
+    setDraftIsHtml(false);
   };
 
   const openEdit = (t: EmailTemplate) => {
@@ -63,6 +69,9 @@ export function TemplateSettings() {
     setDraftName(t.name);
     setDraftSubject(t.subject);
     setDraftBody(t.body);
+    setDraftCategory(t.category);
+    setDraftFavorite(t.isFavorite);
+    setDraftIsHtml(!!t.isHTML);
   };
 
   const closeEditor = () => setEditing(null);
@@ -74,10 +83,14 @@ export function TemplateSettings() {
       return;
     }
     if (!editing) return;
+    const fields = {
+      name, subject: draftSubject, body: draftBody,
+      category: draftCategory.trim(), isFavorite: draftFavorite, isHTML: draftIsHtml,
+    };
     if (editing.id) {
-      updateTemplate(editing.id, { name, subject: draftSubject, body: draftBody });
+      updateTemplate(editing.id, fields);
     } else {
-      addTemplate({ name, subject: draftSubject, body: draftBody });
+      addTemplate(fields);
     }
     closeEditor();
   };
@@ -142,10 +155,13 @@ export function TemplateSettings() {
                 onLongPress={() => confirmDelete(t)}
                 style={({ pressed }) => [styles.listRow, pressed && styles.listRowPressed]}
               >
+                {t.isFavorite && <Star size={14} color={c.primary} fill={c.primary} />}
                 <View style={styles.listRowText}>
                   <Text style={styles.listRowName} numberOfLines={1}>{t.name}</Text>
-                  {!!t.subject && (
-                    <Text style={styles.listRowSubject} numberOfLines={1}>{t.subject}</Text>
+                  {!!(t.subject || t.category) && (
+                    <Text style={styles.listRowSubject} numberOfLines={1}>
+                      {[t.category, t.subject].filter(Boolean).join(' · ')}
+                    </Text>
                   )}
                 </View>
                 <Pressable onPress={() => confirmDelete(t)} hitSlop={8} style={styles.listRowDelete} accessibilityRole="button" accessibilityLabel={tr('common.delete', 'Delete')}>
@@ -208,6 +224,14 @@ export function TemplateSettings() {
                 placeholderTextColor={c.textMuted}
                 style={styles.input}
               />
+              <Text style={styles.fieldLabel}>{tr('settings.templates.category', 'Category')}</Text>
+              <TextInput
+                value={draftCategory}
+                onChangeText={setDraftCategory}
+                placeholder={tr('settings.templates.category_placeholder', 'e.g., Work, Personal')}
+                placeholderTextColor={c.textMuted}
+                style={styles.input}
+              />
               <Text style={styles.fieldLabel}>{tr('settings.templates.body', 'Body')}</Text>
               <TextInput
                 value={draftBody}
@@ -217,6 +241,17 @@ export function TemplateSettings() {
                 multiline
                 style={[styles.input, styles.bodyInput]}
               />
+              <Text style={styles.hint}>
+                {tr('settings.templates.placeholders_hint', 'Placeholders: {{recipient_name}}, {{company}}, {{date}}, {{day_of_week}}, {{sender_name}}')}
+              </Text>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>{tr('settings.templates.favorite', 'Favorite')}</Text>
+                <ToggleSwitch checked={draftFavorite} onChange={setDraftFavorite} />
+              </View>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>{tr('settings.templates.is_html', 'Body is HTML')}</Text>
+                <ToggleSwitch checked={draftIsHtml} onChange={setDraftIsHtml} />
+              </View>
             </ScrollView>
             <View style={styles.modalActions}>
               <Button variant="outline" size="sm" onPress={closeEditor}>{tr('common.cancel', 'Cancel')}</Button>
@@ -309,6 +344,12 @@ function makeStyles(c: ThemePalette) {
       paddingHorizontal: spacing.md, paddingVertical: 10,
     },
     bodyInput: { minHeight: 160, textAlignVertical: 'top' },
+    hint: { ...typography.caption, color: c.mutedForeground },
+    toggleRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingVertical: spacing.sm,
+    },
+    toggleLabel: { ...typography.body, color: c.text },
     modalActions: {
       flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm,
       padding: spacing.lg,
