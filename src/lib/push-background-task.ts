@@ -1,8 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules } from 'react-native';
-import { jmapClient } from '../api/jmap-client';
-import { getEmails, getMailboxes, queryEmails } from '../api/email';
-import type { Email } from '../api/types';
+import { jmapClient, type StoredCredentials } from '../api/jmap-client';
+import { CAPABILITIES } from '../api/types';
+import type { Email, JMAPMethodCall, JMAPSession, Mailbox } from '../api/types';
+import { secureFetch } from './client-cert';
+import { refreshOAuthAccessToken, type OAuthTokens } from './oauth';
 import {
   generateEmailAvatarColor,
   getEmailInitials,
@@ -21,11 +23,9 @@ import {
 // import the Zustand store (would pull in React) so we read AsyncStorage
 // directly. Keep this in sync if the store key ever changes.
 const SETTINGS_STORAGE_KEY = 'webmail:settings:v1';
-// Mirrors the persist name in `stores/account-store.ts`. We use it to find
-// the user's active account at the end of the headless task so we can leave
-// the jmapClient singleton in a state consistent with what the UI expects
-// when the app resumes, and to map the relay's `accountLabel` (= username)
-// back to a local account when the JMAP account id is not known yet.
+// Mirrors the persist name in `stores/account-store.ts`. Used to map the
+// relay's `accountLabel` (= username) back to a local account when the JMAP
+// account id is not known yet.
 const ACCOUNT_REGISTRY_KEY = 'account-registry';
 
 // How many recently-notified ids to remember per account. Enough to cover a
@@ -34,6 +34,11 @@ const NOTIFIED_IDS_LIMIT = 200;
 // Legacy state-change payloads carry no ids; look at this many newest unread
 // inbox messages and notify the ones we have not shown yet.
 const LEGACY_QUERY_LIMIT = 5;
+const TOKEN_REFRESH_LEEWAY_MS = 60_000;
+
+const EMAIL_PROPERTIES = [
+  'id', 'threadId', 'mailboxIds', 'keywords', 'size', 'receivedAt', 'from', 'subject', 'preview',
+];
 
 interface PushPersistedSettings {
   emailNotificationsEnabled?: boolean;
@@ -133,19 +138,14 @@ interface RegistryAccount {
   username?: string;
 }
 
-async function readAccountRegistry(): Promise<{ accounts: RegistryAccount[]; activeAccountId: string | null }> {
+async function readAccountRegistry(): Promise<RegistryAccount[]> {
   try {
     const raw = await AsyncStorage.getItem(ACCOUNT_REGISTRY_KEY);
-    if (!raw) return { accounts: [], activeAccountId: null };
-    const parsed = JSON.parse(raw) as {
-      state?: { accounts?: RegistryAccount[]; activeAccountId?: string | null };
-    };
-    return {
-      accounts: Array.isArray(parsed.state?.accounts) ? parsed.state!.accounts! : [],
-      activeAccountId: parsed.state?.activeAccountId ?? null,
-    };
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as { state?: { accounts?: RegistryAccount[] } };
+    return Array.isArray(parsed.state?.accounts) ? parsed.state!.accounts! : [];
   } catch {
-    return { accounts: [], activeAccountId: null };
+    return [];
   }
 }
 
@@ -200,11 +200,158 @@ async function rememberNotifiedIds(accountId: string, ids: string[]): Promise<vo
   if (ids.length > 0) await AsyncStorage.setItem(lastNotifiedKey(accountId), ids[0]);
 }
 
+// ─── Detached JMAP access ───────────────────────────────
+// The headless task may run inside the live RN instance (app foregrounded a
+// moment ago) where the UI is using the singleton jmapClient. Re-binding the
+// singleton to another account mid-flight sends UI requests with the wrong
+// credentials, so every request here goes through its own session fetched
+// from the account's stored credentials - same pattern as api/unified-inbox.
+
+interface DetachedSession {
+  apiUrl: string;
+  authHeader: string;
+  jmapAccountId: string;
+}
+
+function authHeaderFor(creds: StoredCredentials): string {
+  if (creds.accessToken) return `Bearer ${creds.accessToken}`;
+  return `Basic ${btoa(`${creds.username}:${creds.password}`)}`;
+}
+
+function originOf(url: string): string | null {
+  const m = url.match(/^(https?:\/\/[^/?#]+)/i);
+  return m ? m[1] : null;
+}
+
+// Same intent as JMAPClient.rewriteSessionUrls: point the advertised apiUrl at
+// the origin we actually connected to (servers often self-report unreachable
+// container-internal hosts).
+function rewriteApiUrl(session: JMAPSession, serverUrl: string): string {
+  const serverOrigin = originOf(serverUrl);
+  const apiOrigin = originOf(session.apiUrl);
+  if (!apiOrigin || !serverOrigin || apiOrigin === serverOrigin) return session.apiUrl;
+  return serverOrigin + session.apiUrl.slice(apiOrigin.length);
+}
+
+async function ensureFreshCredentials(
+  accountId: string,
+  creds: StoredCredentials,
+): Promise<StoredCredentials> {
+  if (
+    !creds.accessToken || !creds.refreshToken || !creds.tokenEndpoint
+    || !creds.clientId || creds.expiresAt == null
+  ) {
+    return creds;
+  }
+  if (creds.expiresAt - Date.now() > TOKEN_REFRESH_LEEWAY_MS) return creds;
+  try {
+    const tokens: OAuthTokens = {
+      accessToken: creds.accessToken,
+      refreshToken: creds.refreshToken,
+      expiresAt: creds.expiresAt,
+      tokenEndpoint: creds.tokenEndpoint,
+      clientId: creds.clientId,
+    };
+    const next = await refreshOAuthAccessToken(tokens);
+    const updated: StoredCredentials = {
+      ...creds,
+      accessToken: next.accessToken,
+      refreshToken: next.refreshToken ?? creds.refreshToken,
+      expiresAt: next.expiresAt,
+      tokenEndpoint: next.tokenEndpoint,
+      clientId: next.clientId,
+    };
+    const current = await jmapClient.getStoredCredentials(accountId);
+    if (!current || current.accessToken !== updated.accessToken) {
+      await jmapClient.setStoredCredentials(accountId, updated);
+    }
+    return updated;
+  } catch {
+    return creds;
+  }
+}
+
+async function openDetachedSession(accountId: string): Promise<DetachedSession | null> {
+  let creds = await jmapClient.getStoredCredentials(accountId);
+  if (!creds) return null;
+  creds = await ensureFreshCredentials(accountId, creds);
+  const baseUrl = creds.serverUrl.replace(/\/+$/, '');
+  const authHeader = authHeaderFor(creds);
+  const res = await secureFetch(`${baseUrl}/.well-known/jmap`, {
+    headers: { Authorization: authHeader, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Session discovery failed: ${res.status}`);
+  const session = (await res.json()) as JMAPSession;
+  const jmapAccountId =
+    session.primaryAccounts?.[CAPABILITIES.MAIL]
+    || session.primaryAccounts?.[CAPABILITIES.CORE]
+    || Object.keys(session.accounts ?? {})[0]
+    || null;
+  if (!jmapAccountId) return null;
+  return { apiUrl: rewriteApiUrl(session, baseUrl), authHeader, jmapAccountId };
+}
+
+async function jmapPost(
+  session: DetachedSession,
+  methodCalls: JMAPMethodCall[],
+): Promise<Array<[string, Record<string, any>, string]>> {
+  const response = await secureFetch(session.apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: session.authHeader },
+    body: JSON.stringify({ using: [CAPABILITIES.CORE, CAPABILITIES.MAIL], methodCalls }),
+  });
+  if (!response.ok) throw new Error(`JMAP request failed: ${response.status}`);
+  const body = await response.json();
+  return body.methodResponses ?? [];
+}
+
+async function detachedGetEmails(
+  session: DetachedSession,
+  accountId: string,
+  ids: string[],
+): Promise<Email[]> {
+  const responses = await jmapPost(session, [
+    ['Email/get', { accountId, ids, properties: EMAIL_PROPERTIES }, '0'],
+  ]);
+  const [name, body] = responses[0] ?? [];
+  if (name !== 'Email/get') return [];
+  return (body.list as Email[]) ?? [];
+}
+
+async function detachedNewestUnreadInboxIds(
+  session: DetachedSession,
+  limit: number,
+): Promise<string[]> {
+  const accountId = session.jmapAccountId;
+  const mailboxResponses = await jmapPost(session, [
+    ['Mailbox/get', { accountId, properties: ['id', 'role'] }, '0'],
+  ]);
+  const [mbName, mbBody] = mailboxResponses[0] ?? [];
+  if (mbName !== 'Mailbox/get') return [];
+  const inbox = ((mbBody.list as Mailbox[]) ?? []).find((m) => m.role === 'inbox');
+  if (!inbox) return [];
+  const queryResponses = await jmapPost(session, [
+    [
+      'Email/query',
+      {
+        accountId,
+        filter: { inMailbox: inbox.id, notKeyword: '$seen' },
+        sort: [{ property: 'receivedAt', isAscending: false }],
+        limit,
+      },
+      '0',
+    ],
+  ]);
+  const [qName, qBody] = queryResponses[0] ?? [];
+  if (qName !== 'Email/query') return [];
+  return (qBody.ids as string[]) ?? [];
+}
+
 // Fired by BulwarkPushTaskService when a data FCM message arrives. Runs in a
 // short-lived headless JS runtime - keep it fast, catch all errors, and always
-// resolve so the native service can release its wake lock.
+// resolve so the native service can release its wake lock. Never touches the
+// singleton jmapClient's session (see "Detached JMAP access" above).
 export async function pushBackgroundTask(data: unknown): Promise<void> {
-  let activeAccountId: string | null = null;
   try {
     if (!(await emailNotificationsAllowed())) return;
 
@@ -214,11 +361,9 @@ export async function pushBackgroundTask(data: unknown): Promise<void> {
     if (accountIds.length === 0) return;
 
     const registry = await readAccountRegistry();
-    activeAccountId = registry.activeAccountId;
-
     const payload = parseRelayPushData(data);
     const jmapAccountIds = await readPushJmapAccountIds();
-    const accountsToCheck = matchAccountsForPush(payload, accountIds, jmapAccountIds, registry.accounts);
+    const accountsToCheck = matchAccountsForPush(payload, accountIds, jmapAccountIds, registry);
 
     for (const accountId of accountsToCheck) {
       try {
@@ -236,14 +381,6 @@ export async function pushBackgroundTask(data: unknown): Promise<void> {
       '[push] background task failed:',
       error instanceof Error ? error.message : error,
     );
-  } finally {
-    // Leave the singleton bound to the user's active account so the UI sees
-    // a consistent jmapClient state when the app resumes. Without this, the
-    // last account processed above would remain loaded and the UI's cached
-    // email-store data would not match what the next JMAP request returns.
-    if (activeAccountId) {
-      await jmapClient.loadAccount(activeAccountId).catch(() => undefined);
-    }
   }
 }
 
@@ -259,8 +396,8 @@ export function selectNotifiableEmails(emails: Email[], alreadyNotified: readonl
 }
 
 async function processAccountForPush(accountId: string, payload: RelayPushData): Promise<void> {
-  const loaded = await jmapClient.loadAccount(accountId);
-  if (!loaded) return;
+  const session = await openDetachedSession(accountId);
+  if (!session) return;
 
   const alreadyNotified = await readNotifiedIds(accountId);
   let candidates: Email[];
@@ -271,30 +408,17 @@ async function processAccountForPush(accountId: string, payload: RelayPushData):
     // to, in which case the ids live under that JMAP account.
     const fresh = payload.emailIds.filter((id) => !alreadyNotified.includes(id));
     if (fresh.length === 0) return;
-    let accountOverride: string | undefined;
-    try {
-      if (payload.jmapAccountId && payload.jmapAccountId !== jmapClient.accountId) {
-        accountOverride = payload.jmapAccountId;
-      }
-    } catch {
-      accountOverride = undefined;
-    }
-    candidates = await getEmails(fresh, accountOverride);
+    const targetAccount = payload.jmapAccountId ?? session.jmapAccountId;
+    candidates = await detachedGetEmails(session, targetAccount, fresh);
   } else {
     // Legacy `jmap-state-change` payload without ids: look at the newest
     // unread inbox messages and notify the ones not shown before. The ring
     // of notified ids (rather than a single "last" id) is what keeps a
     // message read elsewhere from surfacing the next older one.
-    const mailboxes = await getMailboxes();
-    const inbox = mailboxes.find((m) => m.role === 'inbox');
-    if (!inbox) return;
-    const { ids } = await queryEmails(inbox.id, {
-      filter: { notKeyword: '$seen' },
-      limit: LEGACY_QUERY_LIMIT,
-    });
+    const ids = await detachedNewestUnreadInboxIds(session, LEGACY_QUERY_LIMIT);
     const fresh = ids.filter((id) => !alreadyNotified.includes(id));
     if (fresh.length === 0) return;
-    candidates = await getEmails(fresh);
+    candidates = await detachedGetEmails(session, session.jmapAccountId, fresh);
   }
 
   const toNotify = selectNotifiableEmails(candidates, alreadyNotified);

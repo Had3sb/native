@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../api/jmap-client', () => ({
-  jmapClient: { accountId: 'jmap-primary', loadAccount: vi.fn(async () => true) },
+  jmapClient: {
+    accountId: 'jmap-primary',
+    getStoredCredentials: vi.fn(async () => null),
+    setStoredCredentials: vi.fn(async () => undefined),
+  },
 }));
-vi.mock('../../api/email', () => ({
-  getEmails: vi.fn(async () => []),
-  getMailboxes: vi.fn(async () => []),
-  queryEmails: vi.fn(async () => ({ ids: [] })),
-}));
+vi.mock('../client-cert', () => ({ secureFetch: vi.fn(async () => ({ ok: false, status: 500 })) }));
+vi.mock('../oauth', () => ({ refreshOAuthAccessToken: vi.fn(async (t: unknown) => t) }));
 
 import {
   matchAccountsForPush,
