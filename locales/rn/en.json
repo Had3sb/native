@@ -6,8 +6,15 @@
     "not_starred": "Not starred"
   },
   "calendar": {
+    "agenda": {
+      "days_clear": "The next {count} days are clear.",
+      "no_upcoming": "No upcoming events"
+    },
     "event_modal": {
       "participant_placeholder": "Add participant by email"
+    },
+    "events": {
+      "tap_to_create": "Tap + to create one"
     },
     "invitation": {
       "accept": "Yes",
@@ -38,6 +45,12 @@
       "edit_calendar": "Edit calendar",
       "new_calendar": "New calendar"
     },
+    "settings": {
+      "show_week_numbers_mobile_desc": "Display week numbers in the month view.",
+      "time_zone": "Time zone",
+      "time_zone_auto": "Device time zone",
+      "time_zone_desc": "Zone used for new events and for interpreting the calendar. \"Device\" follows the phone."
+    },
     "share": {
       "add_people": "Add people",
       "error": "Failed to update sharing",
@@ -58,16 +71,29 @@
     "done": "Done",
     "remove": "Remove",
     "retry": "Retry",
-    "undo": "Undo"
+    "undo": "Undo",
+    "update": "Update"
   },
   "context_menu": {
     "color_tag": "Tag",
     "remove_color": "Remove tag"
   },
   "email_composer": {
+    "attach_camera": "Camera",
     "attachment_reminder_body": "Your message mentions \"{keyword}\" but no file is attached. Send anyway?",
     "attachment_reminder_title": "Forgot an attachment?",
+    "attachment_too_large": "This file is larger than the server allows ({size} > {max}).",
+    "attachments_too_large_total": "The attachments would exceed the {max} this server allows per message.",
     "editor_unavailable": "Could not read the message content. Copy your text, then close and reopen the composer.",
+    "identity_unavailable": "Identity unavailable",
+    "image_load_failed": "Could not load image",
+    "no_sent_folder": "No Sent folder found",
+    "permission_camera": "Camera permission is required to take a photo.",
+    "permission_photos": "Photo library permission is required to attach images.",
+    "recipient_add_contact": "Add to contacts",
+    "recipient_copy": "Copy address",
+    "recipient_move_to": "Move to {field}",
+    "recipient_remove": "Remove",
     "save_draft": "Save Draft",
     "schedule_custom": "Pick date & time…",
     "schedule_in_1h": "In 1 hour",
@@ -75,6 +101,7 @@
     "schedule_past_body": "The scheduled time must be in the future.",
     "schedule_past_title": "Pick a future time",
     "schedule_tomorrow": "Tomorrow, 8:00 AM",
+    "schedule_tomorrow_morning": "Tomorrow morning",
     "schedule_too_late_body": "That is later than this server allows. Pick an earlier time.",
     "schedule_too_late_title": "Too far ahead",
     "schedule_unsupported_body": "This mail server does not support scheduled send.",
@@ -85,6 +112,7 @@
     "send_timeout_body": "The message may already have gone out. Check your Sent folder before sending it again.",
     "send_timeout_title": "No answer from the server",
     "undo_send_label": "Sending in {seconds}s…",
+    "uploading": "Uploading...",
     "validation": {
       "subject_required": "Add a subject"
     }
@@ -121,6 +149,23 @@
     "unknown_tag": "not defined here"
   },
   "email_viewer": {
+    "address_actions": {
+      "add_contact": "Add to contacts",
+      "compose": "New message",
+      "copy": "Copy address",
+      "copy_failed": "Could not copy the address."
+    },
+    "attachment_actions": {
+      "open": "Open",
+      "preview": "Preview",
+      "save": "Save",
+      "share": "Share"
+    },
+    "attachment_failed": "Could not open attachment",
+    "authentication": {
+      "spoof_warning": "The sender address could not be verified - this message may be spoofed."
+    },
+    "bundle_too_large": "The attachments are too large to bundle.",
     "color_tag": {
       "blue": "Blue",
       "green": "Green",
@@ -132,8 +177,22 @@
       "title": "Color Tag",
       "yellow": "Yellow"
     },
+    "forwarded": "Forwarded",
+    "preview": {
+      "open_external": "Open in app",
+      "pdf_external": "PDFs open in your PDF viewer on this device.",
+      "unsupported": "No preview for this file type."
+    },
+    "received_via": "to {name}",
     "remove_color": "Remove tag",
-    "set_color": "Set tag"
+    "replied": "Replied",
+    "set_color": "Set tag",
+    "show_all_count": "Show all ({count})",
+    "show_less": "Show less",
+    "smime_unsupported": "Signed/encrypted with S/MIME - not supported on mobile",
+    "unsubscribe_banner": {
+      "no_identity": "No sending identity available"
+    }
   },
   "files": {
     "done": "Done",
@@ -147,6 +206,12 @@
     "share_role_custom": "Custom",
     "share_search_placeholder": "Search by name or email",
     "shared_with": "Shared with"
+  },
+  "identities": {
+    "badge": {
+      "to": "to {identity}",
+      "via": "via {identity}"
+    }
   },
   "login": {
     "mobile": {
@@ -274,6 +339,9 @@
       "language": {
         "restart_for_direction": "Restart the app to apply the new text direction.",
         "system_default": "System default"
+      },
+      "toolbar_labels": {
+        "description_mobile": "Display text labels next to toolbar icons."
       }
     },
     "badges": {
@@ -281,11 +349,113 @@
       "not_implemented": "Not implemented",
       "unavailable": "Unavailable"
     },
+    "downloads": {
+      "attachment_template": {
+        "description_mobile": "Template used when saving or sharing an attachment."
+      },
+      "email_template": {
+        "description_mobile": "Template used when exporting a message as an .eml file."
+      },
+      "strip_diacritics": {
+        "description_mobile": "Convert accented letters to plain ASCII (ä → a)."
+      },
+      "transform_description": "Applied to every exported filename.",
+      "transform_title": "Filename Transform"
+    },
+    "email_behavior": {
+      "archive_mode": {
+        "no_archive": "No archive folder found.",
+        "reorganize_result": "Moved {moved} of {total} emails.",
+        "reorganizing": "Reorganizing…"
+      },
+      "attachment_click_action": {
+        "description_mobile": "What happens when you tap an attachment."
+      },
+      "auto_select_reply_identity": {
+        "description_mobile": "When replying, send from the address the message was originally sent to."
+      },
+      "plain_text_mode": {
+        "description_mobile": "Compose and read in plain text only."
+      },
+      "send_delay": {
+        "description_mobile": "Hold outgoing mail for a few seconds so you can cancel it. Requires server support."
+      },
+      "swipe_actions": {
+        "move": "Move to folder",
+        "pin": "Pin"
+      },
+      "swipe_left_action": {
+        "description_mobile": "Action when you drag a row from its right edge towards the left.",
+        "label_mobile": "Swipe left (right → left)"
+      },
+      "swipe_right_action": {
+        "description_mobile": "Action when you drag a row from its left edge towards the right.",
+        "label_mobile": "Swipe right (left → right)"
+      }
+    },
     "experimental": {
       "title": "Experimental Feature"
     },
+    "identities": {
+      "cannot_delete": "The primary identity cannot be removed.",
+      "cannot_delete_title": "Cannot delete",
+      "count": "{count, plural, =0 {No identities} one {# identity} other {# identities}}",
+      "create": "New identity",
+      "delete_confirm": "Remove \"{name}\"?",
+      "delete_failed": "Delete failed",
+      "delete_title": "Delete identity",
+      "description_mobile": "Manage sender names, email addresses, and signatures. Tap a row to edit.",
+      "display_name": "Display name",
+      "edit": "Edit identity",
+      "email_address": "Email address",
+      "email_locked": "JMAP does not allow changing an identity's email; create a new one instead.",
+      "invalid_email": "Enter a valid email address for this identity.",
+      "invalid_email_title": "Invalid email",
+      "new": "New",
+      "no_name": "(no name)",
+      "primary": "primary",
+      "save_failed": "Save failed",
+      "text_signature": "Plain-text signature"
+    },
     "keywords": {
+      "description_mobile": "Colored tags to organize your mail.",
       "reset_defaults": "Reset to Defaults"
+    },
+    "layout": {
+      "description": "Tune the email list interactions for mobile.",
+      "quick_actions": {
+        "description": "The three buttons shown between Prev/Next at the bottom of an open email. Defaults to Reply, Reply All and Forward.",
+        "label": "Reader quick actions",
+        "mark_unread": "Mark Read/Unread",
+        "relocated": "{count, plural, one {{actions} is moved to the top toolbar so you can still use it.} other {{actions} are moved to the top toolbar so you can still use them.}}",
+        "slot": "Slot {n}",
+        "spam": "Spam",
+        "star": "Star",
+        "tag": "Tag"
+      },
+      "show_avatars_in_junk": "Show sender avatars in Junk",
+      "show_avatars_in_junk_description": "Load sender logos for messages in the Junk folder. Off keeps spam senders from being contacted.",
+      "show_folder_total_count": "Show total message count on folders",
+      "show_folder_total_count_description": "Show the total next to the unread count in the folder list.",
+      "swipe_mode": {
+        "instant": "Instant (swipe = action)",
+        "reveal": "Reveal (swipe, then tap)"
+      },
+      "unified_cross_account": "Unified views across accounts",
+      "unified_cross_account_description": "Combine every signed-in account in \"All inboxes\". Off keeps the unified views inside the active account and its shared folders."
+    },
+    "message_list_order": {
+      "description": "Which messages come first in the list. Newest first is the tie-breaker within each group; the header toggle still flips oldest/newest.",
+      "preset_chronological": "Newest first",
+      "preset_custom": "Custom",
+      "preset_starred_first": "Starred first",
+      "preset_tagged_first": "Tagged first",
+      "preset_unread_first": "Unread first",
+      "scope": "Apply to",
+      "scope_all": "All folders",
+      "scope_inbox": "Inbox only",
+      "tag": "Tag",
+      "title": "Message list order"
     },
     "notifications": {
       "email": {
@@ -357,12 +527,38 @@
         "title": "Public Keys"
       }
     },
+    "sidebar_apps": {
+      "add": "Add app",
+      "empty": "No apps added yet.",
+      "form": {
+        "name": "Name",
+        "name_placeholder": "App name",
+        "open_mode": "Open mode",
+        "show_on_mobile": "Show on mobile",
+        "url": "URL"
+      },
+      "keep_loaded_description_mobile": "Keep inline apps running in the background when switching away.",
+      "open_mode": {
+        "inline": "Inline",
+        "new_tab": "New tab",
+        "tab": "Tab"
+      }
+    },
     "smime": {
       "mobile_description": "Sign and encrypt mail with S/MIME certificates.",
       "mobile_explainer": "S/MIME is not available in the mobile app yet. Manage keys and certificates in the webmail; signed messages are shown without verification here."
     },
     "tabs": {
       "plugins": "Plugins"
+    },
+    "templates": {
+      "delete_title": "Delete template"
+    },
+    "themes": {
+      "default_description": "The default light and dark palettes.",
+      "default_name": "Bulwark",
+      "mobile_description": "Pick a colour theme. Themes follow the light/dark setting from Appearance; custom theme packages are managed in the webmail.",
+      "title": "Themes"
     },
     "vacation": {
       "warnings": {

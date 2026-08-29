@@ -17,11 +17,13 @@ import {
 import { useEmailStore } from '../../stores/email-store';
 import { archiveEmails, queryEmails, getEmails } from '../../api/email';
 import { ownMailboxes } from '../../lib/mailbox-tree';
+import { useLocaleStore } from '../../stores/locale-store';
 
 export function ReadingSettings() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const hydrated = useSettingsStore((s) => s.hydrated);
+  const t = useLocaleStore((s) => s.t);
   const hydrate = useSettingsStore((s) => s.hydrate);
   const update = useSettingsStore((s) => s.updateSetting);
 
@@ -59,7 +61,7 @@ export function ReadingSettings() {
       (m) => m.role === 'archive' || m.name.toLowerCase() === 'archive',
     );
     if (!archiveMailbox) {
-      setReorganizeResult('No archive folder found.');
+      setReorganizeResult(t('settings.email_behavior.archive_mode.no_archive', "No archive folder found."));
       return;
     }
 
@@ -100,58 +102,58 @@ export function ReadingSettings() {
         if (ids.length < PAGE) break;
       }
 
-      setReorganizeResult(`Moved ${moved} of ${total} emails.`);
+      setReorganizeResult(t('settings.email_behavior.archive_mode.reorganize_result', 'Moved {moved} of {total} emails.', { moved, total }));
     } catch (err) {
-      setReorganizeResult(err instanceof Error ? err.message : 'Reorganize failed.');
+      setReorganizeResult(err instanceof Error ? err.message : t('settings.email_behavior.archive_mode.reorganize_error', "Failed to reorganize archive"));
     } finally {
       setReorganizing(false);
     }
   };
 
   return (
-    <SettingsSection title="Email Behavior" description="How your inbox behaves day to day.">
-      <SettingItem label="Mark as Read" description="When to flag an email as read.">
+    <SettingsSection title={t('settings.email_behavior.title', "Email Behavior")} description={t('settings.email_behavior.description', "Configure how emails are handled")}>
+      <SettingItem label={t('settings.email_behavior.mark_read.label', "Mark as Read")} description={t('settings.email_behavior.mark_read.description', "When to mark emails as read when opened")}>
         <Select
           value={String(markAsReadDelay)}
           onChange={(v) => update('markAsReadDelay', Number(v))}
           options={[
-            { value: '0', label: 'Instant' },
-            { value: '3000', label: 'After 3s' },
-            { value: '5000', label: 'After 5s' },
-            { value: '-1', label: 'Never' },
+            { value: '0', label: t('settings.email_behavior.mark_read.instant', "Instantly") },
+            { value: '3000', label: t('settings.email_behavior.mark_read.delay_3s', "After 3 seconds") },
+            { value: '5000', label: t('settings.email_behavior.mark_read.delay_5s', "After 5 seconds") },
+            { value: '-1', label: t('settings.email_behavior.mark_read.never', "Never") },
           ]}
         />
       </SettingItem>
 
       <View style={styles.group}>
-        <SettingItem label="Delete Action" description="Where deleted emails go." noBorder />
+        <SettingItem label={t('settings.email_behavior.delete_action.label', "Delete Action")} description={t('settings.email_behavior.delete_action.description', "What happens when you delete an email")} noBorder />
         <Select
           value={deleteAction}
           onChange={(v) => update('deleteAction', v as DeleteAction)}
           options={[
-            { value: 'trash', label: 'Move to Trash' },
-            { value: 'trash-and-read', label: 'Move to Trash and mark as read' },
-            { value: 'permanent', label: 'Permanently delete' },
+            { value: 'trash', label: t('settings.email_behavior.delete_action.trash', "Move to Trash") },
+            { value: 'trash-and-read', label: t('settings.email_behavior.delete_action.trash_and_read', "Move to Trash and mark as read") },
+            { value: 'permanent', label: t('settings.email_behavior.delete_action.permanent', "Delete Permanently") },
           ]}
         />
         {deleteAction === 'permanent' && (
           <View style={styles.warning}>
             <AlertTriangle size={14} color={c.error} />
-            <Text style={styles.warningText}>Permanent deletion cannot be undone.</Text>
+            <Text style={styles.warningText}>{t('settings.email_behavior.delete_action.warning', "Emails will be permanently deleted and cannot be recovered. This action is irreversible.")}</Text>
           </View>
         )}
         <View style={styles.divider} />
       </View>
 
       <View style={styles.group}>
-        <SettingItem label="Archive Mode" description="Organize archive into subfolders." noBorder />
+        <SettingItem label={t('settings.email_behavior.archive_mode.label', "Archive in")} description={t('settings.email_behavior.archive_mode.description', "How to organize emails when archiving")} noBorder />
         <Select
           value={archiveMode}
           onChange={(v) => update('archiveMode', v as ArchiveMode)}
           options={[
-            { value: 'single', label: 'Single folder' },
-            { value: 'year', label: 'By year' },
-            { value: 'month', label: 'By year/month' },
+            { value: 'single', label: t('settings.email_behavior.archive_mode.single', "A single folder") },
+            { value: 'year', label: t('settings.email_behavior.archive_mode.year', "A folder per year") },
+            { value: 'month', label: t('settings.email_behavior.archive_mode.month', "A folder per month") },
           ]}
         />
         {archiveMode !== 'single' && (
@@ -167,7 +169,7 @@ export function ReadingSettings() {
                 <FolderSync size={14} color={c.text} />
               )}
               <Text style={styles.inlineBtnText}>
-                {reorganizing ? 'Reorganizing…' : 'Reorganize existing archive'}
+                {reorganizing ? t('settings.email_behavior.archive_mode.reorganizing', "Reorganizing…") : t('settings.email_behavior.archive_mode.reorganize', "Reorganize existing archive")}
               </Text>
             </Pressable>
             {reorganizeResult && (
@@ -178,31 +180,31 @@ export function ReadingSettings() {
         <View style={styles.divider} />
       </View>
 
-      <SettingItem label="Permanently Delete Junk" description="Skip the trash when deleting spam.">
+      <SettingItem label={t('settings.email_behavior.permanently_delete_junk.label', "Permanently Delete Junk")} description={t('settings.email_behavior.permanently_delete_junk.description', "Permanently delete emails from the Junk/Spam folder instead of moving them to Trash")}>
         <ToggleSwitch checked={permanentlyDeleteJunk} onChange={(v) => update('permanentlyDeleteJunk', v)} />
       </SettingItem>
 
-      <SettingItem label="Show Preview" description="Preview text under each subject.">
+      <SettingItem label={t('settings.email_behavior.show_preview.label', "Show Preview Text")} description={t('settings.email_behavior.show_preview.description', "Display email preview in the list")}>
         <ToggleSwitch checked={showPreview} onChange={(v) => update('showPreview', v)} />
       </SettingItem>
 
-      <SettingItem label="Disable Thread Grouping" description="Show emails individually instead of threaded.">
+      <SettingItem label={t('settings.email_behavior.disable_threading.label', "Disable Conversation Grouping")} description={t('settings.email_behavior.disable_threading.description', "Show emails as individual messages instead of grouped by conversation")}>
         <ToggleSwitch checked={disableThreading} onChange={(v) => update('disableThreading', v)} />
       </SettingItem>
 
-      <SettingItem label="Include Group Inboxes" description="Also show group and shared inboxes in the unified All Inboxes view.">
+      <SettingItem label={t('settings.appearance.unified_mailbox.include_group.label', "Include group inboxes")} description={t('settings.appearance.unified_mailbox.include_group.description', "Also merge shared/group inboxes into the unified view.")}>
         <ToggleSwitch checked={includeGroupInUnified} onChange={(v) => update('includeGroupInUnified', v)} />
       </SettingItem>
 
-      <SettingItem label="Plain Text Mode" description="Compose and read in plain text only.">
+      <SettingItem label={t('settings.email_behavior.plain_text_mode.label', "Plain Text Only")} description={t('settings.email_behavior.plain_text_mode.description_mobile', "Compose and read in plain text only.")}>
         <ToggleSwitch checked={plainTextMode} onChange={(v) => update('plainTextMode', v)} />
       </SettingItem>
 
-      <SettingItem label="Auto-select Reply Identity" description="Pick the best identity when replying.">
+      <SettingItem label={t('settings.email_behavior.auto_select_reply_identity.label', "Reply From Received Address")} description={t('settings.email_behavior.auto_select_reply_identity.description_mobile', "When replying, send from the address the message was originally sent to.")}>
         <ToggleSwitch checked={autoSelectReplyIdentity} onChange={(v) => update('autoSelectReplyIdentity', v)} />
       </SettingItem>
 
-      <SettingItem label="Attachment Reminder" description="Warn when the word 'attached' is present but no file is attached.">
+      <SettingItem label={t('settings.email_behavior.attachment_reminder.label', "Attachment Reminder")} description={t('settings.email_behavior.attachment_reminder.description', "Warn before sending when your message mentions attachments but none are attached")}>
         <ToggleSwitch
           checked={attachmentReminderEnabled}
           onChange={(v) => update('attachmentReminderEnabled', v)}
@@ -211,8 +213,8 @@ export function ReadingSettings() {
 
       {attachmentReminderEnabled && (
         <View style={styles.group}>
-          <Text style={styles.subLabel}>Trigger Keywords</Text>
-          <Text style={styles.subDesc}>Add words that should trigger the reminder.</Text>
+          <Text style={styles.subLabel}>{t('settings.email_behavior.attachment_reminder.keywords_label', "Trigger keywords")}</Text>
+          <Text style={styles.subDesc}>{t('settings.email_behavior.attachment_reminder.keywords_description', "Words or phrases that trigger the reminder when found in your message")}</Text>
           <View style={styles.chipRow}>
             {attachmentReminderKeywords.map((kw) => (
               <View key={kw} style={styles.chip}>
@@ -235,7 +237,7 @@ export function ReadingSettings() {
             <TextInput
               value={newKeyword}
               onChangeText={setNewKeyword}
-              placeholder="Add a keyword"
+              placeholder={t('settings.email_behavior.attachment_reminder.add_placeholder', "Add keyword...")}
               placeholderTextColor={c.mutedForeground}
               style={styles.keywordInput}
               onSubmitEditing={() => {
@@ -256,35 +258,35 @@ export function ReadingSettings() {
                 setNewKeyword('');
               }}
             >
-              <Text style={styles.addKeywordText}>Add</Text>
+              <Text style={styles.addKeywordText}>{t('settings.email_behavior.attachment_reminder.add', "Add")}</Text>
             </Pressable>
           </View>
           <View style={styles.divider} />
         </View>
       )}
 
-      <SettingItem label="Hide Inline Image Attachments" description="Don't list inline images in the attachment list.">
+      <SettingItem label={t('settings.email_behavior.hide_inline_image_attachments.label', "Hide inline images from attachments")} description={t('settings.email_behavior.hide_inline_image_attachments.description', "Images embedded in the message body are not listed as separate attachments")}>
         <ToggleSwitch checked={hideInlineImageAttachments} onChange={(v) => update('hideInlineImageAttachments', v)} />
       </SettingItem>
 
-      <SettingItem label="Attachment Click Action" description="What happens when you tap an attachment.">
+      <SettingItem label={t('settings.email_behavior.attachment_click_action.label', "Attachment Click Action")} description={t('settings.email_behavior.attachment_click_action.description_mobile', "What happens when you tap an attachment.")}>
         <Select
           value={mailAttachmentAction}
           onChange={(v) => update('mailAttachmentAction', v as MailAttachmentAction)}
           options={[
-            { value: 'preview', label: 'Preview' },
-            { value: 'download', label: 'Download' },
+            { value: 'preview', label: t('settings.email_behavior.attachment_click_action.preview', "Preview when possible") },
+            { value: 'download', label: t('settings.email_behavior.attachment_click_action.download', "Download immediately") },
           ]}
         />
       </SettingItem>
 
-      <SettingItem label="Attachment Position" description="Where attachments appear in messages.">
+      <SettingItem label={t('settings.email_behavior.attachment_position.label', "Attachment Position")} description={t('settings.email_behavior.attachment_position.description', "Where to display attachments in the email header")}>
         <Select
           value={attachmentPosition}
           onChange={(v) => update('attachmentPosition', v as AttachmentPosition)}
           options={[
-            { value: 'beside-sender', label: 'Beside sender' },
-            { value: 'below-header', label: 'Below header' },
+            { value: 'beside-sender', label: t('settings.email_behavior.attachment_position.beside-sender', "Next to sender") },
+            { value: 'below-header', label: t('settings.email_behavior.attachment_position.below-header', "Below header") },
           ]}
         />
       </SettingItem>
@@ -324,7 +326,7 @@ export function ReadingSettings() {
         />
       </SettingItem>
 
-      <SettingItem label="Emails Per Page" description="How many emails to load at a time.">
+      <SettingItem label={t('settings.email_behavior.emails_per_page.label', "Emails Per Page")} description={t('settings.email_behavior.emails_per_page.description', "Number of emails to load at once")}>
         <Select
           value={String(emailsPerPage)}
           onChange={(v) => update('emailsPerPage', Number(v))}

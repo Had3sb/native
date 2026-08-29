@@ -6,6 +6,7 @@ import { spacing, radius, typography, type ThemePalette } from '../../theme/toke
 import { useColors } from '../../theme/colors';
 import { useKeywordsStore, type KeywordDef } from '../../stores/keywords-store';
 import { DARK_COLORS } from '../../theme/tokens';
+import { useLocaleStore } from '../../stores/locale-store';
 
 type Keyword = KeywordDef;
 
@@ -17,6 +18,7 @@ export function KeywordSettings() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const keywords = useKeywordsStore((s) => s.keywords);
+  const t = useLocaleStore((s) => s.t);
   const addKeyword = useKeywordsStore((s) => s.add);
   const updateKeyword = useKeywordsStore((s) => s.update);
   const removeKeyword = useKeywordsStore((s) => s.remove);
@@ -45,7 +47,7 @@ export function KeywordSettings() {
   };
 
   return (
-    <SettingsSection title="Keywords & Labels" description="Colored tags to organize your mail.">
+    <SettingsSection title={t('settings.keywords.title', "Email Tags")} description={t('settings.keywords.description_mobile', "Colored tags to organize your mail.")}>
       <View style={{ gap: spacing.sm }}>
         {keywords.map((kw) => {
           if (editingId === kw.id) {
@@ -66,10 +68,10 @@ export function KeywordSettings() {
               <Text style={styles.kwLabel}>{kw.label}</Text>
               <Text style={styles.kwId}>$label:{kw.id}</Text>
               <View style={{ flexDirection: 'row', gap: 2 }}>
-                <Pressable style={styles.iconBtn} onPress={() => setEditingId(kw.id)}>
+                <Pressable style={styles.iconBtn} onPress={() => setEditingId(kw.id)} accessibilityRole="button" accessibilityLabel={t('settings.keywords.edit', "Edit tag")}>
                   <Pencil size={14} color={c.mutedForeground} />
                 </Pressable>
-                <Pressable style={styles.iconBtn} onPress={() => deleteKeyword(kw.id)}>
+                <Pressable style={styles.iconBtn} onPress={() => deleteKeyword(kw.id)} accessibilityRole="button" accessibilityLabel={t('settings.keywords.delete', "Delete tag")}>
                   <Trash2 size={14} color={c.mutedForeground} />
                 </Pressable>
               </View>
@@ -89,11 +91,11 @@ export function KeywordSettings() {
           <View style={styles.bottomActions}>
             <Pressable style={styles.outlineBtn} onPress={() => setIsAdding(true)}>
               <Plus size={14} color={c.mutedForeground} />
-              <Text style={styles.outlineBtnText}>Add keyword</Text>
+              <Text style={styles.outlineBtnText}>{t('settings.keywords.add_keyword', "Add Tag")}</Text>
             </Pressable>
             <Pressable style={styles.outlineBtn} onPress={resetDefaults}>
               <RotateCcw size={14} color={c.mutedForeground} />
-              <Text style={styles.outlineBtnText}>Reset defaults</Text>
+              <Text style={styles.outlineBtnText}>{t('settings.keywords.reset_defaults', "Reset to Defaults")}</Text>
             </Pressable>
           </View>
         )}
@@ -112,6 +114,7 @@ interface KeywordFormProps {
 function KeywordForm({ initial, existingIds, onSave, onCancel }: KeywordFormProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [label, setLabel] = useState(initial?.label ?? '');
   const [color, setColor] = useState<keyof typeof DARK_COLORS.tags>(initial?.color ?? 'blue');
 
@@ -133,21 +136,21 @@ function KeywordForm({ initial, existingIds, onSave, onCancel }: KeywordFormProp
   return (
     <View style={styles.form}>
       <View>
-        <Text style={styles.formLabel}>Label</Text>
+        <Text style={styles.formLabel}>{t('settings.keywords.label_field', "Display Name")}</Text>
         <TextInput
           value={label}
           onChangeText={setLabel}
-          placeholder="e.g. Important"
+          placeholder={t('settings.keywords.label_placeholder', "e.g. Work, Personal, Urgent")}
           placeholderTextColor={c.mutedForeground}
           style={styles.input}
           maxLength={30}
           autoFocus
         />
-        {isDuplicate && <Text style={styles.errorText}>An ID with that name already exists.</Text>}
+        {isDuplicate && <Text style={styles.errorText}>{t('settings.keywords.id_exists', "This tag ID already exists")}</Text>}
       </View>
 
       <View>
-        <Text style={styles.formLabel}>Color</Text>
+        <Text style={styles.formLabel}>{t('settings.keywords.color_field', "Color")}</Text>
         <View style={styles.palette}>
           {PALETTE_KEYS.map((key) => {
             const p = c.tags[key];
@@ -155,6 +158,9 @@ function KeywordForm({ initial, existingIds, onSave, onCancel }: KeywordFormProp
               <Pressable
                 key={key}
                 onPress={() => setColor(key)}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: color === key }}
+                accessibilityLabel={key}
                 style={[
                   styles.colorSwatch,
                   { backgroundColor: p.dot },
@@ -169,7 +175,7 @@ function KeywordForm({ initial, existingIds, onSave, onCancel }: KeywordFormProp
       <View style={styles.formActions}>
         <Pressable style={styles.cancelFormBtn} onPress={onCancel}>
           <X size={14} color={c.text} />
-          <Text style={styles.cancelFormText}>Cancel</Text>
+          <Text style={styles.cancelFormText}>{t('common.cancel', "Cancel")}</Text>
         </Pressable>
         <Pressable
           style={[styles.saveBtn, !isValid && { opacity: 0.5 }]}
@@ -177,7 +183,7 @@ function KeywordForm({ initial, existingIds, onSave, onCancel }: KeywordFormProp
           disabled={!isValid}
         >
           <Check size={14} color={c.primaryForeground} />
-          <Text style={styles.saveBtnText}>{initial ? 'Save' : 'Add'}</Text>
+          <Text style={styles.saveBtnText}>{initial ? t('common.save', "Save") : t('common.add', "Add")}</Text>
         </Pressable>
       </View>
     </View>

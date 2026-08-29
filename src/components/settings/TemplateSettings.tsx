@@ -16,10 +16,12 @@ import Button from '../Button';
 import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { useTemplatesStore, type EmailTemplate } from '../../stores/templates-store';
+import { useLocaleStore } from '../../stores/locale-store';
 
 export function TemplateSettings() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const tr = useLocaleStore((s) => s.t);
   const templates = useTemplatesStore((s) => s.templates);
   const hydrated = useTemplatesStore((s) => s.hydrated);
   const hydrate = useTemplatesStore((s) => s.hydrate);
@@ -68,7 +70,7 @@ export function TemplateSettings() {
   const saveDraft = () => {
     const name = draftName.trim();
     if (!name) {
-      Alert.alert('Template name required');
+      Alert.alert(tr('settings.templates.validation.empty', "Template name is required"));
       return;
     }
     if (!editing) return;
@@ -82,11 +84,11 @@ export function TemplateSettings() {
 
   const confirmDelete = (t: EmailTemplate) => {
     Alert.alert(
-      'Delete template',
-      `Permanently delete "${t.name}"?`,
+      tr('settings.templates.delete_title', "Delete template"),
+      tr('settings.templates.delete_confirm', 'Permanently delete "{name}"?', { name: t.name }),
       [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => deleteTemplate(t.id) },
+        { text: tr('common.cancel', 'Cancel'), style: 'cancel' },
+        { text: tr('common.delete', 'Delete'), style: 'destructive', onPress: () => deleteTemplate(t.id) },
       ],
     );
   };
@@ -94,40 +96,43 @@ export function TemplateSettings() {
   const exportTemplatesAsShare = async () => {
     const json = exportAll();
     try {
-      await Share.share({ message: json, title: 'Templates export' });
+      await Share.share({ message: json, title: tr('settings.templates.export', 'Export') });
     } catch (err) {
-      Alert.alert('Export failed', err instanceof Error ? err.message : 'Unable to share');
+      Alert.alert(tr('settings.templates.export_failed', 'Export failed'), err instanceof Error ? err.message : tr('settings.templates.share_unavailable', 'Unable to share'));
     }
   };
 
   const performImport = () => {
     const result = importTemplates(importText);
     if (result.error) {
-      Alert.alert('Import failed', result.error);
+      Alert.alert(tr('settings.templates.import_failed', 'Import failed'), result.error);
       return;
     }
     setImportText('');
     setImportVisible(false);
-    Alert.alert('Imported', `${result.count} template${result.count === 1 ? '' : 's'} added.`);
+    Alert.alert(
+      tr('settings.templates.imported', 'Imported'),
+      tr('settings.templates.imported_count', '{count, plural, one {# template} other {# templates}} added.', { count: result.count }),
+    );
   };
 
   return (
     <View style={styles.container}>
-      <SettingsSection title="Templates" description="Reusable snippets for common replies. Tap one to edit; long-press to delete.">
+      <SettingsSection title={tr('settings.templates.title', 'Email Templates')} description={tr('settings.templates.description_mobile', 'Reusable snippets for common replies. Tap one to edit; long-press to delete.')}>
         <View style={styles.headerRow}>
           <View style={styles.countRow}>
             <FileText size={16} color={c.mutedForeground} />
             <Text style={styles.count}>
-              {templates.length === 1 ? '1 template' : `${templates.length} templates`}
+              {tr('settings.templates.count', '{count, plural, one {# template} other {# templates}}', { count: templates.length })}
             </Text>
           </View>
           <Button variant="default" size="sm" onPress={openCreate} icon={<Plus size={14} color={c.primaryForeground} />}>
-            New
+            {tr('settings.templates.add', 'New Template')}
           </Button>
         </View>
 
         {templates.length === 0 ? (
-          <Text style={styles.emptyHint}>No templates yet. Tap "New" to add one.</Text>
+          <Text style={styles.emptyHint}>{tr('settings.templates.no_templates', 'No templates yet')}</Text>
         ) : (
           <View style={styles.list}>
             {templates.map((t) => (
@@ -143,7 +148,7 @@ export function TemplateSettings() {
                     <Text style={styles.listRowSubject} numberOfLines={1}>{t.subject}</Text>
                   )}
                 </View>
-                <Pressable onPress={() => confirmDelete(t)} hitSlop={8} style={styles.listRowDelete}>
+                <Pressable onPress={() => confirmDelete(t)} hitSlop={8} style={styles.listRowDelete} accessibilityRole="button" accessibilityLabel={tr('common.delete', 'Delete')}>
                   <Trash2 size={16} color={c.error} />
                 </Pressable>
               </Pressable>
@@ -152,7 +157,7 @@ export function TemplateSettings() {
         )}
       </SettingsSection>
 
-      <SettingsSection title="Export / Import" description="Back up or restore your templates as JSON.">
+      <SettingsSection title={tr('settings.templates.export_import', 'Export & Import')} description={tr('settings.templates.export_import_description', 'Back up your templates or transfer them to another device')}>
         <View style={styles.actions}>
           <Button
             variant="outline"
@@ -161,7 +166,7 @@ export function TemplateSettings() {
             icon={<Download size={14} color={c.text} />}
             onPress={() => { void exportTemplatesAsShare(); }}
           >
-            Share JSON
+            {tr('settings.templates.export', 'Export')}
           </Button>
           <Button
             variant="outline"
@@ -169,7 +174,7 @@ export function TemplateSettings() {
             icon={<Upload size={14} color={c.text} />}
             onPress={() => setImportVisible(true)}
           >
-            Import
+            {tr('settings.templates.import', 'Import')}
           </Button>
         </View>
       </SettingsSection>
@@ -180,42 +185,42 @@ export function TemplateSettings() {
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
-                {editing?.id ? 'Edit template' : 'New template'}
+                {editing?.id ? tr('settings.templates.edit', 'Edit Template') : tr('settings.templates.add', 'New Template')}
               </Text>
-              <Pressable onPress={closeEditor} hitSlop={8}>
+              <Pressable onPress={closeEditor} hitSlop={8} accessibilityRole="button" accessibilityLabel={tr('common.close', 'Close')}>
                 <X size={20} color={c.text} />
               </Pressable>
             </View>
             <ScrollView contentContainerStyle={styles.modalBody}>
-              <Text style={styles.fieldLabel}>Name</Text>
+              <Text style={styles.fieldLabel}>{tr('settings.templates.name', 'Template Name')}</Text>
               <TextInput
                 value={draftName}
                 onChangeText={setDraftName}
-                placeholder="Quick reply"
+                placeholder={tr('settings.templates.name_placeholder', 'e.g., Follow-up email')}
                 placeholderTextColor={c.textMuted}
                 style={styles.input}
               />
-              <Text style={styles.fieldLabel}>Subject</Text>
+              <Text style={styles.fieldLabel}>{tr('settings.templates.subject', 'Subject')}</Text>
               <TextInput
                 value={draftSubject}
                 onChangeText={setDraftSubject}
-                placeholder="(optional)"
+                placeholder={tr('settings.templates.subject_placeholder', 'Email subject line')}
                 placeholderTextColor={c.textMuted}
                 style={styles.input}
               />
-              <Text style={styles.fieldLabel}>Body</Text>
+              <Text style={styles.fieldLabel}>{tr('settings.templates.body', 'Body')}</Text>
               <TextInput
                 value={draftBody}
                 onChangeText={setDraftBody}
-                placeholder="Hi {recipient_name}, …"
+                placeholder={tr('settings.templates.body_placeholder', 'Email body content...')}
                 placeholderTextColor={c.textMuted}
                 multiline
                 style={[styles.input, styles.bodyInput]}
               />
             </ScrollView>
             <View style={styles.modalActions}>
-              <Button variant="outline" size="sm" onPress={closeEditor}>Cancel</Button>
-              <Button variant="default" size="sm" onPress={saveDraft}>Save</Button>
+              <Button variant="outline" size="sm" onPress={closeEditor}>{tr('common.cancel', 'Cancel')}</Button>
+              <Button variant="default" size="sm" onPress={saveDraft}>{tr('common.save', 'Save')}</Button>
             </View>
           </View>
         </View>
@@ -226,8 +231,8 @@ export function TemplateSettings() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Import templates</Text>
-              <Pressable onPress={() => setImportVisible(false)} hitSlop={8}>
+              <Text style={styles.modalTitle}>{tr('settings.templates.import', 'Import')}</Text>
+              <Pressable onPress={() => setImportVisible(false)} hitSlop={8} accessibilityRole="button" accessibilityLabel={tr('common.close', 'Close')}>
                 <X size={20} color={c.text} />
               </Pressable>
             </View>
@@ -245,9 +250,9 @@ export function TemplateSettings() {
               />
             </ScrollView>
             <View style={styles.modalActions}>
-              <Button variant="outline" size="sm" onPress={() => setImportVisible(false)}>Cancel</Button>
+              <Button variant="outline" size="sm" onPress={() => setImportVisible(false)}>{tr('common.cancel', 'Cancel')}</Button>
               <Button variant="default" size="sm" onPress={performImport} disabled={!importText.trim()}>
-                Import
+                {tr('settings.templates.import', 'Import')}
               </Button>
             </View>
           </View>

@@ -6,11 +6,13 @@ import Button from '../Button';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { useSettingsStore } from '../../stores/settings-store';
+import { useLocaleStore } from '../../stores/locale-store';
 
 export function ComposingSettings() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const autoSelectReplyIdentity = useSettingsStore((s) => s.autoSelectReplyIdentity);
+  const t = useLocaleStore((s) => s.t);
   const setAutoSelectReplyIdentity = useSettingsStore((s) => s.setAutoSelectReplyIdentity);
   const attachmentReminderEnabled = useSettingsStore((s) => s.attachmentReminderEnabled);
   const setAttachmentReminderEnabled = useSettingsStore((s) => s.setAttachmentReminderEnabled);
@@ -40,29 +42,29 @@ export function ComposingSettings() {
   };
 
   const SEND_DELAY_OPTIONS: { label: string; value: number }[] = [
-    { label: 'Off', value: 0 },
-    { label: '5s', value: 5 },
-    { label: '10s', value: 10 },
-    { label: '20s', value: 20 },
-    { label: '30s', value: 30 },
+    // Same set the webmail accepts (0/10/30/60); the store rejects others.
+    { label: t('settings.email_behavior.send_delay.off', "Off"), value: 0 },
+    { label: t('settings.email_behavior.send_delay.seconds', '{seconds} seconds', { seconds: 10 }), value: 10 },
+    { label: t('settings.email_behavior.send_delay.seconds', '{seconds} seconds', { seconds: 30 }), value: 30 },
+    { label: t('settings.email_behavior.send_delay.seconds', '{seconds} seconds', { seconds: 60 }), value: 60 },
   ];
 
   return (
     <SettingsSection
-      title="Composing"
-      description="How the composer behaves when you reply, forward, or send."
+      title={t('settings.composer.title', "Composer")}
+      description={t('settings.composer.description', "Configure email composition settings")}
     >
       <SettingItem
-        label="Auto-select reply identity"
-        description="When replying, pick the identity that received the original message."
+        label={t('settings.email_behavior.auto_select_reply_identity.label', "Reply From Received Address")}
+        description={t('settings.email_behavior.auto_select_reply_identity.description_mobile', "When replying, send from the address the message was originally sent to.")}
       >
         <ToggleSwitch checked={autoSelectReplyIdentity} onChange={setAutoSelectReplyIdentity} />
       </SettingItem>
 
       <View style={styles.subBlock}>
-        <Text style={styles.subLabel}>Undo send delay</Text>
+        <Text style={styles.subLabel}>{t('settings.email_behavior.send_delay.label', "Undo send / send delay")}</Text>
         <Text style={styles.subDescription}>
-          Hold outgoing mail for a few seconds so you can cancel it. Requires server support.
+          {t('settings.email_behavior.send_delay.description_mobile', "Hold outgoing mail for a few seconds so you can cancel it. Requires server support.")}
         </Text>
         <View style={styles.segmentRow}>
           {SEND_DELAY_OPTIONS.map((opt) => {
@@ -83,8 +85,8 @@ export function ComposingSettings() {
       </View>
 
       <SettingItem
-        label="Attachment reminder"
-        description="Warn before sending if the message mentions an attachment but none is attached."
+        label={t('settings.email_behavior.attachment_reminder.label', "Attachment Reminder")}
+        description={t('settings.email_behavior.attachment_reminder.description', "Warn before sending when your message mentions attachments but none are attached")}
       >
         <ToggleSwitch
           checked={attachmentReminderEnabled}
@@ -94,9 +96,9 @@ export function ComposingSettings() {
 
       {attachmentReminderEnabled && (
         <View style={styles.subBlock}>
-          <Text style={styles.subLabel}>Trigger keywords</Text>
+          <Text style={styles.subLabel}>{t('settings.email_behavior.attachment_reminder.keywords_label', "Trigger keywords")}</Text>
           <Text style={styles.subDescription}>
-            Words that, when found in the body or subject without an attachment, trigger the reminder.
+            {t('settings.email_behavior.attachment_reminder.keywords_description', "Words or phrases that trigger the reminder when found in your message")}
           </Text>
 
           <View style={styles.chips}>
@@ -114,7 +116,7 @@ export function ComposingSettings() {
             <TextInput
               value={newKeyword}
               onChangeText={setNewKeyword}
-              placeholder="e.g. attached"
+              placeholder={t('settings.email_behavior.attachment_reminder.add_placeholder', "Add keyword...")}
               placeholderTextColor={c.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
@@ -129,7 +131,7 @@ export function ComposingSettings() {
               disabled={!newKeyword.trim()}
               icon={<Plus size={14} color={c.primaryForeground} />}
             >
-              Add
+              {t('settings.email_behavior.attachment_reminder.add', "Add")}
             </Button>
           </View>
         </View>

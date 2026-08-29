@@ -8,6 +8,7 @@ import Button from '../Button';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { useSettingsStore, type SidebarApp } from '../../stores/settings-store';
+import { useLocaleStore } from '../../stores/locale-store';
 
 export function SidebarAppsSettings() {
   const c = useColors();
@@ -16,6 +17,7 @@ export function SidebarAppsSettings() {
   const hydrate = useSettingsStore((s) => s.hydrate);
   const update = useSettingsStore((s) => s.updateSetting);
   const apps = useSettingsStore((s) => s.sidebarApps);
+  const t = useLocaleStore((s) => s.t);
   const keepLoaded = useSettingsStore((s) => s.keepAppsLoaded);
   const addSidebarApp = useSettingsStore((s) => s.addSidebarApp);
   const updateSidebarApp = useSettingsStore((s) => s.updateSidebarApp);
@@ -44,16 +46,16 @@ export function SidebarAppsSettings() {
 
   return (
     <View style={styles.container}>
-      <SettingsSection title="Sidebar Apps" description="Embedded web apps accessible from the sidebar.">
-        <SettingItem label="Keep apps loaded" description="Maintain app state when switching away.">
+      <SettingsSection title={t('settings.sidebar_apps.title', "Sidebar Apps")} description={t('settings.sidebar_apps.description', "Manage custom apps and links in your sidebar")}>
+        <SettingItem label={t('settings.sidebar_apps.keep_loaded', "Keep Apps Loaded")} description={t('settings.sidebar_apps.keep_loaded_description_mobile', "Keep inline apps running in the background when switching away.")}>
           <ToggleSwitch checked={keepLoaded} onChange={(v) => update('keepAppsLoaded', v)} />
         </SettingItem>
       </SettingsSection>
 
-      <SettingsSection title="Manage Apps" description="Add, edit, or remove sidebar apps.">
+      <SettingsSection title={t('settings.sidebar_apps.manage_title', "Custom Apps")} description={t('settings.sidebar_apps.manage_description', "Add, edit, or remove custom apps from your sidebar")}>
         <View style={{ gap: spacing.md }}>
           {apps.length === 0 && !isAdding && (
-            <Text style={styles.emptyText}>No apps added yet.</Text>
+            <Text style={styles.emptyText}>{t('settings.sidebar_apps.empty', "No apps added yet.")}</Text>
           )}
 
           {apps.map((app) => {
@@ -83,15 +85,15 @@ export function SidebarAppsSettings() {
                 ]}>
                   <Text style={[
                     styles.modeBadgeText,
-                    { color: app.openMode === 'inline' ? '#60a5fa' : c.mutedForeground },
+                    { color: app.openMode === 'inline' ? c.primary : c.mutedForeground },
                   ]}>
-                    {app.openMode === 'inline' ? 'Inline' : 'Tab'}
+                    {app.openMode === 'inline' ? t('settings.sidebar_apps.open_mode.inline', "Inline") : t('settings.sidebar_apps.open_mode.tab', "Tab")}
                   </Text>
                 </View>
-                <Pressable style={styles.iconBtn} onPress={() => setEditingId(app.id)}>
+                <Pressable style={styles.iconBtn} onPress={() => setEditingId(app.id)} accessibilityRole="button" accessibilityLabel={t('common.edit', "Edit")}>
                   <Pencil size={14} color={c.mutedForeground} />
                 </Pressable>
-                <Pressable style={styles.iconBtn} onPress={() => removeApp(app.id)}>
+                <Pressable style={styles.iconBtn} onPress={() => removeApp(app.id)} accessibilityRole="button" accessibilityLabel={t('common.delete', "Delete")}>
                   <Trash2 size={14} color={c.mutedForeground} />
                 </Pressable>
               </View>
@@ -108,7 +110,7 @@ export function SidebarAppsSettings() {
           {!isAdding && editingId === null && (
             <Pressable style={styles.addBtn} onPress={() => setIsAdding(true)}>
               <Plus size={16} color={c.text} />
-              <Text style={styles.addBtnText}>Add app</Text>
+              <Text style={styles.addBtnText}>{t('settings.sidebar_apps.add', "Add app")}</Text>
             </Pressable>
           )}
         </View>
@@ -126,6 +128,7 @@ interface AppFormProps {
 function AppForm({ initial, onSave, onCancel }: AppFormProps) {
   const c = useColors();
   const formStyles = React.useMemo(() => makeFormStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [name, setName] = useState(initial?.name ?? '');
   const [url, setUrl] = useState(initial?.url ?? '');
   const [openMode, setOpenMode] = useState<'tab' | 'inline'>(initial?.openMode ?? 'tab');
@@ -136,18 +139,18 @@ function AppForm({ initial, onSave, onCancel }: AppFormProps) {
   return (
     <View style={formStyles.form}>
       <View>
-        <Text style={formStyles.label}>Name</Text>
+        <Text style={formStyles.label}>{t('settings.sidebar_apps.form.name', "Name")}</Text>
         <TextInput
           value={name}
           onChangeText={setName}
-          placeholder="App name"
+          placeholder={t('settings.sidebar_apps.form.name_placeholder', "App name")}
           placeholderTextColor={c.mutedForeground}
           style={formStyles.input}
         />
       </View>
 
       <View>
-        <Text style={formStyles.label}>URL</Text>
+        <Text style={formStyles.label}>{t('settings.sidebar_apps.form.url', "URL")}</Text>
         <TextInput
           value={url}
           onChangeText={setUrl}
@@ -160,7 +163,7 @@ function AppForm({ initial, onSave, onCancel }: AppFormProps) {
       </View>
 
       <View>
-        <Text style={formStyles.label}>Open mode</Text>
+        <Text style={formStyles.label}>{t('settings.sidebar_apps.form.open_mode', "Open mode")}</Text>
         <View style={{ flexDirection: 'row', gap: spacing.sm }}>
           <Pressable
             onPress={() => setOpenMode('tab')}
@@ -168,7 +171,7 @@ function AppForm({ initial, onSave, onCancel }: AppFormProps) {
           >
             <ExternalLink size={14} color={openMode === 'tab' ? c.primary : c.text} />
             <Text style={[formStyles.modeBtnText, openMode === 'tab' && { color: c.primary }]}>
-              New tab
+              {t('settings.sidebar_apps.open_mode.new_tab', "New tab")}
             </Text>
           </Pressable>
           <Pressable
@@ -177,25 +180,25 @@ function AppForm({ initial, onSave, onCancel }: AppFormProps) {
           >
             <PanelRight size={14} color={openMode === 'inline' ? c.primary : c.text} />
             <Text style={[formStyles.modeBtnText, openMode === 'inline' && { color: c.primary }]}>
-              Inline
+              {t('settings.sidebar_apps.open_mode.inline', "Inline")}
             </Text>
           </Pressable>
         </View>
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text style={formStyles.label}>Show on mobile</Text>
+        <Text style={formStyles.label}>{t('settings.sidebar_apps.form.show_on_mobile', "Show on mobile")}</Text>
         <ToggleSwitch checked={showOnMobile} onChange={setShowOnMobile} />
       </View>
 
       <View style={{ flexDirection: 'row', gap: spacing.sm, justifyContent: 'flex-end' }}>
-        <Button variant="ghost" size="sm" onPress={onCancel}>Cancel</Button>
+        <Button variant="ghost" size="sm" onPress={onCancel}>{t('common.cancel', "Cancel")}</Button>
         <Button
           size="sm"
           disabled={!canSave}
           onPress={() => onSave({ name: name.trim(), url: url.trim(), icon: 'Globe', openMode, showOnMobile })}
         >
-          {initial ? 'Update' : 'Add'}
+          {initial ? t('common.update', "Update") : t('common.add', "Add")}
         </Button>
       </View>
     </View>
