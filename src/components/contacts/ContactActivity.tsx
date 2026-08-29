@@ -7,14 +7,17 @@ import { format, isAfter, parseISO } from 'date-fns';
 import type { ContactCard, Email, CalendarEvent } from '../../api/types';
 import type { RootStackParamList } from '../../navigation/types';
 import { getEmails, queryEmailsByFilter } from '../../api/email';
+import { getEvents, queryEvents } from '../../api/calendar';
 import { useCalendarStore } from '../../stores/calendar-store';
 import { getEventColor } from '../../lib/calendar-utils';
+import { hasCalendarCapability } from '../../lib/capabilities';
 import SenderAvatar from '../SenderAvatar';
 import { radius, spacing, typography, componentSizes, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 
 const EMAIL_LIMIT = 5;
 const EVENT_LIMIT = 5;
+const EVENT_LOOKAHEAD_DAYS = 365;
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -124,22 +127,54 @@ export function ContactActivity({ contact }: Props) {
     };
   }, [addressKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const upcomingEvents = React.useMemo(() => {
-    if (addresses.length === 0) return [];
+  const pickUpcoming = React.useCallback((events: CalendarEvent[]): CalendarEvent[] => {
     const addrSet = new Set(addresses);
     const now = new Date();
-    return calendarEvents
+    const horizon = new Date(now.getTime() + EVENT_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
+    return events
       .filter((e) => eventInvolvesContact(e, addrSet))
       .filter((e) => {
         try {
-          return isAfter(parseISO(e.utcStart || e.start), now);
+          const start = parseISO(e.utcStart || e.start);
+          return isAfter(start, now) && !isAfter(start, horizon);
         } catch {
           return false;
         }
       })
       .sort((a, b) => (a.utcStart || a.start).localeCompare(b.utcStart || b.start))
       .slice(0, EVENT_LIMIT);
-  }, [calendarEvents, addresses]);
+  }, [addresses]);
+
+  // Ask the server for the next year instead of relying on whatever range the
+  // calendar tab happened to load (empty on a fresh start). The cached events
+  // render immediately while the query is in flight.
+  const [serverEvents, setServerEvents] = React.useState<CalendarEvent[] | null>(null);
+  React.useEffect(() => {
+    if (addresses.length === 0 || !hasCalendarCapability()) {
+      setServerEvents(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const now = new Date();
+        const before = new Date(now.getTime() + EVENT_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
+        const ids = await queryEvents([], now.toISOString(), before.toISOString());
+        const fetched = ids.length > 0 ? await getEvents(ids) : [];
+        if (!cancelled) setServerEvents(fetched);
+      } catch {
+        if (!cancelled) setServerEvents(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [addressKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const upcomingEvents = React.useMemo(() => {
+    if (addresses.length === 0) return [];
+    return pickUpcoming(serverEvents ?? calendarEvents);
+  }, [serverEvents, calendarEvents, addresses, pickUpcoming]);
 
   if (addresses.length === 0) return null;
 
