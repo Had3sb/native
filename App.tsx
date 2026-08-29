@@ -10,6 +10,9 @@ import { Mail, Calendar, BookUser, HardDrive, Settings } from 'lucide-react-nati
 import { startLiveUpdates, type LiveUpdatesHandle } from './src/api/push-stream';
 import { jmapClient } from './src/api/jmap-client';
 import type { StateChange } from './src/api/types';
+import { dispatchStateChange } from './src/lib/state-change-bus';
+import { useFilterStore } from './src/stores/filter-store';
+import { useVacationStore } from './src/stores/vacation-store';
 import {
   addMessageListener,
   addNotificationTapListener,
@@ -406,10 +409,19 @@ export default function App() {
     let appActive = AppState.currentState !== 'background' && AppState.currentState !== 'inactive';
 
     const onStateChange = async (change: StateChange) => {
+      // Filters / vacation edited elsewhere (webmail, another device): refetch
+      // so the settings panes don't save stale state over the newer script.
+      const primary = (() => { try { return jmapClient.accountId; } catch { return null; } })();
+      const own = primary ? change.changed?.[primary] : undefined;
+      const extra: Promise<unknown>[] = [];
+      if (own?.SieveScript) extra.push(useFilterStore.getState().fetchFilters().catch(() => undefined));
+      if (own?.VacationResponse) extra.push(useVacationStore.getState().fetch().catch(() => undefined));
+      dispatchStateChange(change);
       await Promise.all([
         useEmailStore.getState().handleStateChange(change),
         useContactsStore.getState().handleStateChange(change),
         useCalendarStore.getState().handleStateChange(change),
+        ...extra,
       ]);
     };
 
