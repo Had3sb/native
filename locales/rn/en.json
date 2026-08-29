@@ -101,9 +101,11 @@
     "moved_to_trash": "Email moved to Trash",
     "moved_to_trash_count": "{count, plural, one {# email} other {# emails}} moved to Trash",
     "no_archive_folder": "Could not find an Archive folder on the server.",
+    "no_emails_in": "No emails in {folder}",
     "no_junk_folder": "Could not find a Spam/Junk folder on the server.",
     "no_mailboxes": "No mailboxes found",
     "no_mailboxes_hint": "Check that your JMAP account has mail capability.",
+    "no_tags_defined": "No tags defined. Add tags in Settings.",
     "no_trash_folder": "Could not find a Trash folder on the server. Please check your mailbox configuration.",
     "offline_nothing_cached": "No connection. Showing nothing because no mail has been cached yet.",
     "open_draft_failed": "Could not open the draft.",
@@ -116,7 +118,7 @@
     "swipe_spam": "Spam",
     "total": "total",
     "undo_failed": "Undo failed",
-    "no_emails_in": "No emails in {folder}"
+    "unknown_tag": "not defined here"
   },
   "email_viewer": {
     "color_tag": {
