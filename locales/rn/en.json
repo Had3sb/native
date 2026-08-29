@@ -4,6 +4,10 @@
       "participant_placeholder": "Add participant by email"
     }
   },
+  "common": {
+    "back": "Back",
+    "dismiss": "Dismiss"
+  },
   "context_menu": {
     "color_tag": "Tag",
     "remove_color": "Remove tag"
@@ -76,11 +80,31 @@
     "title": "Get notified about new mail"
   },
   "settings": {
+    "advanced": {
+      "about": {
+        "deprecated_update": "Update required: {version}",
+        "mobile_title": "Bulwark Mobile",
+        "security_update": "Security update: {version}",
+        "update_available": "Update: {version}",
+        "update_store_hint": "available in TestFlight / App Store"
+      },
+      "export_settings": {
+        "saved_to": "Saved to {path}"
+      },
+      "reset_settings": {
+        "done": "All settings have been restored to their defaults."
+      }
+    },
     "appearance": {
       "language": {
         "restart_for_direction": "Restart the app to apply the new text direction.",
         "system_default": "System default"
       }
+    },
+    "badges": {
+      "experimental": "Experimental",
+      "not_implemented": "Not implemented",
+      "unavailable": "Unavailable"
     },
     "keywords": {
       "reset_defaults": "Reset to Defaults"
@@ -105,10 +129,97 @@
         "status_android_only": "Background notifications are available on Android only."
       }
     },
+    "offline": {
+      "cached_count": "{count, plural, one {# message} other {# messages}}",
+      "clear": "Clear",
+      "clear_cache": "Clear cache",
+      "clear_message": "Remove {count, plural, one {# cached message} other {# cached messages}} ({size})?",
+      "clear_title": "Clear offline mail",
+      "days_ago": "{count} d ago",
+      "description": "Download recent messages so they open instantly and remain readable without a connection. Bodies only — attachments are still fetched on demand.",
+      "downloading": "Downloading {completed}/{total}…",
+      "enabled": "Cache recent mail",
+      "enabled_desc": "When on, the app keeps message bodies for the selected window on this device.",
+      "hours_ago": "{count} h ago",
+      "just_now": "just now",
+      "last_sync": "Last sync {when}",
+      "last_sync_failed": "Last sync failed: {message}",
+      "max_size": "Maximum size",
+      "max_size_desc": "Oldest messages are removed when the cache grows past this.",
+      "minutes_ago": "{count} min ago",
+      "never": "never",
+      "nothing_cached": "Nothing cached yet",
+      "queued_changes": "{count, plural, one {# change} other {# changes}} waiting to sync",
+      "scanning": "Scanning recent mail…",
+      "sync_now": "Sync now",
+      "syncing": "Syncing…",
+      "title": "Offline mail",
+      "window": "Window",
+      "window_24h": "Last 24 hours",
+      "window_days": "Last {count} days",
+      "window_desc": "How far back to cache, measured by message receipt date."
+    },
+    "plugins": {
+      "mobile_description": "Plugins run inside the webmail and extend it in the browser.",
+      "mobile_explainer": "The mobile app has no plugin runtime. Install and manage plugins from the webmail under Settings → Plugins; themes and filters they provide are not applied here."
+    },
+    "smime": {
+      "mobile_description": "Sign and encrypt mail with S/MIME certificates.",
+      "mobile_explainer": "S/MIME is not available in the mobile app yet. Manage keys and certificates in the webmail; signed messages are shown without verification here."
+    },
+    "tabs": {
+      "plugins": "Plugins"
+    },
     "vacation": {
       "warnings": {
         "date_format": "Dates must be \"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\""
       }
     }
+  },
+  "updates": {
+    "advisory": "Security advisory",
+    "advisory_desc": "Details about the issue this release fixes.",
+    "auto_check": "Check automatically",
+    "auto_check_desc": "Check for updates every few hours when the app starts.",
+    "available": "Update available",
+    "available_desc": "Tap install to download v{version} and open it with Android's package installer.",
+    "banner": {
+      "advisory": "Read the advisory",
+      "deprecated_subtitle": "Install v{version} to keep using the app.",
+      "deprecated_title": "This version is no longer supported",
+      "security_subtitle": "v{version} fixes a security issue. Install it as soon as possible.",
+      "security_title": "Security update available",
+      "subtitle": "v{version} is ready to install.",
+      "title": "Update available"
+    },
+    "building": "Update building",
+    "building_desc": "v{version} was published, but the APK is still being built. This page will check again every 30 seconds.",
+    "check": "Check for updates",
+    "check_again": "Check again",
+    "check_now": "Check now",
+    "checking": "Checking…",
+    "current_version": "Current version",
+    "description": "Check for new versions and install them.",
+    "downloading": "Downloading…",
+    "downloading_pct": "Downloading {pct}%",
+    "install": "Install",
+    "installing": "Installing…",
+    "last_checked": "Last checked",
+    "last_error": "Last error: {message}",
+    "latest_version": "Latest version",
+    "never": "never",
+    "open": "Open",
+    "open_github": "Open on GitHub",
+    "opening_installer": "Opening installer…",
+    "progress_of": "{written} of {total}",
+    "published": "Published {date}",
+    "rate_limited": "GitHub is rate-limiting update checks; trying again later.",
+    "release_notes": "Release notes",
+    "release_page": "Release page",
+    "release_page_desc": "Full release notes and downloads on GitHub.",
+    "release_page_pending_desc": "Watch the build progress or download the APK manually.",
+    "severity_deprecated": "Required",
+    "severity_security": "Security",
+    "title": "App updates"
   }
 }

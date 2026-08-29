@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { fetchLatestRelease, type LatestRelease } from '../api/updates';
+import {
+  fetchLatestRelease,
+  resolveApkSha256,
+  UpdateRateLimitedError,
+  type LatestRelease,
+} from '../api/updates';
 import { isNewer } from '../lib/version-compare';
 import { downloadAndInstallApk, type InstallProgress } from '../lib/install-update';
 import { supportsSideloadUpdates } from '../lib/platform-capabilities';
@@ -9,12 +14,16 @@ import { supportsSideloadUpdates } from '../lib/platform-capabilities';
 const STORAGE_KEY = 'webmail:updates:v1';
 const MIN_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const PENDING_APK_INTERVAL_MS = 2 * 60 * 1000;
+// After GitHub rate-limits us, stay quiet for a while instead of retrying on
+// every launch (the unauthenticated limit resets hourly).
+const RATE_LIMIT_BACKOFF_MS = 60 * 60 * 1000;
 
 interface PersistedUpdates {
   autoCheck: boolean;
   lastCheckedAt: number;
   cachedLatest: LatestRelease | null;
   dismissedTag: string | null;
+  rateLimitedUntil: number;
 }
 
 const DEFAULT_PERSISTED: PersistedUpdates = {
@@ -22,6 +31,7 @@ const DEFAULT_PERSISTED: PersistedUpdates = {
   lastCheckedAt: 0,
   cachedLatest: null,
   dismissedTag: null,
+  rateLimitedUntil: 0,
 };
 
 export interface UpdatesState extends PersistedUpdates {
@@ -38,12 +48,36 @@ export interface UpdatesState extends PersistedUpdates {
   dismissCurrent: () => void;
   currentVersion: () => string;
   hasUpdate: () => boolean;
+  // Security / deprecated releases cannot be dismissed (webmail parity).
+  isMandatory: () => boolean;
 }
 
 function persist(state: PersistedUpdates): void {
   void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state)).catch((err) => {
     console.warn('[updates-store] persist failed', err);
   });
+}
+
+function snapshot(s: UpdatesState): PersistedUpdates {
+  return {
+    autoCheck: s.autoCheck,
+    lastCheckedAt: s.lastCheckedAt,
+    cachedLatest: s.cachedLatest,
+    dismissedTag: s.dismissedTag,
+    rateLimitedUntil: s.rateLimitedUntil,
+  };
+}
+
+// Releases cached by an older build lack the newer fields.
+function normalizeRelease(release: LatestRelease | null | undefined): LatestRelease | null {
+  if (!release || typeof release !== 'object' || typeof release.tag !== 'string') return null;
+  return {
+    ...release,
+    sha256Asset: release.sha256Asset ?? null,
+    apkSha256: release.apkSha256 ?? null,
+    severity: release.severity === 'security' || release.severity === 'deprecated' ? release.severity : 'normal',
+    advisoryUrl: release.advisoryUrl ?? null,
+  };
 }
 
 export const useUpdatesStore = create<UpdatesState>((set, get) => ({
@@ -59,7 +93,12 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
       const raw = await AsyncStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<PersistedUpdates>;
-        set({ ...DEFAULT_PERSISTED, ...parsed, hydrated: true });
+        set({
+          ...DEFAULT_PERSISTED,
+          ...parsed,
+          cachedLatest: normalizeRelease(parsed.cachedLatest),
+          hydrated: true,
+        });
       } else {
         set({ hydrated: true });
       }
@@ -71,13 +110,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
 
   setAutoCheck: (enabled) => {
     set({ autoCheck: enabled });
-    const s = get();
-    persist({
-      autoCheck: enabled,
-      lastCheckedAt: s.lastCheckedAt,
-      cachedLatest: s.cachedLatest,
-      dismissedTag: s.dismissedTag,
-    });
+    persist(snapshot(get()));
   },
 
   checkNow: async (opts) => {
@@ -88,6 +121,7 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     const s = get();
     if (s.checking) return;
     const now = Date.now();
+    if (!opts?.force && now < s.rateLimitedUntil) return;
     const waitingForApk =
       s.cachedLatest != null && !s.cachedLatest.apkAsset && get().hasUpdate();
     const interval = waitingForApk ? PENDING_APK_INTERVAL_MS : MIN_CHECK_INTERVAL_MS;
@@ -95,15 +129,16 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     set({ checking: true, error: null });
     try {
       const latest = await fetchLatestRelease();
-      const next: PersistedUpdates = {
-        autoCheck: s.autoCheck,
-        lastCheckedAt: now,
-        cachedLatest: latest,
-        dismissedTag: s.dismissedTag,
-      };
-      set({ ...next, checking: false });
-      persist(next);
+      set({ lastCheckedAt: now, cachedLatest: latest, rateLimitedUntil: 0, checking: false });
+      persist(snapshot(get()));
     } catch (err) {
+      if (err instanceof UpdateRateLimitedError) {
+        // Not an error the user can act on: back off quietly and keep
+        // whatever we last cached.
+        set({ checking: false, rateLimitedUntil: now + RATE_LIMIT_BACKOFF_MS, lastCheckedAt: now });
+        persist(snapshot(get()));
+        return;
+      }
       set({ checking: false, error: err instanceof Error ? err.message : String(err) });
     }
   },
@@ -114,11 +149,10 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     if (s.installing || !s.cachedLatest?.apkAsset) return;
     set({ installing: true, error: null, installProgress: { phase: 'downloading', progress: 0 } });
     try {
+      // The checksum companion is only fetched now, not on every check.
+      const expectedSha256 = await resolveApkSha256(s.cachedLatest);
       await downloadAndInstallApk(
-        {
-          asset: s.cachedLatest.apkAsset,
-          expectedSha256: s.cachedLatest.apkSha256,
-        },
+        { asset: s.cachedLatest.apkAsset, expectedSha256 },
         (p) => {
           set({ installProgress: p });
         },
@@ -135,14 +169,10 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
 
   dismissCurrent: () => {
     const s = get();
+    if (s.isMandatory()) return;
     const tag = s.cachedLatest?.tag ?? null;
     set({ dismissedTag: tag });
-    persist({
-      autoCheck: s.autoCheck,
-      lastCheckedAt: s.lastCheckedAt,
-      cachedLatest: s.cachedLatest,
-      dismissedTag: tag,
-    });
+    persist(snapshot(get()));
   },
 
   currentVersion: () => Constants.expoConfig?.version ?? '0.0.0',
@@ -153,5 +183,11 @@ export const useUpdatesStore = create<UpdatesState>((set, get) => ({
     if (!s.cachedLatest) return false;
     const current = Constants.expoConfig?.version ?? '0.0.0';
     return isNewer(s.cachedLatest.tag, current);
+  },
+
+  isMandatory: () => {
+    const s = get();
+    if (!s.hasUpdate() || !s.cachedLatest) return false;
+    return s.cachedLatest.severity === 'security' || s.cachedLatest.severity === 'deprecated';
   },
 }));
