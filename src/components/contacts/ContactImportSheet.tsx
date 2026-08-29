@@ -51,7 +51,7 @@ export default function ContactImportSheet({
   const [duplicates, setDuplicates] = React.useState<Map<number, string>>(new Map());
   const [error, setError] = React.useState<string | null>(null);
   const [importing, setImporting] = React.useState(false);
-  const [result, setResult] = React.useState<number | null>(null);
+  const [result, setResult] = React.useState<{ imported: number; failed: number } | null>(null);
 
   const slideY = React.useRef(new Animated.Value(900)).current;
   const overlayOpacity = React.useRef(new Animated.Value(0)).current;
@@ -144,9 +144,9 @@ export default function ContactImportSheet({
     if (toImport.length === 0) return;
     setImporting(true);
     try {
-      const count = await importContacts(toImport, targetBookId);
-      setResult(count);
-      onImported?.(count);
+      const outcome = await importContacts(toImport, targetBookId);
+      setResult(outcome);
+      onImported?.(outcome.imported);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Import failed.');
     } finally {
@@ -174,8 +174,13 @@ export default function ContactImportSheet({
                 <Check size={26} color={c.primaryForeground} />
               </View>
               <Text style={styles.successText}>
-                Imported {result} contact{result === 1 ? '' : 's'}.
+                Imported {result.imported} contact{result.imported === 1 ? '' : 's'}.
               </Text>
+              {result.failed > 0 && (
+                <Text style={[styles.successText, { color: c.error }]}>
+                  {result.failed} contact{result.failed === 1 ? '' : 's'} could not be imported.
+                </Text>
+              )}
               <Button variant="outline" size="sm" onPress={onClose}>Done</Button>
             </View>
           ) : parsed.length === 0 ? (
