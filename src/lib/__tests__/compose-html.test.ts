@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { buildInitialHtml, htmlToPlainText, rewriteInlineImages } from '../compose-html';
+import {
+  buildInitialHtml, htmlToPlainText, rewriteInlineImages, extractUserAuthoredText,
+  rewriteCidImagesForEditor, replaceInlineImagePlaceholders,
+} from '../compose-html';
 
 describe('buildInitialHtml', () => {
   it('returns empty paragraph for plain compose', () => {
@@ -18,9 +21,9 @@ describe('buildInitialHtml', () => {
       receivedAt: '2026-04-27T10:00:00Z',
     });
     expect(html).toContain('<p><br></p>');
-    // Default header labels the sender by name only (matches webmail #295).
-    expect(html).toMatch(/On .+, Alice wrote:/);
-    expect(html).not.toContain('a@b.com');
+    // Header shows the full sender incl. address, escaped (webmail #482).
+    expect(html).toMatch(/On .+, Alice &lt;a@b.com&gt; wrote:/);
+    expect(html).toContain('data-quoted-html');
     expect(html).toContain('<blockquote');
     expect(html).toContain('line one<br>line two');
   });
@@ -52,7 +55,7 @@ describe('buildInitialHtml', () => {
       receivedAt: '2026-04-27T10:00:00Z',
     });
     expect(html).toContain('Forwarded message');
-    expect(html).toContain('From: Bob');
+    expect(html).toContain('From: Bob &lt;b@c.com&gt;');
     expect(html).toContain('Subject: Original Subject');
     expect(html).toContain('forwarded body');
   });
@@ -131,5 +134,56 @@ describe('rewriteInlineImages', () => {
     const html = '<img src="data:" data-cid="dup"><img src="data:" data-cid="dup">';
     const out = rewriteInlineImages(html);
     expect(out.usedCids).toEqual(['dup']);
+  });
+});
+
+describe('htmlToPlainText links', () => {
+  it('renders a link as text <href>', () => {
+    expect(htmlToPlainText('<p>see <a href="https://x.y/z">docs</a></p>')).toBe('see docs <https://x.y/z>');
+  });
+
+  it('keeps a bare URL link as the URL only', () => {
+    expect(htmlToPlainText('<a href="https://x.y">https://x.y</a>')).toBe('https://x.y');
+  });
+
+  it('drops the mailto: prefix when the text is the address', () => {
+    expect(htmlToPlainText('<a href="mailto:a@b.c">a@b.c</a>')).toBe('a@b.c');
+  });
+});
+
+describe('extractUserAuthoredText', () => {
+  it('drops the quoted island and blockquotes', () => {
+    const html = buildInitialHtml('reply', {
+      from: { name: 'Alice', email: 'a@b.com' },
+      body: 'please find attached the invoice',
+      receivedAt: '2026-04-27T10:00:00Z',
+    });
+    const text = extractUserAuthoredText('<p>thanks</p>' + html);
+    expect(text).toBe('thanks');
+  });
+
+  it('cuts everything from the forwarded separator', () => {
+    const text = extractUserAuthoredText(
+      '<p>fyi</p><div>---------- Forwarded message ----------<br>From: x</div><p>attached</p>',
+      { forwardedSeparator: '---------- Forwarded message ----------' },
+    );
+    expect(text.trim()).toBe('fyi');
+  });
+
+  it('drops quoted lines in plain-text mode', () => {
+    expect(extractUserAuthoredText('mine\n> theirs attached', { plainTextMode: true })).toBe('mine');
+  });
+});
+
+describe('cid image hydration', () => {
+  it('rewrites cid: images to placeholders with data-cid and back to data URLs', () => {
+    const { html, cids } = rewriteCidImagesForEditor('<p><img src="cid:pic@x" alt="p"></p>');
+    expect(cids).toEqual(['pic@x']);
+    expect(html).toContain('data-cid="pic@x"');
+    expect(html).not.toContain('cid:pic@x');
+    const hydrated = replaceInlineImagePlaceholders(html, new Map([['pic@x', 'data:image/png;base64,AAA']]));
+    expect(hydrated).toContain('src="data:image/png;base64,AAA"');
+    expect(hydrated).toContain('data-cid="pic@x"');
+    expect(rewriteInlineImages(hydrated).html).toContain('src="cid:pic@x"');
   });
 });

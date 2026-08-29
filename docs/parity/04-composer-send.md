@@ -26,17 +26,17 @@ Legend for refs: WEB paths are relative to `the webmail repo`, RN paths to `the 
 
 ### Sending / EmailSubmission
 
-- [ ] **Message is filed into Sent before submission — a failed send leaves a fake "sent" copy** — `P1` — `bug`
+- [x] **Message is filed into Sent before submission — a failed send leaves a fake "sent" copy** — fixed in ccbe67c — `P1` — `bug`
   - What WEB does: creates the email in Drafts with `$draft` and moves it to Sent via `onSuccessUpdateEmail` on the `EmailSubmission/set` (`lib/jmap/client.ts:3195-3196`, `:3234-3239`, #188); a `notCreated` on the submission throws and the draft simply stays in Drafts (`:3289-3312`).
   - What RN does: `src/api/email.ts:794-796` sets `mailboxIds: { [sentMailboxId]: true }, keywords: { $seen: true }` on the `Email/set` create, and the `EmailSubmission/set` at `:848-855` has no `onSuccessUpdateEmail`. If the submission is rejected (`notCreated` handled at `:870-872`) the user gets a "Send failed" alert but the message is already sitting in Sent looking sent; a retry duplicates it.
   - Fix hint: create into the Drafts mailbox with `$draft`, add `onSuccessUpdateEmail: { '#draft': { 'mailboxIds/<sent>': true, 'mailboxIds/<drafts>': null, 'keywords/$draft': null } }` to the submission call; RN already has `ownMailboxes(mailboxes)` to find the Drafts role.
 
-- [ ] **In-Reply-To / References carry the JMAP email id instead of the Message-ID** — `P1` — `rn-only-bug`
+- [x] **In-Reply-To / References carry the JMAP email id instead of the Message-ID** — fixed in 7f956d6 — `P1` — `rn-only-bug`
   - What WEB does: `computeReplyThreadingHeaders` (`lib/email-threading.ts:30-51`) builds `inReplyTo = [parent.messageId]`, `references = parent.references + parent.messageId`, brackets stripped; the client sends them as the JMAP `inReplyTo`/`references` properties (`lib/jmap/client.ts:3177-3194`) and fetches `messageId`/`inReplyTo`/`references` on the email (`:1787-1788`).
   - What RN does: `src/screens/EmailThreadScreen.tsx:379` passes `inReplyTo: email.id` (the JMAP id, e.g. `a1b2c3`), never `references`; `src/api/email.ts:823-826` writes that value verbatim into `header:In-Reply-To:asText` and `header:References:asText`. `EMAIL_FULL_PROPERTIES` (`src/api/email.ts:11-15`) does not even request `messageId`/`references`, and the RN `Email` type (`src/api/types.ts:65-87`) has no such fields. Every RN reply therefore breaks threading in recipients' clients and emits a syntactically invalid `In-Reply-To`.
   - Fix hint: add `'messageId', 'inReplyTo', 'references'` to `EMAIL_FULL_PROPERTIES` and the `Email` type, port `computeReplyThreadingHeaders`, and send `inReplyTo`/`references` as JMAP array properties (bare msg-ids) instead of raw `header:*:asText` strings. Only replies should continue the chain; forwards should not (WEB `email-composer.tsx:2142-2145`).
 
-- [ ] **No request timeout — a stalled send hangs the composer forever** — `P2` — `bugfix-parity` (changelog 1.7.x "Time out stalled JMAP requests so a send can't hang forever (#702)")
+- [x] **No request timeout — a stalled send hangs the composer forever** — fixed in ccbe67c — `P2` — `bugfix-parity` (changelog 1.7.x "Time out stalled JMAP requests so a send can't hang forever (#702)")
   - What WEB does: `JMAPClient.REQUEST_TIMEOUT_MS = 30_000` (`lib/jmap/client.ts:629`, `:811`, `:830-843`) raising `RequestTimeoutError`; the composer shows a dedicated "may already have gone out, check Sent" message instead of "send failed" so users do not re-send duplicates (`email-composer.tsx:2315-2323`).
   - What RN does: `jmapClient.request` (`src/api/jmap-client.ts:405-445`) uses `secureFetch` with no `AbortSignal`/deadline; `performSend` (`ComposeScreen.tsx:906-982`) leaves `sending=true` until the promise settles, so the Send button spins indefinitely on a stalled connection.
   - Fix hint: wrap `secureFetch` in an `AbortController` + `setTimeout` (30 s) in `jmapClient.request` (or a `timeoutMs` option used by `sendEmail`), throw a distinguishable `RequestTimeoutError`, and show a "may already be sent - check Sent" alert in `performSend`'s catch.
@@ -46,17 +46,17 @@ Legend for refs: WEB paths are relative to `the webmail repo`, RN paths to `the 
   - What RN does: `onSend` (`ComposeScreen.tsx:825-828`) applies `sendDelaySeconds` as HOLDFOR and `performSend` deliberately stays silent for the undo window (`:961-963` comment: "invisible unless the user cancels from the Scheduled view"). There is an `UndoSnackbar` component (`src/components/UndoSnackbar.tsx`) but it is not used for send. The user has to know to open the Scheduled screen within the 5-30 s window.
   - Fix hint: after `sendEmail` returns `{ scheduled: true, emailSubmissionId }` show `UndoSnackbar` for `sendDelaySeconds` with Undo → `cancelScheduledSend(id)` and "Send now" → EmailSubmission/set update of the envelope without HOLDFOR (or cancel + resend), mirroring `rescheduleEmailSubmission` in `lib/jmap/client.ts:7985`.
 
-- [ ] **Double-submit guard relies on async state** — `P3` — `bugfix-parity` (changelog 1.6.x "Guard Send against double-submit")
+- [x] **Double-submit guard relies on async state** — fixed in 7f956d6 — `P3` — `bugfix-parity` (changelog 1.6.x "Guard Send against double-submit")
   - What WEB does: synchronous `isSendingRef` re-entry guard (`email-composer.tsx:1980-1986`, `:2007`, `:2078-2079`).
   - What RN does: `performSend` checks `canSend` which includes `!sending` (`ComposeScreen.tsx:508-516`, `:883`), but `setSending(true)` only happens after two awaits (`getHtml` at `:892`, attachment reminder at `:905`), so two quick taps both pass the guard and submit twice.
   - Fix hint: add a `sendingRef = useRef(false)` set synchronously at the top of `performSend`, reset in `finally`.
 
-- [ ] **Reply / forward does not mark the original `$answered` / `$forwarded`** — `P2` — `missing`
+- [x] **Reply / forward does not mark the original `$answered` / `$forwarded`** — fixed in 7f956d6 — `P2` — `missing`
   - What WEB does: after a successful reply/forward the original gets `$answered` or `$forwarded` (`components/mail/mail-app.tsx:1663-1673`), routed to the owning account.
   - What RN does: nothing — `grep -F '$answered'` over `src/` returns no hits; `performSend` (`ComposeScreen.tsx:941-974`) has no access to the original email id (`replyTo` params in `src/navigation/types.ts:10-19` carry no `emailId`).
   - Fix hint: add `originalEmailId`/`jmapAccountId` to the `replyTo` route param and call the existing keyword primitive (`setEmailKeywords` via `applyOrQueue` in `src/stores/outbox-store.ts`) after the send resolves.
 
-- [ ] **Identity `replyTo` / `bcc` are never applied to outgoing mail** — `P2` — `missing`
+- [x] **Identity `replyTo` / `bcc` are never applied to outgoing mail** — fixed in 7f956d6 — `P2` — `missing`
   - What WEB does: `sendEmail` copies the identity's `replyTo` onto the message (`lib/jmap/client.ts:3167-3172`, `:3184`); identity form lets users edit Reply-To and Bcc (`components/identity/identity-form.tsx:39-41`, `:66-70`, `:132-133`).
   - What RN does: RN `Identity` type has `replyTo`/`bcc` (`src/api/types.ts:136-145`) but `sendEmail` (`src/api/email.ts:788-796`) never sets `replyTo`, and no composer Reply-To field exists; `IdentitySettings.tsx:209-215` edits only name/email/textSignature.
   - Fix hint: in `sendEmail` set `replyTo: identity.replyTo` and merge `identity.bcc` into `bcc`; pass the full `Identity` (not only `primaryIdentity.id`) from `performSend`.
@@ -66,7 +66,7 @@ Legend for refs: WEB paths are relative to `the webmail repo`, RN paths to `the 
   - What RN does: no toggle, no setting, header never set.
   - Fix hint: add a toolbar toggle + `requestReadReceipt` option to `sendEmail` that writes `header:Disposition-Notification-To:asText`.
 
-- [ ] **Client-side Message-ID not generated** — `P3` — `partial`
+- [x] **Client-side Message-ID not generated** — fixed in ccbe67c — `P3` — `partial`
   - What WEB does: `generateMessageId(fromEmail)` with the sender's domain, guarded for insecure origins (`lib/jmap/client.ts:544-575`, `:3192`; changelog 1.9.0 fix).
   - What RN does: `sendEmail` sets no `messageId`, relying on the server; RN's `src/lib/uuid.ts:6-20` already has a guarded UUID generator (Hermes fallback) so the crash class of the web fix does not apply.
   - Fix hint: optional — set `messageId: [`${generateUUID()}@${domain}`]` in `sendEmail` so the id is known before the response (useful once drafts/threading exist).
@@ -87,12 +87,12 @@ Legend for refs: WEB paths are relative to `the webmail repo`, RN paths to `the 
   - What RN does: only To and Cc (`ComposeScreen.tsx:346-349` state, `:1058-1149` UI); `sendEmail` accepts `bcc` (`src/api/email.ts:772`) but the screen never passes it.
   - Fix hint: clone the Cc block (`ccRecipients`/`ccInput`/`ccVisible`) as Bcc, include it in `alreadySelected`, `commitTyped`, `isDirty`, and the `sendEmail` call.
 
-- [ ] **Reply-To header ignored when replying** — `P2` — `bugfix-parity` (changelog 1.9.0 "Honour an external Reply-To even on a self-sent message"; 1.7.x #703)
+- [x] **Reply-To header ignored when replying** — fixed in 7f956d6 — `P2` — `bugfix-parity` (changelog 1.9.0 "Honour an external Reply-To even on a self-sent message"; 1.7.x #703)
   - What WEB does: `buildReplyRecipients` (`lib/reply-recipients.ts:74-111`) replies to `replyToAddresses` when present (RFC 5322), falls back to From, and handles self-sent messages (`isSelfSent`, `:52-54`) by addressing the original To/Cc instead of yourself.
   - What RN does: `initialTo` (`ComposeScreen.tsx:291-312`) always uses `replyTo.from`; `EmailThreadScreen.tsx:370-381` does not pass `email.replyTo` although it is fetched (`EMAIL_FULL_PROPERTIES` includes `replyTo`). Replying to a mailing-list/ticket mail with Reply-To goes to the wrong address; replying to your own sent message mails yourself.
   - Fix hint: pass `replyToAddresses: email.replyTo` in the route param and port `buildReplyRecipients` (pure TS, no DOM) into `src/lib/`.
 
-- [ ] **Reply-all does not drop the user's own identities / duplicates** — `P2` — `bugfix-parity`
+- [x] **Reply-all does not drop the user's own identities / duplicates** — fixed in 7f956d6 — `P2` — `bugfix-parity`
   - What WEB does: reply-all filters every own identity address (exact and `+tag`-stripped) out of To/Cc (`lib/reply-recipients.ts:39-45`, `:104-110`) and `expandRecipients` dedupes case-insensitively across the whole list (`lib/email-composer-utils.ts:425-437`).
   - What RN does: `initialTo` (`ComposeScreen.tsx:304-310`) adds every original `to` except the From; `initialCc` (`:314-319`) copies `cc` unfiltered — the user's own address lands in To/Cc of every reply-all, and the same address can appear in both To and Cc (`alreadySelected` at `:371-374` only guards suggestions).
   - Fix hint: filter against the identities list (already loaded at `:406-419`, but note it loads asynchronously — compute recipients after identities arrive or filter at send time) and dedupe across To/Cc/Bcc in `commitTyped`.
@@ -163,7 +163,7 @@ Legend for refs: WEB paths are relative to `the webmail repo`, RN paths to `the 
   - What RN does: `EmailThreadScreen.tsx:59-65` `plainTextBody` returns the text part or `preview`, and `navigateCompose` passes only `body` (`:377`); `buildInitialHtml` supports `htmlBody` (`compose-html.ts:76-80`) but is never given one. Replies to HTML-only mail quote whatever `textBody[0]` holds (for HTML-only messages RFC 8621 exposes the HTML source there — raw tags in the quote, the #649 bug) and inline images vanish.
   - Fix hint: pass `htmlBody` (sanitized via `stripDangerousTags`/`email-html.ts`) from the thread screen, port `getQuoteBodies`' MIME routing, and for `cid:` images fetch the blob (`getDownloadUrl` in `src/api/blob.ts:119`) as base64, insert with `data-cid`, and add the part as `disposition: 'inline'` on send (RN's `rewriteInlineImages` at `compose-html.ts:143-161` already handles `data-cid`).
 
-- [ ] **Forward drops the original attachments** — `P1` — `missing`
+- [x] **Forward drops the original attachments** — fixed in 7f956d6 — `P1` — `missing`
   - What WEB does: forward seeds the composer with the original's attachments as blobId refs (`email-composer.tsx:598-617`), skipping cid-embedded images, and sends them along (`:2200-2213`); "Forward as attachment" also exists (`lib/forward-as-attachment.ts`).
   - What RN does: `navigateCompose` (`EmailThreadScreen.tsx:366-382`) passes no attachments and `Compose` params have no attachment field; `attachments` state starts empty (`ComposeScreen.tsx:354`). A forwarded invoice arrives without the invoice, silently.
   - Fix hint: add `attachments: email.attachments` (blobId/name/type/size, filter `disposition==='inline'` images referenced by the body) to the route param and seed `AttachmentEntry`s with `blobId` set and `uploading:false`; `OutgoingAttachment` already accepts blobIds from another message in the same account.
@@ -173,7 +173,7 @@ Legend for refs: WEB paths are relative to `the webmail repo`, RN paths to `the 
   - What RN does: `compose-html.ts:84-105` hardcodes "Forwarded message", "From/Date/Subject", "On …, X wrote:" and `senderName` (`:30-33`) returns name **or** email, never both. Locale files exist under `locales/<lang>/`.
   - Fix hint: pass translated labels via `QuoteHeaderOptions` and render `Name <email>` (escaped) like the web.
 
-- [ ] **Subject prefix handling does not strip foreign / stacked prefixes and is not localized** — `P3` — `bugfix-parity` (changelog "Drop single-letter R:/I: tokens and deduplicate localized reply/forward prefixes", "full-width colon")
+- [x] **Subject prefix handling does not strip foreign / stacked prefixes and is not localized** — fixed in 7f956d6 — `P3` — `bugfix-parity` (changelog "Drop single-letter R:/I: tokens and deduplicate localized reply/forward prefixes", "full-width colon")
   - What WEB does: `lib/subject-prefix.ts:14-56` token lists + `buildReplySubject`/`buildForwardSubject` (`:109-121`) strip `Re: AW: WG: Fwd:` chains, `Re[2]:`, full-width colons, then add the locale prefix from `email_composer.prefix.*`.
   - What RN does: `ComposeScreen.tsx:321-328` only tests `^re:`/`^fwd?:`; "AW: foo" becomes "Re: AW: foo", "Fwd: foo" replied becomes "Re: Fwd: foo".
   - Fix hint: copy `lib/subject-prefix.ts` verbatim (pure TS) and use the locale's prefix strings.
