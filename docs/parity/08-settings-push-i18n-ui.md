@@ -89,12 +89,12 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
 
 ### Settings store and settings sync
 
-- [ ] **No cross-device settings sync; RN cannot join the WEB sync store as-is (native #1)** — `P2` — `missing`
+- [ ] **No cross-device settings sync; RN cannot join the WEB sync store as-is (native #1)** — `P2` — `missing` — deferred (needs a server-side store); key-mapping table shipped as SETTINGS_KEY_MAP + DEVICE_LOCAL_KEYS in src/stores/settings-store.ts (8deff66) and used by export/import; the dead 'Settings sync' switch is gone
   - What WEB does: every settings change (plus theme, locale, templates #825) is debounced 2 s and POSTed to the webmail server's `/api/settings` (`stores/settings-store.ts:1340-1359`, `:72-96`). The server verifies the caller against its own session cookies for any account slot (`app/api/settings/route.ts:71-94`), strips admin-locked keys (`:142-167`) and writes `sha256(username:serverUrl).enc` under `SETTINGS_DATA_DIR`, AES-256-GCM with key `sha256(SESSION_SECRET)` (`lib/settings-sync.ts:12-32,34-53`). On login it GETs the blob and imports it with per-account map merging (`stores/settings-store.ts:1125-1165`, `:942-951`). `proInterface` is device-local (`:147`).
   - What RN does: persists a flat JSON under AsyncStorage key `webmail:settings:v1` (`RN: src/stores/settings-store.ts:91,393-397`) and nothing else. The AboutData "Settings sync" toggle is `useState` (`RN: AboutDataSettings.tsx:65,246-248`).
   - Fix hint: RN talks to Stalwart directly and has no webmail session cookie, so it cannot call `/api/settings` (403 identity mismatch, and the deployment's webmail URL is unknown to it). Two realistic designs: (a) store the same JSON blob on the JMAP server as a Blob (`Blob/upload` + a well-known keyword/mailbox message, or a FileNode in the user's Files root such as `/.bulwark/settings.json`) and have WEB read/write the same object so both clients converge — needs a shared key-name mapping (WEB names above) and a `updatedAt` for last-writer-wins; or (b) let the login flow optionally capture the webmail origin (the QR sign-in already comes from webmail) and proxy sync through it with a bearer token. Either way, ship a key-mapping table first (RN `mailSortAscending` ↔ WEB `messageListOrder`, `calendarFirstDayOfWeek` ↔ `firstDayOfWeek`, `emailExportTemplate` ↔ `emailDownloadTemplate`, etc.) and exclude device-local keys (`swipeMode`, `bottomQuickActions`, `offlineCache*`, `theme`?).
 
-- [ ] **Default values silently diverge from WEB** — `P3` — `partial`
+- [x] **Default values silently diverge from WEB** — fixed in 8deff66 — `P3` — `partial`
   - What WEB does: `emailsPerPage` 50, `autoSelectReplyIdentity` false, `showBirthdayCalendar` false, `showTimeInMonthView` false, `includeGroupInUnified` true, `trustedSendersAddressBook` null→auto-true, swipe right=archive/left=delete, multilingual attachment-reminder keyword list (`stores/settings-store.ts:540-735`).
   - What RN does: 25, true, true, true, false, false, right=read/left=archive, 4 English keywords (`RN: src/stores/settings-store.ts:232-325`).
   - Fix hint: align defaults where the behaviour is the same on both clients (attachment keywords, includeGroupInUnified, autoSelectReplyIdentity, showBirthdayCalendar) before any sync exists, otherwise the first sync flips them for existing users.
@@ -104,22 +104,22 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: default `false` (`RN: src/stores/settings-store.ts:239`), read by `EmailBodyView.tsx:470,489` but `ContentSendersSettings.tsx` has no control for it.
   - Fix hint: add the toggle; treat undefined as auto-on when `useHasContacts()`.
 
-- [ ] **`addTrustedSender` does not normalise `Name <addr>`** — `P3` — `bug`
+- [x] **`addTrustedSender` does not normalise `Name <addr>`** — fixed in 8deff66 — `P3` — `bug`
   - What WEB does: strips display-name angle form before storing/comparing (`stores/settings-store.ts:1008-1035`).
   - What RN does: lowercases and trims only (`RN: src/stores/settings-store.ts:471-489`); callers that pass a formatted address store a value that will never match.
   - Fix hint: port the angle-bracket regex into `add/remove/isSenderTrusted`.
 
-- [ ] **`sendDelaySeconds` and other enum keys not sanitised on hydrate** — `P3` — `bug`
+- [x] **`sendDelaySeconds` and other enum keys not sanitised on hydrate** — fixed in 8deff66 — `P3` — `bug`
   - What WEB does: rejects/resets invalid `sendDelaySeconds`, `messageListOrder`, `messageListOrderScope`, `subAddressDelimiter` on import and in `migrate` (`stores/settings-store.ts:898-930,1207-1209`).
   - What RN does: `mergeWithDefaults` only checks `typeof` (`RN: src/stores/settings-store.ts:399-415`); a corrupt `swipeLeftAction: "foo"` or `density: "x"` flows into the UI.
   - Fix hint: add per-key validators (allowed-value sets) to `mergeWithDefaults`; `normalizeBottomQuickActions` is the pattern.
 
-- [ ] **Reset-to-defaults only resets three keys; no export/import** — `P3` — `partial`
+- [x] **Reset-to-defaults only resets three keys; no export/import** — fixed in 8deff66 — `P3` — `partial`
   - What WEB does: `resetToDefaults` restores every key; About & Data offers Export/Import JSON (feature-gated) and "Refresh cached data" (`components/settings/about-data-settings.tsx:77-129,171-220`, `lib/clear-cached-data.ts`).
   - What RN does: `handleReset` resets `externalContentPolicy`, `senderFavicons` and trusted senders only (`RN: AboutDataSettings.tsx:104-110`); no export/import; "Clear cache" only clears the offline body cache.
   - Fix hint: add `resetToDefaults` to the store (`set(DEFAULT_PERSISTED)` + persist), an export via `expo-sharing` and import via `expo-document-picker` using WEB's export shape so files round-trip between clients; add a "refresh cached data" that clears `email-snapshot`/contacts/calendar caches without logging out.
 
-- [ ] **Debug mode / categories are inert local state; no debug/logger abstraction** — `P3` — `missing`
+- [x] **Debug mode / categories are inert local state; no debug/logger abstraction** — fixed in 8deff66 — `P3` — `missing` — src/lib/debug.ts; dead Debug tab removed in 3d0d440
   - What WEB does: `debugMode`/`debugCategories` persisted and honoured by `lib/debug.ts:8-13`; `lib/error-reporting.ts` funnels error-boundary reports; `lib/logger.ts` server side. Debug tab gated by admin (`settings-app.tsx:766`).
   - What RN does: `AboutDataSettings.tsx:61-66,226-244` keeps toggles in `useState` with categories (`sync`, `render`) that exist nowhere; the "Debug" tab is `implemented: false` (`SettingsScreen.tsx:111`); code uses raw `console.warn`.
   - Fix hint: persist `debugMode`/`debugCategories`, add `src/lib/debug.ts` mirroring WEB's category API, route the `[push]`, `[settings-store]`, `[updates-store]` warnings through it, and drop the dead Debug tab or implement a log viewer.
@@ -262,27 +262,27 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
 
 ### Updates
 
-- [ ] **No severity concept; security/deprecated updates are dismissable** — `P3` — `partial`
+- [x] **No severity concept; security/deprecated updates are dismissable** — fixed in 431face — `P3` — `partial` — severity:/advisory: lines in the release body
   - What WEB does: server-side check against `version.telemetry.bulwarkmail.org` with `severity` (normal/security/deprecated), red non-dismissable banner for security/deprecated, stale cached status discarded after upgrade (`lib/version-check/sender.ts:86-96`, `stores/update-store.ts:86-122`, commit 39dcc6b2).
   - What RN does: GitHub Releases `latest` only (`RN: src/api/updates.ts:57-91`); banner dismissed per tag (`UpdateBanner.tsx:21`, `updates-store.ts:136-146`); no notion of a mandatory update; no advisory link.
   - Fix hint: have the version server add a `native` channel (or read a `severity:` line from the release body) and make the banner non-dismissable when `security`/`deprecated`.
 
-- [ ] **Update check hits the GitHub API unauthenticated and blocks on companion downloads** — `P3` — `rn-only-bug`
+- [x] **Update check hits the GitHub API unauthenticated and blocks on companion downloads** — fixed in 431face — `P3` — `rn-only-bug`
   - What RN does: `fetchLatestRelease` calls `api.github.com` (60 req/h/IP) and then downloads the `.apk.sha256` asset on every check (`RN: src/api/updates.ts:44-55,74-81`); on rate-limit the store shows `GitHub API 403` under "Last checked" with no backoff other than the 6 h interval.
   - Fix hint: treat 403/429 as "skip until next interval" without surfacing an error, fetch the checksum only when the user taps Install.
 
-- [ ] **Release notes rendered raw** — `P3` — `partial`
+- [x] **Release notes rendered raw** — fixed in 431face — `P3` — `partial`
   - What RN does: `cachedLatest.body` shown as plain text, 20 lines (`UpdatesSettings.tsx:187-194`); markdown headings/links appear literally.
   - Fix hint: strip markdown or use a tiny renderer; link to `htmlUrl`.
 
 ### Plugins, extensions, S/MIME, sidebar apps (mostly N/A / out of scope for now)
 
-- [ ] **Plugins tab is a non-functional stub** — `P3` — `missing` (N/A for now)
+- [x] **Plugins tab is a non-functional stub** — fixed in 3d0d440 — `P3` — `missing` (N/A for now) — tab hidden; pane is an explainer
   - What WEB does: sandboxed iframe plugin runtime, marketplace, signing, admin approval, ~40 hooks/API methods (changelog 1.5.x-1.9.x Plugins entries).
   - What RN does: `PluginsSettings.tsx:41` starts with `plugins = []`, "Upload .zip" has no handler (`:176-178`), `pluginEnabled` map persists toggles for nothing.
   - Fix hint: out of scope; hide the tab (or keep it as an "install from webmail" explainer). Minimal viable subset would be theme-only plugins (token sets) once the Themes finding lands.
 
-- [ ] **S/MIME tab is a stub** — `P3` — `missing` (N/A for now)
+- [x] **S/MIME tab is a stub** — fixed in 3d0d440 — `P3` — `missing` (N/A for now)
   - What WEB does: S/MIME moved out of core into a privileged crypto plugin (changelog 1.6.0 "Breaking"); core exposes key/cert management on the Security tab.
   - What RN does: `SmimeSettings.tsx:32-33` uses empty `MOCK_KEYS`/`MOCK_CERTS`; Import buttons have no handlers (`:118-120,163-165`); three toggles persist unused prefs; the tab is labelled implemented and lives under Privacy.
   - Fix hint: mark `implemented: false` in `SettingsScreen.tsx:97` until a native crypto path exists.
@@ -323,7 +323,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `VIBRATE` permission exists only for the notification channel; no `expo-haptics` in `package.json`; swipe-to-action, undo and destructive confirms give no tactile feedback.
   - Fix hint: `expo-haptics` `impactAsync(Light)` on swipe threshold cross and `notificationAsync(Success/Warning)` on undo/destructive.
 
-- [ ] **Version badge / "update available" tag missing from About** — `P3` — `partial`
+- [x] **Version badge / "update available" tag missing from About** — fixed in 8deff66 — `P3` — `partial`
   - What WEB does: About card shows version, commit and an `update: x.y.z` / `security` pill (`components/settings/about-data-settings.tsx:20-49`).
   - What RN does: `AboutDataSettings.tsx:114-134` shows version+commit; update info lives only in the (Android-only) Updates tab; on iOS nothing indicates a newer build exists.
   - Fix hint: reuse `useUpdatesStore.hasUpdate()` for a pill; on iOS link to TestFlight/App Store instead of Install.
