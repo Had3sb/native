@@ -91,7 +91,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: `refetchFeatureStores` fires `fetchContacts`, `fetchCalendars`, `refresh` concurrently on every login/restore/switch (`src/stores/auth-store.ts:81-99`).
   - Fix hint: port `first-touch-gate.ts` and wrap `request()`; reset it in `reset()`/`loadAccount`.
 
-- [ ] **Mailbox fetch not retried on first login (lazy provisioning, #217)** — `P3` — `bugfix-parity`
+- [x] **Mailbox fetch not retried on first login (lazy provisioning, #217)** — `P3` — `bugfix-parity` — fixed in 3194b5e
   - What WEB does: retries the initial mailbox fetch when a freshly created account returns no folders (changelog 1.6.x "Retry mailbox fetch on first login to handle lazy provisioning (#217)").
   - What RN does: `fetchMailboxes` does one `Mailbox/get`; an empty list on a brand-new Stalwart account stays empty until pull-to-refresh (`src/stores/email-store.ts:584-588`).
   - Fix hint: if the list is empty and there is no `inbox` role, retry after ~1 s up to 3 times.
@@ -155,23 +155,23 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
 
 ### Offline cache & outbox
 
-- [ ] **Outbox retries forever on errors that look transient but are permanent** — `P2` — `rn-only-bug`
+- [x] **Outbox retries forever on errors that look transient but are permanent** — `P2` — `rn-only-bug` — fixed in 0205aa0
   - What RN does: `isTransientNetworkError` treats any `TypeError` and messages containing `session expired`/`not connected` as transient (`src/lib/network-error.ts:48-63`). (a) A JMAP method error makes the unchecked read path throw `TypeError: Cannot read property 'list' of undefined` (see method-error finding) -> transient -> `recordError(..., false)` never increments `attempts` (`src/stores/outbox-store.ts:203-206`, `243-254`) -> the queue is wedged on that entry until reinstall. (b) `AuthenticationError('Session expired')` from a revoked password is also transient -> same wedge. WEB has no outbox (N/A) but never mis-classifies auth errors as transient.
   - Fix hint: classify by error class (`NetworkError`, `RequestTimeoutError`, `RateLimitError`) not by `TypeError`/message; treat `AuthenticationError` as terminal and pause the queue.
 
-- [ ] **Permanently failed outbox ops are dropped silently; optimistic state never reverted** — `P2` — `rn-only-bug`
+- [x] **Permanently failed outbox ops are dropped silently; optimistic state never reverted** — `P2` — `rn-only-bug` — fixed in 0205aa0
   - What RN does: after 5 attempts the entry is removed with `console.warn` (`src/stores/outbox-store.ts:210-216`); the list/cache was already patched optimistically (`offline-cache-store.patch`, email-store mutations) and nothing refetches, so the UI shows a move/flag the server rejected until the next full refresh; `OfflineBanner` only shows the count.
   - Fix hint: keep a `failed: OutboxEntry[]` in the store, surface it in `OfflineBanner`/AboutDataSettings, and trigger `refreshEmails()` for the affected mailbox when an op is dropped.
 
-- [ ] **Interrupted flush is not resumed until the next online transition or launch** — `P3` — `rn-only-bug`
+- [x] **Interrupted flush is not resumed until the next online transition or launch** — `P3` — `rn-only-bug` — fixed in 0205aa0
   - What RN does: `flush()` breaks on the first transient error (`src/stores/outbox-store.ts:203-206`); the only triggers are `haveLiveSession` and NetInfo `online` flips (`App.tsx:289-295`). A blip that NetInfo never reports (server hiccup) leaves the queue idle.
   - Fix hint: schedule a retry with back-off after a transient break; also flush on AppState `active`.
 
-- [ ] **Offline `onlineRun` fallback silently changes semantics (archive auto-foldering)** — `P3` — `rn-only-bug`
+- [x] **Offline `onlineRun` fallback silently changes semantics (archive auto-foldering)** — `P3` — `rn-only-bug` — fixed in 0205aa0
   - What RN does: `applyOrQueueBatch` runs the richer `onlineRun` (e.g. year/month archive foldering) and on transient failure re-queues the plain `mailboxes` primitives (`src/stores/outbox-store.ts:279-292`), so the replay lands in the top-level Archive without the year/month folder the user configured.
   - Fix hint: encode the folder creation into the queued op (or queue an `archive` op kind that re-runs the foldering logic on replay).
 
-- [ ] **`Email/changes.hasMoreChanges` ignored in the incremental refresh** — `P3` — `partial`
+- [x] **`Email/changes.hasMoreChanges` ignored in the incremental refresh** — `P3` — `partial` — fixed in f07e039
   - What WEB does: WEB refetches the page instead of diffing, so it is not exposed.
   - What RN does: `getEmailChanges` returns `hasMoreChanges` (`src/api/email.ts:355-376`) but `refreshEmails` uses `updated`/`destroyed` once (`src/stores/email-store.ts:836-846`); after a long offline gap the truncated lists leave stale keywords on some rows until the snapshot is invalidated. (The mailbox path does drain, `email-store.ts:575-579`, `601`.)
   - Fix hint: loop while `hasMoreChanges`, or drop the snapshot and fall back to the full re-query when it is set.
@@ -249,7 +249,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: `generateTotpEnrolment` produces `otpauth://totp/Stalwart:<label>?secret=…&algorithm=SHA1&digits=6&period=30` (`src/lib/totp.ts:469-485`) - correct parameters, base32 without padding correct; verification is server-side (comment `totp.ts:391-396`). Issuer `Stalwart` instead of the server host/brand.
   - Fix hint: use the server hostname (or configured brand) as issuer.
 
-- [ ] **Relay base URL stored unvalidated (http allowed)** — `P3` — `rn-only-bug`
+- [x] **Relay base URL stored unvalidated (http allowed)** — `P3` — `rn-only-bug` — fixed in f6f26f7
   - What RN does: `setStoredRelayBaseUrl` only trims slashes (`src/lib/push-notifications.ts:170-176`); the relay receives the FCM token and the JMAP push-subscription URL slot. WEB's telemetry/push endpoints are validated server-side against internal hosts (changelog "Block telemetry endpoint from pointing at internal/loopback hosts").
   - Fix hint: require `https://` in the settings input.
 
@@ -283,7 +283,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
 
 ### Misc network
 
-- [ ] **Unified inbox detached fetch: no timeout, no 429/`maxConcurrentRequests` handling, N parallel sessions** — `P3` — `partial`
+- [x] **Unified inbox detached fetch: no timeout, no 429/`maxConcurrentRequests` handling, N parallel sessions** — `P3` — `partial` — fixed in 6ae21d5
   - What WEB does: per-account clients share the retry/timeout/rate-limit pipeline; unified fetch errors are collected per account (`stores/email-store.ts:3325-3345`).
   - What RN does: `jmapPost`/`fetchInboxForAccount` do a bare `secureFetch` per account and per shared account in parallel (`src/api/unified-inbox.ts:116-131`, `215-233`), swallowing shared-account errors and only mapping 401 to "Session expired".
   - Fix hint: route through the same `request()` helper once it has deadlines/back-off (pass explicit credentials instead of the singleton).
