@@ -1,0 +1,189 @@
+import { Platform } from 'react-native';
+import * as Notifications from 'expo-notifications';
+import { useCalendarStore } from '../stores/calendar-store';
+import { useSettingsStore } from '../stores/settings-store';
+import { getUpcomingAlerts, type ScheduledAlert } from './calendar-alert-scheduler';
+
+// Local reminders for calendar events and tasks. The webmail polls
+// `getPendingAlerts` every minute while a tab is open; a phone is mostly
+// asleep, so instead every (re)load of the calendar schedules OS-level local
+// notifications for the alerts that fall due in the next few days and
+// cancels the ones that no longer apply. Honours the
+// `calendarNotificationsEnabled` setting.
+
+const CHANNEL_ID = 'calendar-reminders';
+const HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
+// iOS keeps at most 64 pending local notifications per app; leave room for
+// the rest of the app.
+const MAX_SCHEDULED = 48;
+const DATA_TAG = 'bulwark-calendar-alert';
+
+let permissionGranted: boolean | null = null;
+let channelReady = false;
+let rescheduleTimer: ReturnType<typeof setTimeout> | null = null;
+let rescheduling: Promise<void> | null = null;
+let queued = false;
+let syncStarted = false;
+let lastScheduledKeys: string[] = [];
+
+async function ensurePermission(): Promise<boolean> {
+  if (permissionGranted !== null) return permissionGranted;
+  try {
+    const current = await Notifications.getPermissionsAsync();
+    let granted = current.granted || current.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+    if (!granted && current.canAskAgain) {
+      const requested = await Notifications.requestPermissionsAsync();
+      granted = requested.granted || requested.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+    }
+    permissionGranted = !!granted;
+  } catch {
+    permissionGranted = false;
+  }
+  return permissionGranted;
+}
+
+async function ensureChannel(): Promise<void> {
+  if (channelReady || Platform.OS !== 'android') return;
+  try {
+    await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
+      name: 'Calendar reminders',
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: 'default',
+      vibrationPattern: [0, 250, 250, 250],
+    });
+  } catch {
+    // Channel creation failing only degrades to the default channel.
+  }
+  channelReady = true;
+}
+
+function alertKeyOf(request: Notifications.NotificationRequest): string | null {
+  const data = request.content.data as { tag?: string; key?: string } | undefined;
+  return data?.tag === DATA_TAG && typeof data.key === 'string' ? data.key : null;
+}
+
+/** Cancel every calendar reminder this app scheduled. */
+export async function cancelAllCalendarNotifications(): Promise<void> {
+  try {
+    const pending = await Notifications.getAllScheduledNotificationsAsync();
+    await Promise.all(
+      pending
+        .filter((r) => alertKeyOf(r) !== null)
+        .map((r) => Notifications.cancelScheduledNotificationAsync(r.identifier)),
+    );
+  } catch {
+    // Nothing to do; the OS keeps whatever it has.
+  }
+  lastScheduledKeys = [];
+}
+
+async function scheduleOne(alert: ScheduledAlert): Promise<void> {
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: alert.title,
+      body: alert.body,
+      sound: 'default',
+      data: { tag: DATA_TAG, key: alert.key, eventId: alert.eventId, kind: alert.kind },
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: new Date(alert.fireTimeMs),
+      ...(Platform.OS === 'android' ? { channelId: CHANNEL_ID } : {}),
+    },
+  });
+}
+
+/**
+ * Re-derive the reminders from the store and reconcile them with what the
+ * OS has pending: cancel alerts that vanished (event deleted, reminder
+ * removed, task completed) and add the new ones. Concurrent calls coalesce.
+ */
+export async function rescheduleCalendarNotifications(): Promise<void> {
+  if (rescheduling) {
+    queued = true;
+    return rescheduling;
+  }
+  rescheduling = (async () => {
+    try {
+      const enabled = useSettingsStore.getState().calendarNotificationsEnabled;
+      if (!enabled) {
+        if (lastScheduledKeys.length > 0) await cancelAllCalendarNotifications();
+        return;
+      }
+      if (!(await ensurePermission())) return;
+      await ensureChannel();
+
+      const { events, tasks, calendars } = useCalendarStore.getState();
+      const wanted = getUpcomingAlerts(events, tasks, calendars, {
+        now: Date.now(),
+        horizonMs: HORIZON_MS,
+        limit: MAX_SCHEDULED,
+      });
+      const wantedByKey = new Map(wanted.map((a) => [a.key, a]));
+
+      const pending = await Notifications.getAllScheduledNotificationsAsync();
+      const present = new Set<string>();
+      for (const request of pending) {
+        const key = alertKeyOf(request);
+        if (key === null) continue;
+        if (wantedByKey.has(key)) {
+          present.add(key);
+        } else {
+          await Notifications.cancelScheduledNotificationAsync(request.identifier);
+        }
+      }
+      for (const alert of wanted) {
+        if (present.has(alert.key)) continue;
+        try {
+          await scheduleOne(alert);
+        } catch {
+          // A single bad trigger must not block the rest.
+        }
+      }
+      lastScheduledKeys = [...wantedByKey.keys()];
+    } catch {
+      // Notifications are best-effort.
+    } finally {
+      rescheduling = null;
+      if (queued) {
+        queued = false;
+        void rescheduleCalendarNotifications();
+      }
+    }
+  })();
+  return rescheduling;
+}
+
+function scheduleSoon(): void {
+  if (rescheduleTimer) clearTimeout(rescheduleTimer);
+  // Debounce: a refresh sets events and tasks in two steps.
+  rescheduleTimer = setTimeout(() => {
+    rescheduleTimer = null;
+    void rescheduleCalendarNotifications();
+  }, 1500);
+}
+
+/**
+ * Keep local reminders in sync with the calendar store and the notification
+ * setting for the rest of the session. Idempotent; call once the calendar
+ * has been shown.
+ */
+export function startCalendarNotificationSync(): void {
+  if (syncStarted) return;
+  syncStarted = true;
+  let prev = useCalendarStore.getState();
+  useCalendarStore.subscribe((state) => {
+    if (state.events !== prev.events || state.tasks !== prev.tasks || state.calendars !== prev.calendars) {
+      prev = state;
+      scheduleSoon();
+    }
+  });
+  let prevEnabled = useSettingsStore.getState().calendarNotificationsEnabled;
+  useSettingsStore.subscribe((state) => {
+    if (state.calendarNotificationsEnabled !== prevEnabled) {
+      prevEnabled = state.calendarNotificationsEnabled;
+      scheduleSoon();
+    }
+  });
+  scheduleSoon();
+}

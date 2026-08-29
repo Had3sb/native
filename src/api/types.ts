@@ -464,8 +464,11 @@ export interface RecurrenceRule {
 }
 
 export interface Alert {
-  trigger: { '@type': string; offset?: string; when?: string };
+  '@type'?: 'Alert';
+  trigger: { '@type': string; offset?: string; when?: string; relativeTo?: 'start' | 'end' | string };
   action?: string;
+  // UTCDateTime the user acknowledged the alert; null/absent when pending.
+  acknowledged?: string | null;
 }
 
 export interface CalendarEvent {
@@ -509,7 +512,8 @@ export interface CalendarEvent {
   updated?: string;
   // Task-only (RFC 8984 JSTask) fields.
   progress?: 'needs-action' | 'in-process' | 'completed' | 'failed' | 'cancelled' | string;
-  due?: string;
+  progressUpdated?: string;
+  due?: string | null;
   priority?: number;
   percentComplete?: number;
   color?: string;
@@ -546,6 +550,9 @@ export interface Calendar {
   myRights?: CalendarRights;
   // Principals this (owned) calendar is shared with and their rights.
   shareWith?: Record<string, CalendarRights> | null;
+  // Alerts applied to events that set `useDefaultAlerts` (RFC 8620 calendars).
+  defaultAlertsWithTime?: Record<string, Alert> | null;
+  defaultAlertsWithoutTime?: Record<string, Alert> | null;
   // Client-only: JMAP account the calendar was fetched from. Absent for the
   // primary account; set for calendars shared with the user.
   accountId?: string;

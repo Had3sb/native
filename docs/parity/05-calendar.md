@@ -125,7 +125,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `calendars.find(cal => !cal.myRights || cal.myRights.mayWrite !== false)` (`src/components/email/CalendarInvitationBanner.tsx:96`) and `parseCalendarBlob(attachment.blobId)` on `jmapClient.accountId` (`:59`, `src/api/calendar.ts:355-372`). RN shows only the active account's mailboxes, so #847/#867 are largely N/A; the "first writable" pick is wrong when a subscription calendar sorts first.
   - Fix hint: prefer `cal.isDefault && !cal.isShared`, exclude subscription/birthday calendars; pass `email.accountId` (if RN exposes shared mailboxes later) to `parseCalendarBlob`.
 
-- [ ] **Organizer not identified in the participant list; no "invited by", status counts or cancelled/tentative rendering** — `P3` — `partial`
+- [x] **Organizer not identified in the participant list; no "invited by", status counts or cancelled/tentative rendering** — `P3` — `partial` — fixed in 5dc4070 + 0f80e98 (organizer label, cancelled strike-through in sheet/card/month chips, tentative badge on cards; week-view blocks are untouched)
   - What WEB does: `getParticipantList` marks the organizer (also via `organizerCalendarAddress`, #731), the popover shows "(organizer)", strikes through `status === 'cancelled'` and badges `tentative` (ref `lib/calendar-participants.ts:126-157`, `components/calendar/event-detail-popover.tsx:299-312, 445-449`, changelog 1.7.2 #572).
   - What RN does: participants listed with status dots only (`src/components/calendar/EventDetailSheet.tsx:298-325`); no cancelled/tentative styling in sheet, `EventCard` or views.
   - Fix hint: port `getParticipantList`/`getStatusCounts`; add `line-through` when `event.status === 'cancelled'` in `EventCard`, `WeekView`, `EventDetailSheet`.
@@ -142,7 +142,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `canRecolor = !!onSetColor && !!cal.isShared` (`CalendarSidebarDrawer.tsx:209`).
   - Fix hint: for `!cal.isShared` call the new `updateCalendar(id, { color })`.
 
-- [ ] **Shared-calendar colour key differs from WEB (not portable, but internally consistent)** — `P3` — `partial`
+- [x] **Shared-calendar colour key differs from WEB (not portable, but internally consistent)** — `P3` — `partial` — fixed in 0f80e98
   - What WEB does: key = `${localAccountId}|${accountId}|${originalId}` (ref `lib/shared-calendar-colors.ts:33-40`).
   - What RN does: key = `${accountId}|${id}` where `id` is already the namespaced `${accountId}:${raw}` (`src/lib/calendar-utils.ts:474-478`). Works, but the account id is duplicated in the key and would break if the namespacing format changes.
   - Fix hint: use `cal.originalId ?? cal.id` like WEB.
@@ -174,42 +174,42 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Views / navigation / locale
 
-- [ ] **Entire calendar UI is hard-coded English although RN has i18n** — `P2` — `missing`
+- [ ] **Entire calendar UI is hard-coded English although RN has i18n** — `P2` — `missing` — partial in 0f80e98: screen, month/week/agenda views, event card/sheet/modal, drawer, scope dialog, settings, banner and calendar/share sheets use `t()` + date-fns locales; deferred: TasksSheet, ICalImportSheet, ICalSubscriptionSheet, RecurrenceEditor and `formatReminder` still hard-code English
   - What WEB does: everything through `next-intl` (`t('calendar.*')`), month/day names and popover dates localized (changelog 1.6.x "Localize event start date in detail popover and event modal").
   - What RN does: `src/i18n/index.ts` + `useLocaleStore` are used by 18 other files, but none of `src/components/calendar/*`, `src/screens/CalendarScreen.tsx` or `CalendarSettings.tsx` import it; all labels ("Today", "No events", "Does not repeat", "Going?", RSVP labels, drawer titles, etc.) and `date-fns` `format()` calls without a `locale` are English (`CalendarScreen.tsx:408, 448, 504, 640-641`, `EventModal.tsx:60-67, 326, ...`, `MonthView.tsx:25-26`, `AgendaView.tsx:33-37`).
   - Fix hint: add a `calendar.*` namespace to `locales/*.json` (WEB's keys can be copied) and pass a date-fns locale from the locale store into `format()`.
 
-- [ ] **First day of week limited to Monday/Sunday; no Saturday, no Jalali (#490)** — `P3` — `missing`
+- [ ] **First day of week limited to Monday/Sunday; no Saturday, no Jalali (#490)** — `P3` — `missing` — Saturday (0|1|6) done in 0f80e98; deferred: Jalali month grid needs a port of `lib/jalali-utils.ts` + `useCalendarLocale`
   - What WEB does: `firstDayOfWeek` 0/1/6 with Saturday default for Persian and a full Jalali month grid / headers (ref `hooks/use-calendar-locale.ts:35-120`, `lib/jalali-utils.ts:161-169`, changelog 1.8.0 #490).
   - What RN does: `FirstDayOfWeek = 0 | 1` (`src/stores/settings-store.ts:76`), `MonthView`/`WeekView` typed `0 | 1` (`MonthView.tsx:34`, `WeekView.tsx:40`), no Jalali.
   - Fix hint: widen the type to `0|1|6`, add Saturday to `CalendarSettings`; Jalali is a larger port of `jalali-utils.ts` + a `useCalendarLocale` equivalent (only if the fa locale is added to RN).
 
-- [ ] **Week numbers are not ISO when the week starts on Monday; no week numbers in week view** — `P3` — `rn-only-bug`
+- [x] **Week numbers are not ISO when the week starts on Monday; no week numbers in week view** — `P3` — `rn-only-bug` — fixed in 0f80e98 (month view; the week view header has no room for it)
   - What WEB does: `getISOWeek` when `weekStartsOn === 1`, else `getWeek(..., { weekStartsOn: 0 })` (ref `components/calendar/mini-calendar.tsx:74-79`).
   - What RN does: `getWeek(row[0], { weekStartsOn })` (`src/components/calendar/MonthView.tsx:137`) — without `firstWeekContainsDate: 4` this is not ISO numbering and can be off by one around New Year. WeekView has no week number.
   - Fix hint: use `getISOWeek` for Monday start; optionally show the number in the WeekView header row.
 
-- [ ] **"Show time in month view" setting is ignored (#666)** — `P3` — `bugfix-parity`
+- [x] **"Show time in month view" setting is ignored (#666)** — `P3` — `bugfix-parity` — fixed in 0f80e98
   - What WEB does: on mobile, `showChips = !isMobile || showTimeInMonthView` renders event chips with times instead of dots (ref `components/calendar/calendar-month-view.tsx:49-52`, `event-card.tsx:80, 178`, changelog 1.8.0 #666).
   - What RN does: setting exists (`src/stores/settings-store.ts:169`, `CalendarSettings.tsx:435-443`) but `MonthView` always draws up to 3 dots (`src/components/calendar/MonthView.tsx:83-86`). RN affected.
   - Fix hint: pass the setting into `MonthView` and render a compact chip (title + start time) per event when on.
 
-- [ ] **Hover-preview setting exposed on mobile** — `P3` — `rn-only-bug`
+- [x] **Hover-preview setting exposed on mobile** — `P3` — `rn-only-bug` — fixed in 0f80e98 (store key kept for settings-sync compatibility)
   - What WEB does: hover preview is a desktop pointer feature.
   - What RN does: `CalendarSettings` shows "Hover preview" with delay options and nothing consumes `calendarHoverPreview` (`src/components/settings/CalendarSettings.tsx:87-102`; no other reference in `src/`).
   - Fix hint: remove the setting row (keep the store key for settings-sync compatibility or drop it).
 
-- [ ] **No day view (falls back to agenda); tapping a month day does not open the day** — `P3` — `partial`
+- [x] **No day view (falls back to agenda); tapping a month day does not open the day** — `P3` — `partial` — fixed in 0f80e98 ("Day" hidden from the mobile default-view options; a synced "day" shows as Agenda)
   - What WEB does: day view with time grid; on mobile, tapping a date in month view switches to day view and offers "back to month" (ref `components/calendar/calendar-app.tsx:461-470`, `calendar-day-view.tsx`).
   - What RN does: `calendarDefaultView === 'day'` maps to agenda (`src/screens/CalendarScreen.tsx:131-137`); month view shows a list below the grid instead. Acceptable UX, but the settings option "Day" is misleading.
   - Fix hint: either reuse `WeekView` with a single-day `weekDays` array as a day grid, or hide "Day" from the RN default-view options.
 
-- [ ] **Week view: event block time label ignores 12h setting; timed grid has no long-press-at-minute precision** — `P3` — `partial`
+- [x] **Week view: event block time label ignores 12h setting; timed grid has no long-press-at-minute precision** — `P3` — `partial` — fixed in 0f80e98
   - What WEB does: `formatSnapTime(minutes, timeFormat)` (ref `lib/calendar-utils.ts:278`).
   - What RN does: `minutesToTimeLabel` always `HH:mm` (`src/components/calendar/WeekView.tsx:315-319`) while the gutter honours 12h (`:229-231`). Long-press creates at the whole hour (`:123-128`), fine for mobile.
   - Fix hint: use `timePattern(timeFormat)` with `format()`.
 
-- [ ] **EventCard shows the description under a location (MapPin) icon and never shows the location** — `P3` — `rn-only-bug`
+- [x] **EventCard shows the description under a location (MapPin) icon and never shows the location** — `P3` — `rn-only-bug` — fixed in 0f80e98
   - What WEB does: card shows time, location and calendar (ref `components/calendar/event-card.tsx`).
   - What RN does: `event.description` rendered with `<MapPin/>` (`src/components/calendar/EventCard.tsx:65-72`); `locations` is not read.
   - Fix hint: show `Object.values(event.locations)[0]?.name` with MapPin; drop or move the description.
@@ -272,7 +272,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Settings
 
-- [ ] **No custom time-zone setting (#755); no birthday-calendar colour; no "Day" view on mobile (see above)** — `P3` — `missing`
+- [ ] **No custom time-zone setting (#755); no birthday-calendar colour; no "Day" view on mobile (see above)** — `P3` — `missing` — time-zone setting (`calendarTimeZone`, used for saved events and JMAP queries) done in 58a6f45 + 0f80e98; deferred: birthday-calendar colour setting
   - What WEB does: `timeZone: 'auto' | IANA` overriding browser detection, used for display (`displayNow`, `toDisplayDate`) and for the `timeZone` on saved events (ref `lib/timezone.ts:29-75`, `stores/settings-store.ts:317, 553`, changelog 1.9.2 #755); `birthdayCalendarColor` (`settings-store.ts:377, 609`).
   - What RN does: device zone only (`src/api/calendar.ts:15-21`); birthday colour fixed (`src/lib/birthday-calendar.ts:7`).
   - Fix hint: add `timeZone` to the settings store (synced with WEB's key so it round-trips through settings sync), pass it as the JMAP `timeZone` arg and into saved events; convert display via `Intl` like WEB's `getWallClock`.

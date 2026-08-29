@@ -80,6 +80,7 @@ import { useContactsStore } from '../stores/contacts-store';
 import { useLocaleStore } from '../stores/locale-store';
 import { useUserCalendarAddresses } from '../lib/calendar-user-addresses';
 import { useCalendarSubscriptionsStore } from '../stores/calendar-subscriptions-store';
+import { startCalendarNotificationSync } from '../lib/calendar-notifications';
 import type { Calendar, CalendarEvent, RecurrenceRule } from '../api/types';
 
 type ViewMode = 'month' | 'week' | 'agenda';
@@ -297,6 +298,9 @@ export default function CalendarScreen() {
   React.useEffect(() => {
     void hydrate();
     void fetchCalendarsAction();
+    // Local reminders follow the store from here on (honours the
+    // notifications setting; cancelled/acknowledged alerts are skipped).
+    startCalendarNotificationSync();
   }, [hydrate, fetchCalendarsAction]);
 
   // Refresh iCal subscriptions whose interval elapsed: on mount and whenever
