@@ -230,12 +230,12 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
 
 ### Themes and appearance
 
-- [ ] **Font size setting is honoured by 3 of ~90 files** — `P3` — `partial`
+- [ ] **Font size setting is honoured by 3 of ~90 files** — `P3` — `partial` — deferred: Text.defaultProps is gone on the new architecture; needs the static typography import replaced by useTypography() per screen
   - What WEB does: `--font-size-base` on `:root` scales everything (`stores/settings-store.ts:1264-1274`).
   - What RN does: `useTypography()` (`RN: src/theme/dynamic.ts:47-68`) is used by EmailListScreen, SidebarDrawer, CalendarSidebarDrawer; the other screens spread the static `typography` from `tokens.ts`, so Small/Large changes almost nothing (the thread reader, compose, settings, calendar, contacts all stay fixed).
   - Fix hint: either make `tokens.typography` a hook-backed getter or, cheaper, set `Text.defaultProps`/`maxFontSizeMultiplier` and scale via `allowFontScaling` + a root `PixelRatio` factor.
 
-- [ ] **`animationsEnabled` ignored by most animations; no reduce-motion respect** — `P3` — `partial`
+- [x] **`animationsEnabled` ignored by most animations; no reduce-motion respect** — fixed in 3ae9bbe — `P3` — `partial` — useShouldAnimate ORs in AccessibilityInfo.isReduceMotionEnabled; the 18 fixed-duration Animated.timing calls in other areas' files still need useAnimDuration
   - What WEB does: `--transition-duration: 0s` when off (`stores/settings-store.ts:1322-1331`) and `@media (prefers-reduced-motion: reduce)` (`app/globals.css:681`).
   - What RN does: 18 files call `Animated.timing`/`LayoutAnimation` with literal durations (e.g. `UndoSnackbar.tsx:32-42`, every sheet, `SwipeableRow.tsx`); `useAnimDuration` used in 3. `AccessibilityInfo.isReduceMotionEnabled` is never consulted.
   - Fix hint: route durations through `useAnimDuration` and OR in `AccessibilityInfo.isReduceMotionEnabled()` inside `useShouldAnimate`.
@@ -245,7 +245,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `AppearanceSettings.tsx:63` paints read subjects `rgba(250,250,250,0.8)` and `:193` preview text `rgba(161,161,170,0.7)` regardless of theme, so the preview is near-invisible on light. Similar literals: `PluginsSettings.tsx:27-30`, `ThemesSettings.tsx:108`, `SidebarAppsSettings.tsx:86,238,296`, `OfflineBanner.tsx:43` (`#a16207`), `SettingsScreen.tsx:382`.
   - Fix hint: replace with `c.textSecondary`/`c.mutedForeground`/`c.warningBg` tokens.
 
-- [ ] **`userInterfaceStyle: 'dark'` likely defeats the "System" theme on iOS** — `P3` — `bug` (verify)
+- [x] **`userInterfaceStyle: 'dark'` likely defeats the "System" theme on iOS** — fixed in 5802cae — `P3` — `bug` (verify) — userInterfaceStyle automatic + light/dark splash
   - What WEB does: `system` follows `prefers-color-scheme` (`stores/theme-store.ts:53-56`).
   - What RN does: `RN: app.config.js:33` sets `userInterfaceStyle: 'dark'`, which prebuild writes as `UIUserInterfaceStyle = Dark` in Info.plist, so `useColorScheme()` (`src/theme/colors.ts:16`, `App.tsx:220`) always returns `dark` and "System" behaves like "Dark". On Android without `expo-system-ui` (not in `package.json`) the key is ignored with a prebuild warning, so Android is probably fine. Splash background is also dark-only (`:38`).
   - Fix hint: set `userInterfaceStyle: 'automatic'` and give the splash a light variant (`splash.dark`).
@@ -255,7 +255,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `ThemesSettings.tsx:18-22` lists `Default/Qui/Sepia` (Qui exists in WEB; Sepia does not), stores `activeThemeId` that nothing reads, "Upload .zip" has no handler (`:81-83`); the tab is marked Experimental.
   - Fix hint: minimal viable subset = map WEB's built-in theme token sets (`builtin-themes.ts` light/dark `colors`) onto `ThemePalette` and let `useColors()` pick `activeThemeId`; remove the upload button. Otherwise hide the tab.
 
-- [ ] **Status bar / navigation bar theming partial** — `P3` — `partial`
+- [ ] **Status bar / navigation bar theming partial** — `P3` — `partial` — deferred: expo-navigation-bar / expo-system-ui are not installed; add one and call setBackgroundColorAsync(c.background) on theme change
   - What WEB does: theme-color meta follows active theme (#671).
   - What RN does: `StatusBar style` is derived (`App.tsx:219-223`) but the Android navigation bar (edge-to-edge is on, `app.config.js:56`) is never themed, and the bottom tab bar/`SafeAreaView` colours come from `useColors` so they are fine.
   - Fix hint: `expo-navigation-bar`/`SystemUI.setBackgroundColorAsync(c.background)` on theme change.
@@ -294,17 +294,17 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
 
 ### Misc UI
 
-- [ ] **Deep-link scheme registered but nothing handles it** — `P2` — `missing`
+- [x] **Deep-link scheme registered but nothing handles it** — fixed in 5802cae — `P2` — `missing` — bulwarkmobile://, webmail https permalinks, mailto: (scheme + SENDTO filter) and ACTION_SEND/SEND_MULTIPLE share targets → Compose; iOS universal links still deferred
   - What WEB does: permalinks for mail/calendar/contacts/files/settings with build/parse helpers (`lib/deep-links.ts:196-235,272-311,322-370,379-414`), `mailto:` opens the built-in composer, protocol handler registration, `webcal:`.
   - What RN does: `scheme: 'bulwarkmobile'` (`RN: app.config.js:29`) and a `VIEW`/`BROWSABLE` intent filter (`AndroidManifest.xml:25-30`) exist, but `NavigationContainer` has no `linking` prop (`App.tsx:443`) and there is no `Linking.getInitialURL`/`addEventListener('url')` anywhere, so tapping a `bulwarkmobile://` URL merely launches the app. No `https` App Links for the webmail permalink format, no `mailto:` intent filter (tapping a mailto link in another app never offers Bulwark), no `SEND`/`SEND_MULTIPLE` share target.
   - Fix hint: add a `linking` config mapping `bulwarkmobile://mail/message/:emailId`, `/calendar/event/:id`, `/contacts/:id`, `/settings/:tab` to the existing routes (`src/navigation/types.ts`), reuse WEB's path grammar so a webmail permalink can be rewritten; add `<data android:scheme="mailto"/>` and `ACTION_SEND` (`text/*`, `image/*`) filters routed to `Compose` with `prefillTo`/attachments. iOS: `CFBundleURLTypes` via `scheme` is already emitted; add `associatedDomains` for universal links later.
 
-- [ ] **No general toast system; only the email undo snackbar** — `P3` — `partial`
+- [x] **No general toast system; only the email undo snackbar** — fixed in 3ae9bbe — `P3` — `partial` — src/stores/toast-store.ts + ToastHost mounted in App.tsx; Alert.alert call sites not migrated
   - What WEB does: typed toasts with title/message, primary+secondary actions, progress bar, pause-on-hover, 10 s for errors (`stores/toast-store.ts`, `components/ui/toast.tsx`), used for every post-action acknowledgement (move toast shows full folder path, send-delay toast with "Send now").
   - What RN does: `UndoSnackbar.tsx` is bound to `useEmailStore.pendingUndo` only; 23 files use `Alert.alert` (modal, blocking) for confirmations and errors; success acknowledgements mostly absent.
   - Fix hint: generalise `UndoSnackbar` into a `toast-store` (queue, type, action) and mount one host in `App.tsx`; migrate error `Alert.alert`s that need no decision.
 
-- [ ] **No prompt dialog; Dialog is confirm-only and untranslated** — `P3` — `partial`
+- [x] **No prompt dialog; Dialog is confirm-only and untranslated** — fixed in 3ae9bbe — `P3` — `partial`
   - What WEB does: `components/ui/confirm-dialog.tsx` and `prompt-dialog.tsx` (text input), `useConfirmDialog` hook.
   - What RN does: `Dialog.tsx:8-17` takes title/message/confirm/cancel with English defaults `'Confirm'`/`'Cancel'` (`:33-34`); text prompts are ad-hoc `TextInput`s.
   - Fix hint: add an `input` prop and default the labels via `t('common.confirm')`/`t('common.cancel')`.
@@ -314,12 +314,12 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `OfflineBanner.tsx:22-29` hard-codes "You are offline" with an English plural; network-store logic itself is sound (`network-store.ts:16-22` treats `isInternetReachable === null` as online) and App.tsx retries the session on reconnect (`:245-252`).
   - Fix hint: `t('common.offline', ...)` and reuse plural helper once interpolation exists.
 
-- [ ] **Accessibility labels almost absent** — `P3` — `partial`
+- [ ] **Accessibility labels almost absent** — `P3` — `partial` — done in my files (RadioGroup/Select roles, Dialog header, Settings back button, ToastHost, UpdateBanner, AccountSettings, security key rows); other areas' screens untouched
   - What WEB does: aria-labels on icon buttons, `role="checkbox"`, screen-reader improvements (changelog 1.8.0 Navigation).
   - What RN does: `accessibilityLabel`/`Role` appear in 8 of 94 `.tsx` files (FilesScreen 4, EmailListScreen 3, login 4, EmailThreadScreen 2, ToggleSwitch 1). Icon-only `Pressable`s in settings (`SettingsScreen.tsx:217-222` back button, `SidebarAppsSettings.tsx:91-96`, `SmimeSettings.tsx:91-106`, `UpdateBanner.tsx:40`), the tab bar badge and the `RadioGroup`/`Select` in `settings-section.tsx` have none.
   - Fix hint: give every icon-only Pressable an `accessibilityLabel` + `accessibilityRole="button"`, `ToggleSwitch` `accessibilityRole="switch"` + `accessibilityState`, `RadioGroup` options `radio`.
 
-- [ ] **No haptic feedback** — `P3` — `missing` (mobile-only nicety)
+- [x] **No haptic feedback** — fixed in 3ae9bbe — `P3` — `missing` (mobile-only nicety) — expo-haptics + src/lib/haptics.ts haptic(kind); SwipeableRow/undo wiring is the mail-list agent's (call haptic('light') at threshold, haptic('success') on undo)
   - What RN does: `VIBRATE` permission exists only for the notification channel; no `expo-haptics` in `package.json`; swipe-to-action, undo and destructive confirms give no tactile feedback.
   - Fix hint: `expo-haptics` `impactAsync(Light)` on swipe threshold cross and `notificationAsync(Success/Warning)` on undo/destructive.
 
