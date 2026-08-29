@@ -223,7 +223,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: none of the three RTL locales are shipped; no `I18nManager` usage anywhere; `android:supportsRtl="true"` is set (`RN: AndroidManifest.xml:16`) so the OS would mirror layouts when the device locale is RTL, but the app's own locale override cannot force it, and `SwipeableRow` maps left/right physically.
   - Fix hint: when adding ar/he/fa, call `I18nManager.forceRTL(dir==='rtl')` + `allowRTL` on override change (requires reload), audit `paddingLeft/Right` → `paddingStart/End`, and swap swipe actions when `I18nManager.isRTL`.
 
-- [ ] **Language list not localized and no "auto" date locale** — `P3` — `partial`
+- [ ] **Language list not localized and no "auto" date locale** — `P3` — `partial` — deferred: language labels are native names (webmail parity); timeZone landed as calendarTimeZone (calendar agent); dateLocale needs a locale override threaded through src/lib/date-format.ts call sites in other areas
   - What WEB does: language picker sorted, flags, `dateLocale` (auto/iso/en-GB/en-US), `firstDayOfWeek`, `timeZone` on the Language tab (`components/settings/language-settings.tsx` `updateSetting('dateLocale'|'firstDayOfWeek'|'timeZone'`).
   - What RN does: `LanguageSettings.tsx` offers language, `dateFormat`, `timeFormat` only; day-of-week lives under Calendar; no time zone.
   - Fix hint: add `dateLocale` and `timeZone` keys and thread them through `src/lib/date-format.ts` (`Intl.DateTimeFormat(locale, { timeZone })`).
