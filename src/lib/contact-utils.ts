@@ -7,11 +7,13 @@ import type {
 
 export function getContactDisplayName(contact: ContactCard): string {
   if (contact.name) {
+    // given + surname only, like the webmail: keeps sort order, dedupe keys
+    // and initials identical across clients (the middle name is shown by the
+    // detail screen, not by the list).
     if (contact.name.components && contact.name.components.length > 0) {
       const given = contact.name.components.find((c) => c.kind === 'given')?.value || '';
       const surname = contact.name.components.find((c) => c.kind === 'surname')?.value || '';
-      const middle = contact.name.components.find((c) => c.kind === 'middle')?.value || '';
-      const full = [given, middle, surname].filter(Boolean).join(' ');
+      const full = [given, surname].filter(Boolean).join(' ');
       if (full) return full;
     }
     if (contact.name.full) return contact.name.full;
@@ -68,12 +70,90 @@ export function getContactInitials(contact: ContactCard): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+// Some JMAP servers (notably Stalwart, see webmail #307) emit photo data URIs
+// without a mediatype, like `data:base64,...` or `data:;base64,...`. Per
+// RFC 2397 the missing/empty mediatype defaults to `text/plain`, so RN's
+// Image cannot decode the bytes. Rewrite to include a mediatype.
+export function normalizeContactPhotoUri(uri: string, mediaType?: string): string {
+  const mime = mediaType && mediaType.includes('/') ? mediaType : 'image/jpeg';
+  if (uri.startsWith('data:base64,')) {
+    return `data:${mime};base64,${uri.slice('data:base64,'.length)}`;
+  }
+  if (uri.startsWith('data:;base64,')) {
+    return `data:${mime};base64,${uri.slice('data:;base64,'.length)}`;
+  }
+  return uri;
+}
+
 export function getContactPhotoUri(contact: ContactCard): string | undefined {
   if (!contact.media) return undefined;
   for (const media of Object.values(contact.media)) {
-    if (media.kind === 'photo' && media.uri) return media.uri;
+    if (media.kind === 'photo' && media.uri) {
+      return normalizeContactPhotoUri(media.uri, media.mediaType);
+    }
   }
   return undefined;
+}
+
+/**
+ * Lossless PartialDate → input string: `1990-05-04`, `1990-05`, `1990`,
+ * `--05-04`, `--05`, `---04`. Never pads a missing month/day with `01` (that
+ * used to rewrite a year-only birthday to Jan 1 on the next save).
+ */
+export function partialDateToString(d: AnniversaryDate | undefined): string {
+  if (!d) return '';
+  if (typeof d === 'string') return d;
+  if (typeof d === 'object') {
+    if ('@type' in d && d['@type'] === 'Timestamp') {
+      return typeof d.utc === 'string' ? d.utc.split('T')[0] : '';
+    }
+    const pd = d as PartialDate;
+    const yr = pd.year ? String(pd.year).padStart(4, '0') : '';
+    const mo = pd.month ? String(pd.month).padStart(2, '0') : '';
+    const da = pd.day ? String(pd.day).padStart(2, '0') : '';
+    if (yr && mo && da) return `${yr}-${mo}-${da}`;
+    if (yr && mo) return `${yr}-${mo}`;
+    if (yr) return yr;
+    if (mo && da) return `--${mo}-${da}`;
+    if (mo) return `--${mo}`;
+    if (da) return `---${da}`;
+  }
+  return '';
+}
+
+/**
+ * Parse a typed date into an RFC 9553 PartialDate. Accepts the extended and
+ * basic vCard forms (`YYYY-MM-DD`, `YYYYMMDD`, `YYYY-MM`, `YYYY`, `--MM-DD`,
+ * `--MMDD`, `--MM`, `---DD`) and an optional trailing time part, which is
+ * dropped. Returns null for anything else - Stalwart rejects string dates, so
+ * free text must never reach the server.
+ */
+export function stringToPartialDate(s: string): PartialDate | null {
+  const datePart = s.trim().split(/[T ]/)[0];
+  if (!datePart) return null;
+  const mk = (year?: number, month?: number, day?: number): PartialDate | null => {
+    if (month !== undefined && (month < 1 || month > 12)) return null;
+    if (day !== undefined && (day < 1 || day > 31)) return null;
+    const pd: PartialDate = {};
+    if (year !== undefined) pd.year = year;
+    if (month !== undefined) pd.month = month;
+    if (day !== undefined) pd.day = day;
+    return Object.keys(pd).length > 0 ? pd : null;
+  };
+  const n = (v: string | undefined) => (v === undefined ? undefined : parseInt(v, 10));
+  let m = datePart.match(/^---(\d{2})$/);
+  if (m) return mk(undefined, undefined, n(m[1]));
+  m = datePart.match(/^--(\d{2})-?(\d{2})$/);
+  if (m) return mk(undefined, n(m[1]), n(m[2]));
+  m = datePart.match(/^--(\d{2})$/);
+  if (m) return mk(undefined, n(m[1]));
+  m = datePart.match(/^(\d{4})-?(\d{2})-?(\d{2})$/);
+  if (m) return mk(n(m[1]), n(m[2]), n(m[3]));
+  m = datePart.match(/^(\d{4})-(\d{2})$/);
+  if (m) return mk(n(m[1]), n(m[2]));
+  m = datePart.match(/^(\d{4})$/);
+  if (m) return mk(n(m[1]));
+  return null;
 }
 
 const MONTH_NAMES_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
