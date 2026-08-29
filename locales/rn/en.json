@@ -1,0 +1,63 @@
+{
+  "context_menu": {
+    "color_tag": "Tag",
+    "remove_color": "Remove tag"
+  },
+  "email_composer": {
+    "attachment_reminder_title": "Forgot an attachment?",
+    "attachment_reminder_body": "Your message mentions \"{keyword}\" but no file is attached. Send anyway?",
+    "editor_unavailable": "Could not read the message content. Copy your text, then close and reopen the composer.",
+    "save_draft": "Save Draft",
+    "schedule_custom": "Pick date & time…",
+    "schedule_in_1h": "In 1 hour",
+    "schedule_in_3h": "In 3 hours",
+    "schedule_past_body": "The scheduled time must be in the future.",
+    "schedule_past_title": "Pick a future time",
+    "schedule_too_late_body": "That is later than this server allows. Pick an earlier time.",
+    "schedule_too_late_title": "Too far ahead",
+    "schedule_tomorrow": "Tomorrow, 8:00 AM",
+    "schedule_unsupported_body": "This mail server does not support scheduled send.",
+    "schedule_unsupported_title": "Scheduling unavailable",
+    "scheduled_body": "Your message will be sent at {time}.",
+    "scheduled_title": "Scheduled",
+    "validation": {
+      "subject_required": "Add a subject"
+    }
+  },
+  "email_list": {
+    "error": "Error",
+    "no_archive_folder": "Could not find an Archive folder on the server.",
+    "no_junk_folder": "Could not find a Spam/Junk folder on the server.",
+    "no_trash_folder": "Could not find a Trash folder on the server. Please check your mailbox configuration."
+  },
+  "email_viewer": {
+    "set_color": "Set tag",
+    "remove_color": "Remove tag",
+    "color_tag": {
+      "title": "Color Tag",
+      "red": "Red",
+      "orange": "Orange",
+      "yellow": "Yellow",
+      "green": "Green",
+      "blue": "Blue",
+      "purple": "Purple",
+      "pink": "Pink",
+      "none": "None"
+    }
+  },
+  "settings": {
+    "appearance": {
+      "language": {
+        "system_default": "System default",
+        "restart_for_direction": "Restart the app to apply the new text direction."
+      }
+    },
+    "keywords": {
+      "reset_defaults": "Reset to Defaults"
+    }
+  },
+  "offline": {
+    "banner": "You are offline",
+    "queued_changes": "{count, plural, one {# change} other {# changes}} will sync when you reconnect"
+  }
+}

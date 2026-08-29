@@ -57,6 +57,7 @@ export function LanguageSettings() {
 
   const deviceLabel =
     SUPPORTED_LOCALES.find((l) => l.code === deviceCode)?.label ?? 'English';
+  const directionChangePending = useLocaleStore((s) => s.directionChangePending);
 
   return (
     <View style={{ gap: spacing.xxxl }}>
@@ -65,10 +66,21 @@ export function LanguageSettings() {
         description={t('settings.appearance.language.description', 'Choose your preferred language')}
       >
         <View style={styles.list}>
-          {renderRow('system', `System default (${deviceLabel})`)}
+          {renderRow(
+            'system',
+            `${t('settings.appearance.language.system_default', 'System default')} (${deviceLabel})`,
+          )}
           <View style={styles.divider} />
           {SUPPORTED_LOCALES.map((l) => renderRow(l.code, l.label))}
         </View>
+        {directionChangePending && (
+          <Text style={styles.hint}>
+            {t(
+              'settings.appearance.language.restart_for_direction',
+              'Restart the app to apply the new text direction.',
+            )}
+          </Text>
+        )}
       </SettingsSection>
 
       <SettingsSection
@@ -131,6 +143,7 @@ function makeStyles(c: ThemePalette) {
   divider: { height: 1, backgroundColor: c.border, marginHorizontal: spacing.md },
   label: { ...typography.body, color: c.text },
   sublabel: { ...typography.caption, color: c.textMuted, marginTop: 2 },
+  hint: { ...typography.caption, color: c.warning, marginTop: spacing.sm },
   previewBox: {
     marginTop: spacing.md,
     padding: spacing.md,

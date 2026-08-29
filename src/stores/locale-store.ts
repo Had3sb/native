@@ -1,30 +1,68 @@
 import { create } from 'zustand';
+import { I18nManager } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { detectDeviceLocale, translate, type LocaleCode } from '../i18n';
+import {
+  detectDeviceLocale,
+  getLocaleDirection,
+  isSupportedLocale,
+  translate,
+  type LocaleCode,
+  type MessageParams,
+} from '../i18n';
 
 const STORAGE_KEY = 'webmail:locale:v1';
+
+export type TranslateFn = (key: string, fallback?: string, params?: MessageParams) => string;
 
 interface LocaleState {
   locale: LocaleCode;
   override: LocaleCode | null;
   hydrated: boolean;
+  /**
+   * True when the layout direction the current locale needs differs from
+   * what the running app was laid out with. RN only applies forceRTL on the
+   * next launch, so the language pane shows a "restart to apply" hint.
+   */
+  directionChangePending: boolean;
   hydrate: () => Promise<void>;
   setOverride: (locale: LocaleCode | null) => void;
-  t: (key: string, fallback?: string) => string;
+  t: TranslateFn;
+}
+
+/**
+ * Ask RN to mirror layouts for RTL locales (ar/he/fa). The device locale is
+ * handled by the OS (`android:supportsRtl`), but an in-app override needs an
+ * explicit forceRTL, which only takes effect after a restart. Returns true
+ * when the running layout does not match the requested direction yet.
+ */
+function applyLayoutDirection(locale: LocaleCode): boolean {
+  const rtl = getLocaleDirection(locale) === 'rtl';
+  const manager = I18nManager as typeof I18nManager | undefined;
+  if (!manager || typeof manager.forceRTL !== 'function') return false;
+  try {
+    manager.allowRTL(rtl);
+    manager.forceRTL(rtl);
+  } catch {
+    return false;
+  }
+  return manager.isRTL !== rtl;
 }
 
 export const useLocaleStore = create<LocaleState>((set, get) => ({
   locale: detectDeviceLocale(),
   override: null,
   hydrated: false,
+  directionChangePending: false,
 
   hydrate: async () => {
     if (get().hydrated) return;
     try {
       const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      const override = raw ? (JSON.parse(raw).override as LocaleCode | null) : null;
+      const stored = raw ? (JSON.parse(raw).override as string | null) : null;
+      const override = stored && isSupportedLocale(stored) ? stored : null;
       const locale = override ?? detectDeviceLocale();
-      set({ override, locale, hydrated: true });
+      const directionChangePending = applyLayoutDirection(locale);
+      set({ override, locale, hydrated: true, directionChangePending });
     } catch {
       set({ hydrated: true });
     }
@@ -32,9 +70,15 @@ export const useLocaleStore = create<LocaleState>((set, get) => ({
 
   setOverride: (override) => {
     const locale = override ?? detectDeviceLocale();
-    set({ override, locale });
+    const directionChangePending = applyLayoutDirection(locale);
+    set({ override, locale, directionChangePending });
     void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ override })).catch(() => {});
   },
 
-  t: (key, fallback) => translate(get().locale, key, fallback),
+  t: (key, fallback, params) => translate(get().locale, key, fallback, params),
 }));
+
+// Non-hook accessor for code outside React (background tasks, stores).
+export function t(key: string, fallback?: string, params?: MessageParams): string {
+  return useLocaleStore.getState().t(key, fallback, params);
+}

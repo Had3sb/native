@@ -1,4 +1,5 @@
 {
+  "meta_description": "Minimalist webmail client using JMAP protocol",
   "login": {
     "title": "Webmail",
     "username_label": "Email",
@@ -8,6 +9,8 @@
     "jmap_endpoint_label": "JMAP Server",
     "jmap_endpoint_placeholder": "https://mail.example.com",
     "jmap_endpoint_cors_hint": "The server must allow CORS requests from this domain.",
+    "jmap_server_label": "Server",
+    "jmap_server_auto_picked": "Server selected from your email domain.",
     "sign_in": "Sign in",
     "signing_in": "Signing in...",
     "loading": "Loading...",
@@ -111,6 +114,7 @@
     "unified_archive": "All Archive",
     "unified_junk": "All Junk",
     "all_accounts": "All Accounts",
+    "unified_mailbox": "Unified Mailbox",
     "expand": "Expand",
     "collapse": "Collapse",
     "expand_tooltip": "Expand",
@@ -118,7 +122,8 @@
     "mobile": {
       "search": "Search",
       "compose": "Compose",
-      "go_back": "Go back"
+      "go_back": "Go back",
+      "toggle_menu": "Toggle menu"
     },
     "clear_search": "Clear search",
     "vacation_active": "Vacation responder is active",
@@ -126,11 +131,53 @@
     "demo_reset": "Reset",
     "demo_tour": "Tour",
     "tags": "Tags",
+    "show_all_tags": "Show all ({count})",
+    "show_fewer_tags": "Show less",
     "folders": "Folders",
     "shared": "Shared",
     "mail": "Mail",
     "nav_label": "Navigation",
-    "add_app": "Apps"
+    "add_app": "Apps",
+    "scheduled": "Scheduled",
+    "unified_all_unread": "All unread",
+    "unified_all_starred": "All starred",
+    "unified_all_mail": "All mail",
+    "remove_account": "Remove account",
+    "remove_account_confirm": "Remove {account} from this device? You can add it back later."
+  },
+  "protocol_handlers": {
+    "title": "Default apps",
+    "description": "Choose whether email and calendar links open in Bulwark. Technically, Bulwark registers as a protocol handler for mailto: and webcal: links.",
+    "unsupported": "This browser or connection does not support manual protocol-handler registration. You may still be able to use the installed PWA via browser or OS settings.",
+    "mailto_label": "Email links",
+    "mailto_description": "Open mailto: links in Bulwark with a prefilled composer.",
+    "protocol_open_mode_label": "When opening protocol links",
+    "protocol_open_mode_description": "Choose whether Bulwark opens mailto: and webcal: links in a new tab or reuses an open session. The active-session option needs notification permission so you can click a fallback notification to bring Bulwark to the front if the browser blocks focus.",
+    "protocol_open_mode_active_session": "Open in active session if possible",
+    "protocol_open_mode_new_tab": "Always open a new tab",
+    "focus_notification_title": "Open Bulwark",
+    "focus_notification_body": "The link was opened in Bulwark. Click to bring the window to the front.",
+    "webcal_label": "Calendar links",
+    "webcal_description": "Open webcal: links in Bulwark with a prefilled calendar subscription dialog.",
+    "register_mailto": "Register email app",
+    "register_webcal": "Register calendar app",
+    "mailto_registered": "Email handler registration requested",
+    "webcal_registered": "Calendar handler registration requested",
+    "registration_failed": "Protocol handler registration failed",
+    "opening_mailto": "Opening composer...",
+    "opening_webcal": "Opening calendar...",
+    "browser_note": "Your browser or operating system may ask you to confirm this and may require Bulwark to be installed before it can be selected as the default app.",
+    "select_account_title": "Choose account",
+    "select_mailto_account": "Choose which account should open this email link.",
+    "select_webcal_account": "Choose which account should open this calendar link.",
+    "select_account_note": "This only applies to this protocol link.",
+    "detail_to": "To",
+    "detail_subject": "Subject",
+    "detail_no_subject": "No subject",
+    "detail_calendar": "Calendar",
+    "detail_source": "Source",
+    "active_account": "Active",
+    "switching_account": "Switching account..."
   },
   "sidebar_apps": {
     "modal_title": "Sidebar Apps",
@@ -155,6 +202,9 @@
     "delete_confirm": "Are you sure you want to delete \"{name}\"?",
     "no_apps": "No apps added yet",
     "no_apps_hint": "Add custom apps and links to your sidebar",
+    "managed_title": "Provided by your administrator",
+    "managed_description": "These apps are set up for everyone and cannot be changed.",
+    "managed_badge": "Managed",
     "search_icons": "Search icons...",
     "show_popular": "Popular",
     "show_all": "All",
@@ -184,6 +234,7 @@
     "batch_actions": {
       "select": "Select emails",
       "select_all": "Select all",
+      "selected_messages": "{count, plural, one {1 email} other {# emails}} selected",
       "mark_read": "Mark as read",
       "mark_unread": "Mark as unread",
       "delete": "Delete",
@@ -202,9 +253,27 @@
       "confirm_button": "Empty folder",
       "junk_hint": "You can empty the Junk folder to permanently remove all messages.",
       "trash_hint": "You can empty the Trash folder to permanently remove all messages."
-    }
+    },
+    "no_scheduled_emails": "No scheduled emails",
+    "no_scheduled_emails_description": "Messages scheduled for later will appear here.",
+    "scheduled_count": "{count, plural, one {1 scheduled email} other {# scheduled emails}}",
+    "scheduled_actions_hint": "Scheduled messages can be canceled, rescheduled, or edited from their scheduled actions.",
+    "cancel_scheduled_send": "Cancel send",
+    "reschedule_send": "Reschedule",
+    "cancel_and_edit": "Cancel and edit",
+    "cancel_and_compose_again": "Cancel and compose again",
+    "reschedule_prompt": "Enter a new date/time, e.g. 2026-05-04T15:30"
   },
   "email_viewer": {
+    "read_receipt": {
+      "prompt": "The sender asked to be notified when you open this message.",
+      "send": "Send receipt",
+      "ignore": "Ignore",
+      "sent": "Read receipt sent.",
+      "send_failed": "Read receipt could not be sent",
+      "mdn_subject": "Read: {subject}",
+      "mdn_body": "This is a return receipt for the message you sent to {recipient}.\n\nNote: This receipt only acknowledges that the message was displayed on the recipient''s computer. There is no guarantee that the recipient has read or understood the message contents."
+    },
     "no_email_selected": "No email selected",
     "no_email_description": "Select an email from the list to view it here",
     "no_conversation_selected": "No conversation selected",
@@ -212,6 +281,10 @@
     "compose": "Compose",
     "compose_hint": "Compose new message",
     "no_subject": "(No Subject)",
+    "no_body_content": "(No body content available)",
+    "no_preview_available": "No preview available",
+    "show_quoted_text": "Show quoted text",
+    "hide_quoted_text": "Hide quoted text",
     "loading_email": "Loading email...",
     "loading": "Loading...",
     "reply": "Reply",
@@ -223,10 +296,20 @@
     "unstar": "Unstar",
     "mark_unread": "Mark as unread",
     "mark_read": "Mark as read",
+    "unread": "Unread",
+    "read": "Read",
+    "spam_short": "Spam",
+    "not_spam_short": "Not spam",
+    "move": "Move",
     "print": "Print",
     "view_source": "View source",
+
+    "fullscreen": "Fullscreen",
+
+    "exit_fullscreen": "Exit fullscreen",
     "export_email": "Export as .eml",
-    "import_email": "Import .eml",
+    "forward_as_attachment": "Forward as attachment",
+    "import_email": "Import .eml or .zip",
     "keyboard_shortcuts": "Keyboard shortcuts (?)",
     "email_source": "Email Source",
     "draft_banner": "This message is a draft",
@@ -252,13 +335,15 @@
     "view_contact": "View contact",
     "message_details": "Message Details",
     "more_reply_options": "More reply options",
-    "set_color": "Set tag",
+    "set_tag": "Set tag",
     "tag": "Tag",
     "more_actions": "More actions",
     "previous": "Prev",
     "next": "Next",
     "move_to": "Move to...",
-    "remove_color": "Remove tag",
+    "remove_tag": "Remove tag",
+    "tag_filter_placeholder": "Filter tags",
+    "tag_no_matches": "No matching tags",
     "more_count": "+{count} more",
     "characters_count": "{count} characters",
     "quick_reply_placeholder": "Write a quick reply...",
@@ -306,24 +391,51 @@
         "fail": "DMARC Fail",
         "none": "No DMARC"
       },
-      "spam_score": "Spam Score"
+      "spam_score": "Spam Score",
+      "tooltip_spf": "Sender Policy Framework: Verifies that the sending server is authorized to send email on behalf of the domain",
+      "tooltip_dkim": "DomainKeys Identified Mail: Confirms the email was not altered in transit using a cryptographic signature",
+      "tooltip_dmarc": "Domain-based Message Authentication, Reporting & Conformance: Ensures SPF and DKIM align with the sender's domain and sets a policy for failures",
+      "policy": "Policy",
+      "result": {
+        "pass": "Pass",
+        "fail": "Fail",
+        "softfail": "Soft fail",
+        "neutral": "Neutral",
+        "permerror": "Permanent error",
+        "temperror": "Temporary error",
+        "none": "None"
+      }
+    },
+    "details": {
+      "recipients_routing": "Recipients & routing",
+      "authentication_security": "Authentication & security",
+      "identifiers_threading": "Identifiers & threading",
+      "mailing_list": "Mailing list",
+      "message_properties": "Message properties",
+      "sent": "Sent",
+      "received": "Received",
+      "delivery_time": "Delivery time",
+      "in_reply_to": "In-Reply-To",
+      "references": "References",
+      "thread_id": "Thread ID",
+      "size": "Size",
+      "mime_type": "MIME type",
+      "attachments_summary": "{count} files · {size}",
+      "list_id": "List ID",
+      "list_help": "List help",
+      "list_post": "List post",
+      "list_unsubscribe": "Unsubscribe",
+      "iprev": "Reverse DNS",
+      "spam_status": "Spam status",
+      "ai_verdict": "AI verdict",
+      "account": "Account",
+      "no_subject": "(no subject)"
     },
     "headers": {
       "routing": "Routing",
       "received": "Received",
       "message_id": "Message ID",
       "list_info": "List Information"
-    },
-    "color_tag": {
-      "title": "Color Tag",
-      "red": "Red",
-      "orange": "Orange",
-      "yellow": "Yellow",
-      "green": "Green",
-      "blue": "Blue",
-      "purple": "Purple",
-      "pink": "Pink",
-      "none": "None"
     },
     "tooltips": {
       "reply": "Reply (r)",
@@ -356,7 +468,9 @@
       "confirm_button": "Confirm",
       "cancel": "Cancel",
       "success_http": "Unsubscribe page opened in new tab",
-      "success_mailto": "Unsubscribe request sent to your email client",
+      "success_mailto": "Unsubscribe email sent",
+      "confirm_message_http": "The unsubscribe page will open in a new tab.",
+      "confirm_message_mailto": "An unsubscribe email will be sent to the sender.",
       "error": "Unable to unsubscribe",
       "dismiss": "Dismiss"
     },
@@ -371,6 +485,7 @@
       "declined_counter_title": "Counter Proposal Declined",
       "cancelled_title": "Event Cancelled",
       "organizer": "Organized by {name}",
+      "organizer_label": "Organized by",
       "attendees": "{count, plural, one {# attendee} other {# attendees}}",
       "accept": "Accept",
       "maybe": "Maybe",
@@ -431,10 +546,42 @@
       "collapse": "Hide details"
     },
     "send": "Send",
-    "more": "more"
+    "more": "more",
+    "scheduled_banner": "Scheduled to send at {date}",
+    "scheduled_send_created": "Email scheduled for sending",
+    "cancel_scheduled_send": "Cancel send",
+    "reschedule_send": "Reschedule",
+    "cancel_and_edit": "Cancel and edit",
+    "cancel_and_compose_again": "Cancel and compose again",
+    "reschedule_prompt": "Enter a new date/time, e.g. 2026-05-04T15:30",
+    "scheduled_actions_only": "Scheduled view supports scheduled actions only",
+    "undo_send_scheduled": "Message scheduled for sending",
+    "undo_send": "Undo send",
+    "contact_sidebar": {
+      "title": "Contact",
+      "close": "Close sidebar",
+      "action_email": "Email",
+      "action_email_title": "Send email",
+      "action_copy": "Copy",
+      "action_copy_title": "Copy email",
+      "action_edit_title": "Edit contact",
+      "section_emails": "Emails",
+      "section_phones": "Phones",
+      "section_organizations": "Organizations",
+      "section_addresses": "Addresses",
+      "section_notes": "Notes",
+      "not_in_contacts": "Not in your contacts",
+      "add_to_contacts": "Add to contacts",
+      "copied": "Copied!",
+      "copy_failed": "Failed to copy"
+    },
+    "send_now": "Send now"
   },
   "email_composer": {
+    "read_receipt_on": "Read receipt requested (click to disable)",
+    "read_receipt_off": "Request a read receipt",
     "new_message": "New Message",
+    "signature_edit_hint": "Double-click to edit the signature",
     "reply": "Reply",
     "reply_all": "Reply All",
     "forward": "Forward",
@@ -484,12 +631,22 @@
       "to": "To: {recipients}"
     },
     "remove_sub_address": "Remove sub-address",
+    "from_override": {
+      "toggle_off": "Override",
+      "toggle_on": "Cancel override",
+      "toggle_tooltip": "Edit the From name and address freely. Mail is still sent through your identity - only the visible From header changes.",
+      "name_label": "From name",
+      "name_placeholder": "Name",
+      "email_label": "From email address",
+      "email_placeholder": "alias@example.com"
+    },
     "use_template": "Template",
     "save_as_template": "Save as Template",
     "validation": {
       "recipient_required": "Add a recipient to send",
-      "subject_required": "Add a subject",
-      "body_required": "Write a message or attach a file"
+      "body_required": "Write a message or attach a file",
+      "attachments_uploading": "Attachments are still uploading — sending as soon as they finish",
+      "attachment_upload_failed": "Not sent — an attachment failed to upload. Remove it and try again."
     },
     "upload_progress": "Uploading {uploaded} / {total}",
     "upload_cancel": "Cancel upload",
@@ -497,11 +654,10 @@
     "drop_files": "Drop files to attach",
     "show_less": "Show less",
     "send_failed": "Failed to send email",
-    "editor_unavailable": "Could not read the message content. Copy your text, then close and reopen the composer.",
+    "send_timeout": "The server stopped responding. Check your Sent folder before sending again — the message may have gone out.",
     "continue_draft": "Continue draft",
     "close_draft_title": "Save or discard draft?",
     "close_draft_message": "You have unsaved changes. Would you like to save this as a draft or discard it?",
-    "save_draft": "Save Draft",
     "smime_sign_on": "S/MIME signing enabled",
     "smime_sign_off": "Enable S/MIME signing",
     "smime_encrypt_on": "S/MIME encryption enabled",
@@ -516,7 +672,63 @@
       "message": "Your message mentions \"{keyword}\" but no file is attached. Send anyway?",
       "send_anyway": "Send anyway",
       "back": "Back to editing"
-    }
+    },
+    "empty_subject": {
+      "title": "Send without a subject?",
+      "message": "This message has no subject. Send it anyway?",
+      "dont_ask_again": "Don't ask again",
+      "send_anyway": "Send anyway",
+      "back": "Back to editing"
+    },
+    "schedule_send": "Schedule send",
+    "schedule_send_description": "Choose when the server should release this message.",
+    "schedule_send_required": "Choose a date and time.",
+    "schedule_send_invalid": "Enter a valid date and time.",
+    "schedule_send_future": "Choose a future date and time.",
+    "schedule_send_too_late": "This time is later than the server allows.",
+    "schedule_send_unsupported": "Scheduled send is not supported for this account.",
+    "schedule_send_cleanup_warning": "Scheduled send was created, but draft cleanup failed.",
+    "send_delay_unsupported": "Send delay is not supported for this account.",
+    "send_delay_unsupported_confirm": "This account does not support send delay. Send immediately instead?",
+    "recipient_edit_email": "Edit email address",
+    "recipient_edit_name": "Edit display name",
+    "recipient_email_placeholder": "Email address",
+    "recipient_name_placeholder": "Display name",
+    "autocomplete_search_server": "Search the server",
+    "autocomplete_searching": "Searching...",
+    "toolbar": {
+      "bold": "Bold",
+      "italic": "Italic",
+      "underline": "Underline",
+      "strikethrough": "Strikethrough",
+      "text_color": "Text color",
+      "remove_color": "Remove color",
+      "heading_1": "Heading 1",
+      "heading_2": "Heading 2",
+      "bullet_list": "Bullet list",
+      "ordered_list": "Ordered list",
+      "quote": "Quote",
+      "code_block": "Code block",
+      "align_left": "Align left",
+      "align_center": "Align center",
+      "align_right": "Align right",
+      "text_direction": "Text direction (RTL/LTR)",
+      "link": "Link",
+      "table": "Table",
+      "clear_formatting": "Clear formatting",
+      "undo": "Undo",
+      "redo": "Redo",
+      "add_row_above": "Add row above",
+      "add_row_below": "Add row below",
+      "add_column_before": "Add column before",
+      "add_column_after": "Add column after",
+      "delete_row": "Delete row",
+      "delete_column": "Delete column",
+      "toggle_header_row": "Toggle header row",
+      "delete_table": "Delete table",
+      "pick_size": "Pick size"
+    },
+    "send_filing_warning": "Sent - but the post-send cleanup failed, a stale draft may remain."
   },
   "confirm_dialog": {
     "confirm": "Confirm",
@@ -544,7 +756,10 @@
     "rate_limited_title": "Server authentication is temporarily rate limited.",
     "rate_limited_detail": "Bulwark has paused background requests to avoid lockout. Retrying in {seconds}s.",
     "rate_limited_action_title": "Request paused to avoid lockout.",
-    "rate_limited_action_detail": "Bulwark is waiting for the server cooldown to end before sending more authenticated requests. Try again in {seconds}s."
+    "rate_limited_action_detail": "Bulwark is waiting for the server cooldown to end before sending more authenticated requests. Try again in {seconds}s.",
+    "pull_to_refresh": "Pull to refresh",
+    "release_to_refresh": "Release to refresh",
+    "refreshing": "Refreshing…"
   },
   "notifications": {
     "email_sent": "Email sent successfully",
@@ -644,9 +859,17 @@
     "nl": "Nederlands",
     "pl": "Polski",
     "pt": "Português",
+    "he": "עברית",
     "ru": "Русский",
+    "sk": "Slovenčina",
     "uk": "Українська",
-    "zh": "简体中文"
+    "zh": "简体中文",
+    "fa": "فارسی",
+    "farsi": "فارسی",
+    "switch_to_farsi": "Switch to Farsi",
+    "mn": "Монгол",
+    "mongolian": "Монгол",
+    "switch_to_mongolian": "Switch to Mongolian"
   },
   "settings": {
     "title": "Settings",
@@ -659,9 +882,12 @@
     "discard_changes": "Discard unsaved changes?",
     "discard": "Discard",
     "keep_editing": "Keep editing",
+    "search_placeholder": "Search settings",
+    "search_clear": "Clear search",
+    "search_no_results": "No matching settings",
     "tabs": {
       "appearance": "Appearance",
-      "language": "Language & Region",
+      "language": "Language, Region & Time",
       "email": "Email Behavior",
       "composer": "Composer",
       "privacy": "Privacy & Security",
@@ -678,11 +904,13 @@
       "files": "Files",
       "contacts": "Contacts",
       "encryption": "Encryption",
+      "protocol_handlers": "Default apps",
       "sidebar_apps": "Sidebar Apps",
       "notifications": "Notifications",
       "layout": "Layout",
       "reading": "Reading",
       "composing": "Composing",
+      "downloads": "Downloads",
       "content_senders": "Content & Senders",
       "about_data": "About & Data",
       "debug": "Debug"
@@ -699,6 +927,56 @@
       "advanced": "Advanced"
     },
     "appearance": {
+      "message_list_order": {
+        "label": "Message list order",
+        "description": "How messages are ordered in the list. The server does the ordering, so it covers the whole folder, not just the loaded messages.",
+        "preset": {
+          "chronological": "Chronological (newest first)",
+          "unread_first": "Unread first",
+          "starred_first": "Starred first",
+          "tagged_first": "Tagged first",
+          "custom": "Custom"
+        },
+        "tag_label": "Tag",
+        "advanced_show": "Advanced: edit sort levels",
+        "advanced_hide": "Hide advanced",
+        "criterion_label": "Level {n} criterion",
+        "direction_label": "Level {n} direction",
+        "criteria": {
+          "unread": "Unread",
+          "starred": "Starred",
+          "tag": "Tag",
+          "receivedAt": "Date received",
+          "sentAt": "Date sent",
+          "from": "Sender",
+          "subject": "Subject",
+          "size": "Size"
+        },
+        "direction": {
+          "unread_first": "Unread first",
+          "read_first": "Read first",
+          "starred_first": "Starred first",
+          "unstarred_first": "Unstarred first",
+          "tagged_first": "Tagged first",
+          "untagged_first": "Untagged first",
+          "newest_first": "Newest first",
+          "oldest_first": "Oldest first",
+          "a_to_z": "A → Z",
+          "z_to_a": "Z → A",
+          "largest_first": "Largest first",
+          "smallest_first": "Smallest first"
+        },
+        "add_level": "Add level",
+        "remove_level": "Remove level",
+        "move_up": "Move up",
+        "move_down": "Move down",
+        "tiebreak_note": "Up to three levels; later levels break ties. Newest first is always applied last.",
+        "scope": {
+          "label": "Apply to all folders",
+          "description": "When off, the order applies to the Inbox only; other folders stay chronological."
+        },
+        "unsupported_note": "Your mail server does not support ordering by read state, stars or tags. Those levels are ignored and the list stays chronological."
+      },
       "title": "Appearance",
       "description": "Customize the look and feel of your webmail",
       "theme": {
@@ -751,18 +1029,61 @@
       },
       "unified_mailbox": {
         "label": "Unified Mailbox",
-        "description": "Show combined folders (Inbox, Sent, etc.) across all connected accounts"
+        "description": "Show combined folders (Inbox, Sent, etc.) for the active account and its shared folders.",
+        "cross_account": {
+          "label": "Across all accounts",
+          "description": "Merge the unified mailbox across every connected account instead of staying within the active account."
+        },
+        "include_group": {
+          "label": "Include group inboxes",
+          "description": "Also merge shared/group inboxes into the unified view."
+        }
+      },
+      "all_mail": {
+        "folders_label": "Folders in the unified lists",
+        "folders_description": "Choose which of this account's folders are merged into the All mail / Unread / Starred lists.",
+        "account_hint": "Applies to {account}.",
+        "no_folders": "No folders available."
       },
       "colorful_sidebar_icons": {
         "label": "Colorful Sidebar Icons",
         "description": "Tint folder and tag icons by type (blue Inbox, red Junk, green Sent, etc.). Disable for a monochrome sidebar."
+      },
+      "tint_list_rows": {
+        "label": "Tint List Rows by Tag Color",
+        "description": "Shade each message row with its first tag color. Disable to keep rows plain; tag dots and chips still show the color."
+      },
+      "show_folder_total_count": {
+        "label": "Show Total Message Count",
+        "description": "Show the total message count next to folders and tags, alongside the unread count. Disable to show only unread counts."
+      },
+      "favicon_unread_badge": {
+        "label": "Unread Count on Tab Icon",
+        "description": "Show the inbox unread count as a badge on the browser tab icon, so new mail is visible when the tab is not focused. Disable to keep the icon unbadged."
+      },
+      "pro_interface": {
+        "label": "Pro Interface (Experimental)",
+        "description": "Desktop-only power-user layout with multi-tab message browsing and cross-account workflows. The standard interface is unaffected; you can switch back at any time.",
+        "open_label": "Open Pro Interface",
+        "back_to_standard": "Back to standard"
+      },
+      "cross_unread": {
+        "label": "Unread",
+        "description": "Show an Unread entry in the Unified Mailbox listing unread mail across the selected folders."
+      },
+      "cross_starred": {
+        "label": "Starred",
+        "description": "Show a Starred entry in the Unified Mailbox listing flagged/starred mail across the selected folders."
+      },
+      "cross_all": {
+        "label": "All mail",
+        "description": "Show an All mail entry in the Unified Mailbox listing all mail across the selected folders."
       }
     },
     "keywords": {
       "title": "Email Tags",
-      "description": "Define tags to organize your emails with colors. These are stored as JMAP keywords on the server.",
+      "description": "Define tags to organize your emails. These are stored as JMAP keywords on the server.",
       "add_keyword": "Add Tag",
-      "reset_defaults": "Reset to Defaults",
       "label_field": "Display Name",
       "label_placeholder": "e.g. Work, Personal, Urgent",
       "id_field": "Tag ID",
@@ -775,7 +1096,34 @@
       "add": "Add",
       "cancel": "Cancel",
       "migrating": "Updating tag on existing emails…",
-      "migration_error": "Failed to update tag on existing emails"
+      "migration_error": "Failed to update tag on existing emails",
+      "nesting": {
+        "label": "Nested Tags",
+        "description": "Nest tags underneath other tags and show them as a tree in the sidebar."
+      },
+      "parent_field": "Parent Tag",
+      "no_parent": "No parent",
+      "too_long": "This tag path is too long (at most {max} characters)",
+      "has_children_locked": "Other tags are nested under this one, so its name and parent are locked. Move or remove them first.",
+      "has_children_delete": "Remove the tags nested under this one first",
+      "visibility_field": "Sidebar visibility",
+      "visibility": {
+        "show": "Show",
+        "unread": "Show if unread",
+        "hide": "Hide"
+      },
+      "unrecognized": {
+        "title": "Recover tags from the server",
+        "description": "Tag names and colors are stored in this browser, but the tags themselves live on your messages as JMAP keywords. Scan your mail for keywords no tag here explains, then add them back.",
+        "scan": "Scan for tags",
+        "rescan": "Scan again",
+        "scanning": "Scanning… {scanned} of {total} messages",
+        "none": "Every tag on your messages is already defined here.",
+        "messages": "{count, plural, one {# message} other {# messages}}",
+        "add_all": "Add all {count}",
+        "partial": "Only the {scanned} most recent of {total} messages were scanned. Tags used solely on older mail may be missing.",
+        "error": "Could not scan your mail for tags."
+      }
     },
     "notifications": {
       "test_sound": "Test notification sound",
@@ -785,6 +1133,41 @@
         "involved": "Involved",
         "swift": "Swift Gesture",
         "relax": "Relax"
+      },
+      "push": {
+        "title": "Background Notifications",
+        "description": "Receive system notifications for new mail when this site is closed. Delivered via the Bulwark push relay; the relay never sees mail content.",
+        "relay_label": "Push relay",
+        "relay_desc": "The server that delivers your notifications. Choose from the relays your administrator offers.",
+        "relay_locked": "Set by administrator",
+        "relay_locked_desc": "The push relay has been set by your administrator and cannot be changed.",
+        "status_active": "Active on this device",
+        "status_inactive": "Not enabled on this device",
+        "status_unsupported": "This browser does not support Web Push",
+        "status_busy": "Working…",
+        "enable": "Enable",
+        "reenable": "Re-register",
+        "disable": "Disable",
+        "confirm_disable_title": "Disable background notifications?",
+        "confirm_disable_message": "This device will stop receiving alerts when the site is closed.",
+        "dismiss_aria": "Dismiss notification prompt",
+        "ios_hint": "On iOS, install the site to your home screen first - Safari only delivers Web Push to installed PWAs.",
+        "devices_title": "Registered devices",
+        "devices_desc": "Every device registered to receive background notifications for this account. Revoking one stops it receiving immediately.",
+        "devices_loading": "Loading registered devices…",
+        "devices_empty": "No devices are registered for background notifications.",
+        "devices_error": "Could not load registered devices.",
+        "devices_refresh": "Refresh",
+        "device_this": "This device",
+        "device_other": "Other device",
+        "device_status_active": "Delivering notifications",
+        "device_status_inactive": "Never delivered a notification",
+        "device_status_unknown": "Not known to this relay",
+        "device_expires": "Expires {date}",
+        "revoke": "Revoke",
+        "confirm_revoke_title": "Revoke this device?",
+        "confirm_revoke_message": "It will stop receiving background notifications immediately. Enabling push again on that device registers it anew.",
+        "confirm_revoke_message_this": "This device will stop receiving background notifications immediately."
       },
       "sound_selection": {
         "title": "Notification Sound",
@@ -812,8 +1195,8 @@
       }
     },
     "language_region": {
-      "title": "Language & Region",
-      "description": "Configure language and regional preferences",
+      "title": "Language, Region & Time",
+      "description": "Language, date format, time format, and other regional preferences",
       "language": {
         "label": "Language",
         "description": "Choose your preferred language",
@@ -830,6 +1213,14 @@
         "preview_this_week": "This week:",
         "preview_older": "Older:"
       },
+      "date_locale": {
+        "label": "Date format region",
+        "description": "How numeric dates are ordered (day, month, year)",
+        "auto": "Automatic (match language)",
+        "iso": "ISO 8601 (YYYY-MM-DD)",
+        "dmy": "Day/Month/Year",
+        "mdy": "Month/Day/Year"
+      },
       "time_format": {
         "label": "Time Format",
         "description": "Choose between 12-hour or 24-hour clock",
@@ -841,9 +1232,26 @@
         "description": "Start week on Sunday or Monday",
         "sunday": "Sunday",
         "monday": "Monday"
+      },
+      "time_zone": {
+        "label": "Time zone",
+        "description": "Show email and calendar times in this time zone instead of the one reported by your browser",
+        "auto": "Automatic ({zone})",
+        "preview_now": "Now:"
       }
     },
     "email_behavior": {
+      "request_read_receipt": {
+        "label": "Request read receipts by default",
+        "description": "Pre-enable the read-receipt request when composing a new message."
+      },
+      "read_receipt_response": {
+        "label": "Respond to read-receipt requests",
+        "description": "What to do when an incoming message asks for a read receipt.",
+        "ask": "Ask each time",
+        "always": "Always send",
+        "never": "Never send"
+      },
       "title": "Email Behavior",
       "description": "Configure how emails are handled",
       "mark_read": {
@@ -858,8 +1266,22 @@
         "label": "Delete Action",
         "description": "What happens when you delete an email",
         "trash": "Move to Trash",
+        "trash_and_read": "Move to Trash and mark as read",
         "permanent": "Delete Permanently",
         "warning": "Emails will be permanently deleted and cannot be recovered. This action is irreversible."
+      },
+      "message_spacing": {
+        "label": "Message Spacing",
+        "description": "Padding around the message body in the reader",
+        "auto": "Auto (recommended)",
+        "always": "Always add spacing",
+        "edge": "Edge to edge"
+      },
+      "plain_text_font": {
+        "label": "Plain Text Font",
+        "description": "Font used for plain text emails",
+        "mono": "Monospace",
+        "sans": "Normal (same as the app)"
       },
       "archive_mode": {
         "label": "Archive in",
@@ -877,11 +1299,13 @@
       },
       "mail_layout": {
         "label": "Mail Layout",
-        "description": "Choose between the classic split reading pane and a Gmail-style focused reading flow.",
+        "description": "Choose between the classic split reading pane, a Gmail-style focused reading flow, or a Zimbra-style bottom reading pane.",
         "split": "Split pane",
         "split_description": "Keep the message list and reading pane visible side by side.",
         "focus": "Focused list",
-        "focus_description": "Show one line per message and open mail full-width while keeping the folder sidebar visible."
+        "focus_description": "Show one line per message and open mail full-width while keeping the folder sidebar visible.",
+        "horizontal": "Reading pane at bottom",
+        "horizontal_description": "Show the message list on top and open the selected message in a reading pane below it."
       },
       "show_preview": {
         "label": "Show Preview Text",
@@ -897,8 +1321,25 @@
         "description": "Disable the rich text editor and send all emails as plain text only, including replies and forwards"
       },
       "auto_select_reply_identity": {
-        "label": "Auto-select Reply Address",
-        "description": "When replying, automatically switch the From address to the identity that originally received the message"
+        "label": "Reply From Received Address",
+        "description": "When replying, send from the address the message was originally sent to. Matches identities first; for domain catch-all deliveries, rewrites the From header to the alias while sending through your primary identity."
+      },
+      "signature_position": {
+        "label": "Signature Position",
+        "description": "Where to insert your signature in replies and forwards. Above the quoted text reads naturally as a closing for the reply; below keeps the original message contiguous.",
+        "above_quote": "Before quoted text",
+        "below_quote": "After quoted text"
+      },
+      "signature_separator": {
+        "label": "Signature Delimiter",
+        "description": "Prefix the signature with the standard \"-- \" delimiter line (RFC 3676). Turn off if you'd rather flow straight from your message into the signature."
+      },
+      "sub_address_delimiter": {
+        "label": "Sub-Address Delimiter",
+        "description": "Character separating your username from a sub-address tag. Match the delimiter your mail server uses (e.g. user{delimiter}tag@domain.com).",
+        "option": "{delimiter}  (user{delimiter}tag@domain.com)",
+        "custom": "Custom…",
+        "custom_input_label": "Custom delimiter character"
       },
       "attachment_click_action": {
         "label": "Attachment Click Action",
@@ -962,6 +1403,7 @@
         "archive": "Archive",
         "tag": "Tag",
         "spam": "Mark as Spam",
+        "not_spam": "Not Spam",
         "none_selected": "No actions selected",
         "mode_label": "Display Mode",
         "mode_inline": "Inline",
@@ -988,9 +1430,48 @@
         "add": "Add",
         "remove": "Remove"
       },
+      "empty_subject_warning": {
+        "label": "Empty subject warning",
+        "description": "Ask for confirmation before sending a message with no subject."
+      },
       "hide_inline_image_attachments": {
         "label": "Hide inline images from attachments",
         "description": "Images embedded in the message body are not listed as separate attachments"
+      },
+      "attachment_image_previews": {
+        "label": "Show image previews in attachments",
+        "description": "Render image attachments as thumbnail cards instead of generic file icons"
+      },
+      "send_delay": {
+        "label": "Undo send / send delay",
+        "description": "Delay normal sends by a short server-side window.",
+        "off": "Off",
+        "seconds": "{seconds} seconds",
+        "unsupported": "The current account does not advertise delayed-send support. The setting is still saved for other accounts."
+      },
+      "return_to_list_after_action": {
+        "label": "Return to list after delete or mark unread",
+        "description": "After deleting or marking the open message unread, go back to the message list instead of opening the next message."
+      },
+      "swipe_right_action": {
+        "label": "Swipe right action (mobile)",
+        "description": "On touch devices, the action performed when you swipe a message to the right in the list."
+      },
+      "swipe_left_action": {
+        "label": "Swipe left action (mobile)",
+        "description": "On touch devices, the action performed when you swipe a message to the left in the list."
+      },
+      "swipe_actions": {
+        "none": "None",
+        "archive": "Archive",
+        "delete": "Delete",
+        "mark_read": "Toggle read",
+        "star": "Toggle star",
+        "spam": "Mark as spam"
+      },
+      "rtl_editing": {
+        "label": "Right-to-left editing support",
+        "description": "Adds a direction button to the composer toolbar so you can set paragraphs left-to-right or right-to-left"
       }
     },
     "composer": {
@@ -1064,7 +1545,28 @@
       "last_sync": {
         "label": "Last Sync",
         "value": "{time}"
+      },
+      "accounts": {
+        "title": "Logged-in accounts",
+        "description": "Drag to reorder how accounts appear in the account dropdown",
+        "active": "Currently active account",
+        "default_badge": "Default account",
+        "set_default": "Set as default",
+        "switch_to": "Switch to this account",
+        "move_up": "Move up",
+        "move_down": "Move down",
+        "drag_handle": "Drag to reorder",
+        "add": "Add account"
+      },
+      "shared_accounts": {
+        "title": "Shared with me",
+        "description": "Group and shared accounts you can manage. Select one to edit its filters, vacation responder, calendars, and contacts.",
+        "shared_label": "Shared account"
       }
+    },
+    "scoped": {
+      "back": "Back to my account",
+      "managing": "Managing: {name}"
     },
     "security": {
       "title": "Account Security",
@@ -1153,7 +1655,23 @@
         "inactive": "Disabled",
         "enabled": "Encryption at rest enabled",
         "disabled_success": "Encryption at rest disabled",
-        "error": "Failed to update encryption settings"
+        "error": "Failed to update encryption settings",
+        "algorithm_label": "Encryption Algorithm",
+        "encrypt_on_append": "Encrypt new emails on upload",
+        "allow_spam_training": "Allow spam training before encrypting emails",
+        "enable_encryption": "Enable encryption",
+        "enable_tooltip": "Enable encryption with this key",
+        "configure_title": "Enable encryption with this key",
+        "enable_button": "Enable",
+        "disable_tooltip": "Disable encryption",
+        "enabled_success": "Encryption at rest enabled"
+      },
+      "public_keys":{
+        "name_label": "Public Key name",
+        "name_placeholder": "e.g. My Key",
+        "key_label": "Public Key (S/MIME or PGP ASCII-armored)",
+        "key_placeholder": "Paste your public key here",
+        "none": "No public keys configured"
       },
       "email_client": {
         "title": "Email Client Setup",
@@ -1162,6 +1680,17 @@
         "copy": "Copy",
         "copied": "Copied",
         "password_instructions": "Use your JMAP username above along with an app password to sign in to your email client. Create an app password in the section above if you haven't already."
+      },
+      "link_device": {
+        "title": "Link Mobile App",
+        "description": "Sign in to the Bulwark Mail mobile app without typing anything. Generate a QR code here and scan it from the app's login screen.",
+        "generate": "Show QR code",
+        "regenerate": "Show a new code",
+        "instructions": "Open the Bulwark Mail app, tap \"Scan QR code\" on the login screen, and point your camera here.",
+        "expires_in": "This code expires in {seconds} seconds. It can only be used once.",
+        "expired": "This code has expired.",
+        "generating": "Generating…",
+        "error": "Couldn't create a pairing code. Please try again."
       }
     },
     "identities": {
@@ -1209,7 +1738,10 @@
         "subject_placeholder": "Out of Office",
         "body_label": "Message Body",
         "body_description": "Plain text message content",
-        "body_placeholder": "Thank you for your email. I am currently out of the office and will respond when I return."
+        "body_placeholder": "Thank you for your email. I am currently out of the office and will respond when I return.",
+        "html_label": "Formatted message (HTML)",
+        "html_description": "Add a rich, formatted version with links and styling. Recipients whose mail client can't display it fall back to the plain text above.",
+        "html_placeholder": "Write a formatted out-of-office reply…"
       },
       "preview": {
         "title": "Preview",
@@ -1225,6 +1757,7 @@
       }
     },
     "folders": {
+      "role_memos": "Notes",
       "title": "Folders",
       "description": "Manage your email folders and assign standard roles",
       "folder_list": "Your Folders",
@@ -1240,6 +1773,9 @@
       "role_none": "None",
       "create_folder": "Create Folder",
       "create_subfolder": "Create Subfolder",
+      "reorder": "Drag up or down to reorder, left or right to change the parent folder",
+      "reorder_error": "Failed to reorder folders",
+      "move_error": "Failed to move folder",
       "subfolder_of": "Inside {name}",
       "subfolder_name": "Subfolder name",
       "new_folder_name": "Folder name",
@@ -1293,7 +1829,7 @@
         "description": "Sync your settings across browsers and devices"
       },
       "sender_favicons": {
-        "label": "Sender Favicons (Experimental)",
+        "label": "Sender Favicons",
         "description": "Show website icons as profile pictures for business senders"
       },
       "show_avatars_in_junk": {
@@ -1304,6 +1840,11 @@
         "label": "Keyboard Shortcuts",
         "description": "View available keyboard shortcuts",
         "button": "View Shortcuts"
+      },
+      "refresh_cache": {
+        "label": "Refresh cached data",
+        "description": "Reload contacts, calendars, and folders from the server. Keeps your accounts and sessions \u2014 fixes a stale or wrong view without signing out.",
+        "button": "Refresh"
       },
       "reset_settings": {
         "label": "Reset Settings",
@@ -1329,6 +1870,8 @@
       "description": "Manage custom apps and links in your sidebar",
       "keep_loaded": "Keep Apps Loaded",
       "keep_loaded_description": "Keep inline apps running in the background when switching between them to avoid reloading",
+      "managed_title": "Provided by your administrator",
+      "managed_description": "These apps are set up for everyone and cannot be changed.",
       "manage_title": "Custom Apps",
       "manage_description": "Add, edit, or remove custom apps from your sidebar"
     },
@@ -1347,6 +1890,50 @@
       "categories_title": "Categories",
       "categories_description": "Rename contact categories",
       "no_categories": "No categories found"
+    },
+    "downloads": {
+      "title": "Downloads",
+      "description": "Customize how downloaded emails and attachments are named.",
+      "reset": "Restore default",
+      "preview": "Preview:",
+      "email_template": {
+        "label": "Email (.eml) filename",
+        "description": "Template used when you export an email or drag one out to the file system. The .eml extension is added automatically."
+      },
+      "attachment_template": {
+        "label": "Attachment filename",
+        "description": "Template used when downloading or dragging out an attachment. If you omit '{filename}' and '{ext}', the original extension is preserved."
+      },
+      "bundle_template": {
+        "label": "Multi-email .zip filename",
+        "description": "Template used when you drag out or download several selected emails as a single .zip archive. The .zip extension is added automatically."
+      },
+      "spaces": {
+        "label": "Spaces",
+        "description": "Replace spaces in the resulting filename with another character.",
+        "keep": "Keep spaces",
+        "underscore": "Replace with _",
+        "dash": "Replace with -"
+      },
+      "lowercase": {
+        "label": "Lowercase",
+        "description": "Force the entire filename to lowercase."
+      },
+      "strip_diacritics": {
+        "label": "Strip diacritics",
+        "description": "Convert accented letters to their ASCII equivalents (ä → a, é → e). Useful for tools that mangle Unicode filenames."
+      },
+      "collapse_separators": {
+        "label": "Collapse repeated separators",
+        "description": "Collapse runs of spaces, underscores, or dashes to a single character."
+      },
+      "after_export": {
+        "label": "After export",
+        "description": "Optionally move the email after exporting it as .eml.",
+        "keep": "Keep in mailbox",
+        "archive": "Move to archive",
+        "trash": "Move to trash"
+      }
     },
     "filters": {
       "title": "Email Filters",
@@ -1383,17 +1970,21 @@
       "actions": "Actions",
       "add_action": "Add Action",
       "stop_processing": "Stop processing subsequent rules",
+      "attachment_type_placeholder": "e.g. pdf, doc, jpg",
+      "value_placeholder_multi": "Value (multiple separated by commas)",
       "condition_fields": {
+        "attachment": "Attachment",
         "from": "From",
         "to": "To",
         "cc": "Cc",
         "subject": "Subject",
         "header": "Custom Header",
         "size": "Size",
-        "body": "Body",
-        "attachment": "Attachment"
+        "body": "Body"
       },
       "comparators": {
+        "has_any": "is present",
+        "has_type": "of type",
         "contains": "contains",
         "not_contains": "does not contain",
         "is": "is exactly",
@@ -1402,9 +1993,7 @@
         "ends_with": "ends with",
         "matches": "matches pattern",
         "greater_than": "is greater than",
-        "less_than": "is less than",
-        "has_any": "is present",
-        "has_type": "of type"
+        "less_than": "is less than"
       },
       "action_types": {
         "move": "Move to folder",
@@ -1431,7 +2020,6 @@
       "size_bytes": "Size in bytes",
       "size_placeholder": "e.g., 1000000",
       "system_managed": "System-managed rule",
-      "origin_external": "External",
       "opaque_warning": "This script was edited outside the visual builder. Only raw Sieve editing is available.",
       "open_sieve_editor": "Open raw Sieve editor",
       "fetch_error": "Failed to load filters",
@@ -1477,9 +2065,8 @@
         "conditions_count": "{count, plural, one {# condition} other {# conditions}}",
         "actions_count": "{count, plural, one {# action} other {# actions}}"
       },
-      "managed_by_tooltip": "Managed by {source}. Edit it in that app, or use the raw Sieve editor.",
-      "value_placeholder_multi": "Value (multiple separated by commas)",
-      "attachment_type_placeholder": "e.g. pdf, doc, jpg"
+      "origin_external": "External",
+      "managed_by_tooltip": "Managed by {source}. Edit it in that app, or use the raw Sieve editor."
     },
     "templates": {
       "title": "Email Templates",
@@ -1598,15 +2185,20 @@
     "mark_unread": "Mark as Unread",
     "star": "Star",
     "unstar": "Unstar",
+    "pin": "Pin",
+    "unpin": "Unpin",
     "move_to": "Move to...",
     "archive": "Archive",
     "delete": "Delete",
     "mark_as_spam": "Report spam",
     "not_spam": "Not spam",
-    "color_tag": "Tag",
-    "remove_color": "Remove tag",
+    "tag": "Tag",
     "items_selected": "{count} emails selected",
-    "edit_draft": "Edit Draft"
+    "edit_draft": "Edit Draft",
+    "cancel_scheduled_send": "Cancel send",
+    "reschedule_send": "Reschedule",
+    "cancel_and_edit": "Cancel and edit",
+    "cancel_and_compose_again": "Cancel and compose again"
   },
   "mailbox_context_menu": {
     "mark_folder_read": "Mark folder as read",
@@ -1615,6 +2207,7 @@
     "new_subfolder": "New subfolder...",
     "new_folder": "New folder...",
     "rename": "Rename...",
+    "import_email": "Import .eml or .zip...",
     "empty_folder": "Empty folder",
     "empty_folder_generic": "Empty folder",
     "delete_folder": "Delete folder",
@@ -1683,6 +2276,8 @@
       "expand_collapse": "Expand/collapse thread"
     },
     "composer": {
+      "send": "Send email",
+      "schedule_send": "Schedule send",
       "template_picker": "Open template picker"
     }
   },
@@ -1730,11 +2325,13 @@
       "email_invalid": "Please enter a valid email address",
       "email_immutable": "Email address cannot be changed after creation",
       "reply_to_label": "Reply-To (optional)",
-      "reply_to_placeholder": "different@email.com",
+      "reply_to_placeholder": "different@example.com",
       "bcc_label": "Auto BCC (optional)",
-      "bcc_placeholder": "archive@email.com",
+      "bcc_placeholder": "archive@example.com",
       "text_signature_label": "Text Signature",
       "html_signature_label": "HTML Signature",
+      "signature_byte_counter": "{bytes} / {max} bytes",
+      "signature_byte_limit_reached": "Server limit reached",
       "save": "Save Identity",
       "cancel": "Cancel",
       "creating": "Creating...",
@@ -1750,7 +2347,7 @@
       "use_address": "Use This Address",
       "invalid_tag": "Tag must be alphanumeric and dashes only",
       "tag_too_long": "Tag must be 30 characters or less",
-      "help_text": "Emails sent to user+tag@domain.com will arrive in your inbox",
+      "help_text": "Emails sent to user{delimiter}tag@domain.com will arrive in your inbox",
       "validation": {
         "empty": "Tag cannot be empty",
         "too_long": "Tag must be {max} characters or less",
@@ -1814,6 +2411,8 @@
     "delete_confirm": "Are you sure you want to delete this contact?",
     "local_mode": "Contacts are stored locally (server does not support JMAP Contacts)",
     "back_to_contacts": "Back to contacts",
+    "back_to_email": "Back to email",
+    "open_categories": "Open categories",
     "tabs": {
       "all": "All",
       "groups": "Groups"
@@ -1822,6 +2421,9 @@
       "title": "Shared"
     },
     "address_books": {
+      "create": "New address book",
+      "created": "Address book created",
+      "create_failed": "Failed to create address book",
       "title": "My Address Books",
       "shared_prefix": "Shared: {name}",
       "moved": "Contact moved to {name}",
@@ -1833,6 +2435,9 @@
       "renamed": "Address book renamed",
       "rename_failed": "Failed to rename address book",
       "default": "Default",
+      "set_default": "Set as default",
+      "default_updated": "Default address book updated",
+      "set_default_failed": "Failed to set default address book",
       "manage": "Manage address books",
       "share": "Share address book",
       "new_contact_in_book": "New contact in this address book",
@@ -1925,6 +2530,9 @@
       "section_address_book": "Directory",
       "select_address_book": "Select a directory...",
       "section_identity": "Name & Identity",
+      "contact_type": "Contact type",
+      "type_person": "Person",
+      "type_organization": "Organization",
       "section_work": "Work & Organization",
       "prefix": "Prefix",
       "prefix_placeholder": "Dr., Mr., Mrs.",
@@ -2009,7 +2617,7 @@
       "cancel": "Cancel",
       "creating": "Creating...",
       "updating": "Updating...",
-      "name_required": "At least a first name or last name is required",
+      "name_required": "Enter a first name, last name, or organization",
       "email_invalid": "Please enter a valid email address",
       "email_error_inline": "Invalid email format",
       "save_failed": "Failed to save contact",
@@ -2034,7 +2642,12 @@
       "members_label": "Members",
       "search_members": "Search contacts to add...",
       "no_members": "No members in this group",
-      "member_count": "{count, plural, =0 {No members} one {1 member} other {# members}}"
+      "member_count": "{count, plural, =0 {No members} one {1 member} other {# members}}",
+      "send_email": "Send email to group",
+      "send_email_to": "To",
+      "send_email_cc": "Cc",
+      "send_email_bcc": "Bcc",
+      "no_member_emails": "This group has no members with an email address."
     },
     "import": {
       "title": "Import Contacts",
@@ -2147,7 +2760,11 @@
       "tomorrow_header": "Tomorrow",
       "export_ics": "Export as .ics",
       "copy_title": "Copy title",
-      "copy_link": "Copy meeting link"
+      "copy_link": "Copy meeting link",
+      "new_event": "New event",
+      "new_all_day_event": "New all-day event",
+      "new_task": "New task",
+      "go_to_today": "Go to today"
     },
     "detail": {
       "add_note": "Add a note...",
@@ -2209,7 +2826,37 @@
       "every_n_weeks": "Every {count} weeks",
       "every_n_months": "Every {count} months",
       "until": "Until",
-      "occurrences": "{count} occurrences"
+      "occurrences": "{count} occurrences",
+      "custom": "Custom…",
+      "edit_custom": "Edit custom recurrence",
+      "every_n_years": "Every {count} years",
+      "on_days": "on {days}",
+      "on_day_n": "on day {day}",
+      "on_the_nth": "on the {nth} {day}",
+      "in_month": "in {month}",
+      "nth_1": "first",
+      "nth_2": "second",
+      "nth_3": "third",
+      "nth_4": "fourth",
+      "nth_last": "last",
+      "editor_freq_day": "Day",
+      "editor_freq_week": "Week",
+      "editor_freq_month": "Month",
+      "editor_freq_year": "Year",
+      "editor_repeats_on": "Repeats on",
+      "editor_every": "Every",
+      "editor_unit_days": "day(s)",
+      "editor_unit_weeks": "week(s)",
+      "editor_unit_months": "month(s)",
+      "editor_unit_years": "year(s)",
+      "editor_on_day": "on day",
+      "editor_on_the": "on the",
+      "editor_in": "in",
+      "editor_ends": "Ends",
+      "editor_never": "Never",
+      "editor_ends_on": "On",
+      "editor_ends_after": "After",
+      "editor_occurrences": "occurrences"
     },
     "recurrence_scope": {
       "edit_title": "Edit recurring event",
@@ -2223,12 +2870,21 @@
       "delete": "Delete"
     },
     "alerts": {
-      "title": "Reminder",
-      "none": "No reminder",
+      "title": "Reminders",
+      "none": "No reminders",
       "at_time": "At time of event",
       "minutes_before": "{count, plural, one {# minute before} other {# minutes before}}",
       "hours_before": "{count, plural, one {# hour before} other {# hours before}}",
-      "days_before": "{count, plural, one {# day before} other {# days before}}"
+      "days_before": "{count, plural, one {# day before} other {# days before}}",
+      "weeks_before": "{count, plural, one {# week before} other {# weeks before}}",
+      "unit_minutes_before": "minutes before",
+      "unit_hours_before": "hours before",
+      "unit_days_before": "days before",
+      "unit_weeks_before": "weeks before",
+      "add": "Add reminder",
+      "remove": "Remove reminder",
+      "amount": "Reminder amount",
+      "unit": "Reminder unit"
     },
     "settings": {
       "title": "Calendar settings",
@@ -2246,7 +2902,7 @@
       "invitation_parsing": "Parse email invitations",
       "invitation_parsing_desc": "Detect calendar invitations in email attachments and show calendar actions",
       "show_time_in_month_view": "Show time in month view",
-      "show_time_in_month_view_desc": "Display event times in the month calendar view",
+      "show_time_in_month_view_desc": "Display event times in the month calendar view. On small screens this shows full event entries instead of dots.",
       "show_week_numbers": "Show week numbers",
       "show_week_numbers_desc": "Display week numbers in the mini-calendar",
       "enable_tasks": "Enable tasks",
@@ -2279,6 +2935,32 @@
       "sat": "Sat",
       "sun": "Sun"
     },
+    "months": {
+      "jan": "Jan",
+      "feb": "Feb",
+      "mar": "Mar",
+      "apr": "Apr",
+      "may": "May",
+      "jun": "Jun",
+      "jul": "Jul",
+      "aug": "Aug",
+      "sep": "Sep",
+      "oct": "Oct",
+      "nov": "Nov",
+      "dec": "Dec",
+      "far": "Farvardin",
+      "ord": "Ordibehesht",
+      "kho": "Khordad",
+      "tir": "Tir",
+      "mor": "Mordad",
+      "sha": "Shahrivar",
+      "meh": "Mehr",
+      "aba": "Aban",
+      "aza": "Azar",
+      "dey": "Dey",
+      "bah": "Bahman",
+      "esf": "Esfand"
+    },
     "notifications": {
       "event_created": "Event created",
       "event_updated": "Event updated",
@@ -2310,6 +2992,7 @@
     },
     "nav_prev": "Previous",
     "nav_next": "Next",
+    "nav_open_menu": "Open menu",
     "import": {
       "title": "Import Calendar",
       "tab_file": "File",
@@ -2336,6 +3019,15 @@
       "file_too_large": "File exceeds 10MB limit",
       "invalid_format": "Invalid calendar file format"
     },
+    "webcal_action": {
+      "title": "Open calendar link",
+      "description": "How would you like to use \"{name}\"?",
+      "import_title": "Import once",
+      "import_description": "Fetch the events now and copy them into one of your calendars.",
+      "subscribe_title": "Subscribe",
+      "subscribe_description": "Keep this calendar synced automatically as a separate calendar.",
+      "cancel": "Cancel"
+    },
     "management": {
       "title": "Calendar Management",
       "description": "Create, rename, and customize your calendars. Right-click a calendar in the sidebar to quickly change its color.",
@@ -2343,6 +3035,7 @@
       "name_placeholder": "Calendar name",
       "color": "Color",
       "change_color": "Change color",
+      "random_color": "New random color",
       "add_calendar": "Add calendar",
       "edit": "Edit",
       "delete": "Delete",
@@ -2352,6 +3045,9 @@
       "default": "Default",
       "confirm_delete": "Delete \"{name}\"? All events in this calendar will be removed.",
       "confirm_clear": "Clear all events from \"{name}\"? This cannot be undone.",
+      "set_default": "Set as default",
+      "default_updated": "Default calendar updated",
+      "error_default": "Failed to set default calendar",
       "clear_events": "Clear events",
       "events_cleared": "{count} events cleared",
       "error_clear": "Failed to clear calendar events",
@@ -2366,7 +3062,12 @@
       "copy_url": "Copy CalDAV URL",
       "url_copied": "CalDAV URL copied to clipboard",
       "share": "Share calendar",
-      "new_event_in_calendar": "New event in this calendar"
+      "new_event_in_calendar": "New event in this calendar",
+      "kind": "Contents",
+      "kind_events": "Events",
+      "kind_tasks": "Tasks",
+      "kind_both": "Events and tasks",
+      "kind_hint": "Decides which apps see this calendar when it is synced over CalDAV. It cannot be changed later."
     },
     "subscription": {
       "title": "iCal Subscription",
@@ -2499,7 +3200,12 @@
     "search_hint": "Use advanced filters for precise search",
     "advanced_filters_tooltip": "Advanced search filters",
     "results_found": "{count, plural, =0 {No results found} one {# result found} other {# results found}}",
-    "results_found_more": "{count}+ results found"
+    "results_found_more": "{count}+ results found",
+    "suggestions_recent": "Recent searches",
+    "suggestions_people": "People",
+    "suggestions_from": "Search mail from {address}",
+    "suggestions_to": "Search mail to {address}",
+    "suggestions_remove_recent": "Remove from recent searches"
   },
   "welcome": {
     "title": "Welcome to your mailbox",
@@ -2522,6 +3228,7 @@
     "hint": "Click any email on the left to get started, or take the tour below."
   },
   "files": {
+    "open_in_new_tab": "Open in new tab",
     "title": "Files",
     "search_placeholder": "Search files...",
     "empty_state_title": "No files yet",
@@ -2545,6 +3252,8 @@
     "file": "File",
     "parent_directory": "Parent directory",
     "breadcrumb_root": "Home",
+    "other_accounts": "Other accounts",
+    "no_accounts": "No connected accounts.",
     "drop_files_here": "Drop files or folders here to upload",
     "uploading": "Uploading...",
     "upload_success": "{count, plural, one {1 file uploaded} other {# files uploaded}}",
@@ -2584,6 +3293,10 @@
     "duplicate": "Duplicate",
     "duplicate_success": "Duplicated successfully",
     "duplicate_error": "Failed to duplicate",
+    "share": "Share",
+    "shared": "Shared",
+    "shared_with_me": "Shared with me",
+    "shared_by": "Shared by {name}",
     "create_file_success": "File created",
     "create_file_error": "Failed to create file",
     "favorites": "Favorites",
@@ -2596,6 +3309,7 @@
     "undo_success": "Action undone",
     "undo_error": "Failed to undo",
     "toolbar": "File actions",
+    "open_folder_tree": "Open folder tree",
     "file_list": "Files and folders",
     "context_menu": "Actions",
     "settings_title": "File Settings",
@@ -2624,7 +3338,9 @@
     "settings_folder_layout_sidebar": "Sidebar",
     "disabled_title": "Files feature is disabled by your administrator",
     "disabled_description": "Large file uploads via WebDAV can cause Stalwart/RocksDB instability, including out-of-memory crashes and unrecoverable disk usage. Deleted files may not be immediately purged from blob storage. This feature is not recommended for production environments.",
-    "stability_warning": "Large file uploads can cause server instability. Deleted files may not be immediately purged from storage. Use with caution."
+    "stability_warning": "Large file uploads can cause server instability. Deleted files may not be immediately purged from storage. Use with caution.",
+    "migration_title": "Updating your files…",
+    "migration_description": "Organising folders and files into their proper structure. This happens only once."
   },
   "smime": {
     "your_certificates": "Your Certificates",
@@ -2714,6 +3430,8 @@
     "restart_title": "Introductory tour",
     "restart_desc": "Replay the guided walkthrough of the interface",
     "restart_button": "Restart tour",
+    "show_on_new_devices_title": "Show on new devices",
+    "show_on_new_devices_desc": "Replay the welcome banner and tour the first time you sign in on a new device, even if you've already completed them elsewhere",
     "sidebar_title": "Your mailboxes",
     "sidebar_desc": "This is your folder sidebar. Click any mailbox to view its emails. You can create folders, drag emails between them, and see unread counts at a glance.",
     "compose_title": "Compose an email",
@@ -2755,5 +3473,33 @@
   },
   "unified_mailbox": {
     "search_unavailable": "Search is not available in the unified view"
+  },
+  "quote_header": {
+    "reply_line": "On {date}, {from} wrote:",
+    "forwarded_separator": "---------- Forwarded message ----------",
+    "from_label": "From",
+    "date_label": "Date",
+    "subject_label": "Subject"
+  },
+  "pwa_install": {
+    "title": "Install {appName}",
+    "description": "Install our app for quick access and offline support.",
+    "not_now": "Not now",
+    "install": "Install",
+    "dont_remind": "Don't remind me again",
+    "dismiss_aria": "Dismiss install prompt"
+  },
+  "deep_link": {
+    "message_not_found": "This message is no longer available.",
+    "thread_not_found": "This conversation is no longer available.",
+    "folder_not_found": "This folder is no longer available.",
+    "event_not_found": "This event is no longer available.",
+    "file_not_found": "This file is no longer available.",
+    "account_unavailable": "Sign in to that account to open this link.",
+    "copy_message": "Copy link to message",
+    "copy_conversation": "Copy link to conversation",
+    "copy_event": "Copy link to event",
+    "copied": "Link copied",
+    "copy_failed": "Couldn't copy the link"
   }
 }
