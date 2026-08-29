@@ -148,7 +148,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: `PUSH_TYPES = ['Email', 'EmailDelivery', 'Mailbox']` (`src/lib/push-notifications.ts:104`); `createPushSubscription` has no `emailPush` support (`src/api/push.ts:23-57`). Every read/flag/move on any device wakes the relay -> FCM -> headless task, which then re-queries the inbox (`src/lib/push-background-task.ts:452-455`); a spam delivery still triggers a push (only the inbox `notKeyword $seen` query hides it, at the cost of a wake-up).
   - Fix hint: subscribe to `EmailDelivery` only; add `hasEmailPushCapability()` + `emailPush` filter as in WEB; the relay must forward it (see memory note: relay lacks EmailPush).
 
-- [ ] **Headless push task re-binds the singleton client while the UI may be running** — `P2` — `rn-only-bug`
+- [x] **Headless push task re-binds the singleton client while the UI may be running** — fixed in 1f2df5f — `P2` — `rn-only-bug`
   - What WEB does: N/A (service worker has its own fetch path).
   - What RN does: `processAccountForPush` calls `jmapClient.loadAccount(accountId)` for each candidate account (`src/lib/push-background-task.ts:445`) and the `finally` re-loads the active one (`438-440`, errors swallowed). HeadlessJS tasks run inside the live RN instance when the app is foregrounded, so UI requests issued during that window are sent with another account's credentials/session, and a failing final `loadAccount` leaves `session = null` (`jmap-client.ts:269-270`) until the next network event.
   - Fix hint: use a detached fetch path like `src/api/unified-inbox.ts:116-131` (credentials read from SecureStore, own `apiUrl`) instead of mutating the singleton.
@@ -236,7 +236,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: no `FLAG_SECURE`/`expo-screen-capture` anywhere; mail content appears in the Android recents thumbnail.
   - Fix hint: optional "Hide content in app switcher" setting using `expo-screen-capture` `preventScreenCaptureAsync`.
 
-- [ ] **Sender/subject of every FCM message logged to logcat** — `P3` — `rn-only-bug`
+- [x] **Sender/subject of every FCM message logged to logcat** — fixed in 00faceb — `P3` — `rn-only-bug`
   - What RN does: `console.log('[push] fcm message', payload.title)` in production (`App.tsx:301-303`). No credential logging found (grep for password/token/secret in console calls is empty).
   - Fix hint: drop or guard with `__DEV__`.
 
@@ -255,7 +255,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
 
 ### Stalwart admin/self-service, S/MIME, encryption at rest
 
-- [x] **Encryption at rest is read-only; no public-key management** — `P2` — `partial` — fixed in 69bedf0 (API; settings UI with the settings agent)
+- [x] **Encryption at rest is read-only; no public-key management** — fixed in ddae1e6 — `P2` — `partial` — fixed in 69bedf0 (API; settings UI with the settings agent)
   - What WEB does: `fetchCryptoInfo`/`updateEncryptionAtRest` with `@type` (`Disabled|Aes128|Aes256`), `publicKey`, `encryptOnAppend`, `allowSpamTraining` (spam training before encryption) and `x:PublicKey/query|get|set` CRUD with `emailAddresses`/`expiresAt` (`stores/account-security-store.ts:355-448`, `625-700`; changelog 1.7.x "Manage S/MIME and PGP public keys and configure Stalwart encryption at rest", 1.9.x "Per-account isolation for encryption at rest").
   - What RN does: `fetchEncryptionType` returns only the `@type` (`src/api/account-security.ts:150-155`); shown read-only in `AccountSecuritySettings.tsx:595`. No `x:PublicKey/*`, no set path. Per-account isolation is inherent (single-session client uses `jmapClient.accountId`).
   - Fix hint: port `updateEncryptionAtRest`, `fetchPublicKeys`, `createPublicKey`, `removePublicKey` into `account-security.ts` (same `STALWART_USING`) and a key list/paste screen.

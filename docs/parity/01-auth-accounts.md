@@ -116,12 +116,12 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
   - What RN does: renders only the `isConnected` dot (`SidebarDrawer.tsx:355-361`); `hasError`/`errorMessage` (set in `restoreSession`) are never displayed, and since only the active account is ever connected, other rows show whatever value they had last.
   - Fix hint: render `hasError`; show the dot only for the active account (or treat inactive as "cached").
 
-- [ ] **Accounts list in Settings (reorder, set default, add) is missing** — `P3` — `missing` (changelog 1.7.2 "List and reorder logged-in accounts from settings (#282)", 1.7.7 "Pin the default account on top and drag-to-reorder")
+- [x] **Accounts list in Settings (reorder, set default, add) is missing** — fixed in 490355c — `P3` — `missing` (changelog 1.7.2 "List and reorder logged-in accounts from settings (#282)", 1.7.7 "Pin the default account on top and drag-to-reorder") — move up/down + set default + remove + add; account-store.reorderAccounts
   - What WEB does: `AccountSettings` lists all accounts with move up/down, drag reorder, set-default, add (`components/settings/account-settings.tsx:182-220`); switcher pins the default first (`lib/account-utils.ts:117-142`).
   - What RN does: `AccountSettings` shows only the active account's fields (`src/components/settings/AccountSettings.tsx`); the drawer lists accounts in registry order with set-default only (`SidebarDrawer.tsx:390-406`).
   - Fix hint: add an accounts section with set-default/remove/reorder (`accountStore` needs a `reorderAccounts`).
 
-- [ ] **AccountSettings reports the wrong auth method and never shows storage** — `P3` — `rn-only-bug`
+- [x] **AccountSettings reports the wrong auth method and never shows storage** — fixed in 490355c — `P3` — `rn-only-bug` — jmapClient.usesBearerAuth + Quota/get (src/api/quota.ts)
   - What WEB does: shows OAuth vs Basic from `authMode` and a quota bar (`account-settings.tsx:151-180`).
   - What RN does: `authMode = props.authMode ?? 'basic'` and `quotaUsed = props.quotaUsed ?? 0` (`AccountSettings.tsx:46-47`) but `SettingsScreen` renders `<Component />` with no props (`SettingsScreen.tsx:242`), so OAuth accounts read "Basic" and the storage row never appears (RN has no `Quota/get` at all — flag for the mail/settings audit).
   - Fix hint: derive from `jmapClient.usesBearerAuth` (or persist `authMode` on `AccountEntry`); fetch quota via `Quota/get` when `urn:ietf:params:jmap:quota` is advertised.
@@ -131,7 +131,7 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
   - What RN does: `MAX_ACCOUNTS = 5` (`src/lib/account-utils.ts:1`) although only the active account holds a live connection.
   - Fix hint: raise the constant (or drop the cap) once the unified inbox cost per account is acceptable.
 
-- [ ] **Shared/group account settings scope is missing** — `P3` — `missing` (changelog 1.7.5 "Manage shared/group account settings from the Accounts page")
+- [ ] **Shared/group account settings scope is missing** — `P3` — `missing` (changelog 1.7.5 "Manage shared/group account settings from the Accounts page") — deferred: shared accounts are now listed read-only in AccountSettings (490355c); scoped filter/vacation stores need an accountId parameter first
   - What WEB does: lists `client.getSharedAccounts()` (non-primary) on the Accounts page and enters a scoped settings mode (filters, vacation, calendars, contacts) via `managed-account-store` (`components/settings/account-settings.tsx:43-48, 112-118, 225-262`; `stores/managed-account-store.ts`).
   - What RN does: `getSharedMailAccounts()` exists for mail/unified inbox (`src/api/jmap-client.ts:480-495`) but there is no shared-account listing or scoped settings.
   - Fix hint: list non-personal `session.accounts` in `AccountSettings` and pass an `accountId` into the filter/vacation stores.
@@ -148,12 +148,12 @@ RN covers the happy paths (password login, webmail-mediated OAuth handoff, QR pa
   - What RN does: `isStalwartSupported()` checks the *session-level* `session.capabilities` (`src/api/account-security.ts:51-54`). Verified against Stalwart 0.16.19 (stw-test19): `urn:stalwart:jmap` is present only under `accounts[<id>].accountCapabilities`, not in the top-level `capabilities`. So `AccountSecuritySettings` always renders "Account security management requires a Stalwart server" (`src/components/settings/AccountSecuritySettings.tsx:584, 622`). The same effect also shows that copy when the session is merely offline (`:583`).
   - Fix hint: `const acc = session.accounts?.[jmapClient.accountId]; return !!acc?.accountCapabilities?.[STALWART_CAPABILITY] || STALWART_CAPABILITY in (session.capabilities ?? {})`; show an "offline" notice instead of the Stalwart notice when `currentSession` is null.
 
-- [ ] **Push subscriptions: no per-device list/revoke and no forced recreate (#841)** — `P2` — `missing` (changelog 1.9.0 "Per-device revoke for push subscriptions (#841)", "Recreate the push subscription on re-register (#841)")
+- [x] **Push subscriptions: no per-device list/revoke and no forced recreate (#841)** — fixed in f6f26f7 — `P2` — `missing` (changelog 1.9.0 "Per-device revoke for push subscriptions (#841)", "Recreate the push subscription on re-register (#841)")
   - What WEB does: lists relay devices with a "this device" marker and per-device revoke, and Re-register passes `forceRecreate` so a stale subscription is recreated rather than its expiry refreshed (`components/settings/notification-settings.tsx:95, 115-131, 169`).
   - What RN does: Enable / Re-register / Disable for this device only (`src/components/settings/NotificationSettings.tsx:81, 186-198`); no device list, and whether Re-register recreates the JMAP `PushSubscription` was not verified here (push audit).
   - Fix hint: call the relay device-list endpoint the web uses, render rows with revoke (`PushSubscription/set destroy` + relay unregister), and thread a `forceRecreate` flag through `setupPushNotifications`.
 
-- [ ] **Public keys (S/MIME/PGP) and encryption-at-rest configuration are missing** — `P3` — `missing` (changelog 1.8.1 "Manage S/MIME and PGP public keys and configure Stalwart encryption at rest from account security settings")
+- [x] **Public keys (S/MIME/PGP) and encryption-at-rest configuration are missing** — fixed in ddae1e6 — `P3` — `missing` (changelog 1.8.1 "Manage S/MIME and PGP public keys and configure Stalwart encryption at rest from account security settings")
   - What WEB does: `PublicKeysSection` with `x:PublicKey/query|get|set` and `x:AccountSettings/set encryptionAtRest {@type, publicKey, encryptOnAppend, allowSpamTraining}` (`components/settings/account-security-settings.tsx:573-840`; `stores/account-security-store.ts:397-455, 625-700`).
   - What RN does: read-only `EncryptionSection` showing the `@type` only (`AccountSecuritySettings.tsx:539-555`; `src/api/account-security.ts:150-155`).
   - Fix hint: port the four store methods to `src/api/account-security.ts` and add a key list + encryption picker.
