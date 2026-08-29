@@ -38,6 +38,8 @@ export default function GroupDetailScreen() {
   const allContacts = useContactsStore((s) => s.contacts);
   const updateContact = useContactsStore((s) => s.updateContact);
   const deleteContact = useContactsStore((s) => s.deleteContact);
+  const addContactsToGroup = useContactsStore((s) => s.addContactsToGroup);
+  const getGroupRecipients = useContactsStore((s) => s.getGroupRecipients);
   const group = React.useMemo(
     () => allContacts.find((c) => c.id === groupId),
     [allContacts, groupId],
@@ -70,12 +72,8 @@ export default function GroupDetailScreen() {
   const name = getContactDisplayName(group) || 'Group';
 
   const emailAll = () => {
-    const recipients: EmailAddress[] = [];
-    for (const m of members) {
-      const email = getContactPrimaryEmail(m);
-      if (!email) continue;
-      recipients.push({ name: getContactDisplayName(m) || '', email });
-    }
+    // One recipient per address: two members sharing a mailbox are sent once.
+    const recipients: EmailAddress[] = getGroupRecipients(group.id);
     if (recipients.length === 0) {
       Alert.alert('No emails', 'None of the members have an email address.');
       return;
@@ -84,14 +82,8 @@ export default function GroupDetailScreen() {
   };
 
   const addMembers = async (ids: string[]) => {
-    const existing = group.members ? { ...group.members } : {};
-    for (const id of ids) {
-      const contact = allContacts.find((c) => c.id === id);
-      const key = contact?.uid || id;
-      existing[key] = true;
-    }
     try {
-      await updateContact(group.id, { members: existing });
+      await addContactsToGroup(group.id, ids);
     } catch (err) {
       Alert.alert('Failed to add members', err instanceof Error ? err.message : 'Unknown error');
     }

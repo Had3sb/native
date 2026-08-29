@@ -12,7 +12,7 @@ import {
   ArrowLeft, Pencil, Trash2, Mail, Phone, MessageSquare, Share2, MapPin,
   Building, Cake, Heart, Globe, Tag, Users, FileText, BookUser,
   Copy, MoreHorizontal, Calendar as CalendarIcon, UserCircle, Languages,
-  Clock, KeyRound, FolderInput,
+  Clock, KeyRound, FolderInput, Plus,
 } from 'lucide-react-native';
 import type { RootStackParamList } from '../navigation/types';
 import type { ContactCard } from '../api/types';
@@ -86,10 +86,13 @@ export default function ContactDetailScreen() {
   const deleteContact = useContactsStore((s) => s.deleteContact);
   const createContact = useContactsStore((s) => s.createContact);
   const moveContactsToAddressBook = useContactsStore((s) => s.moveContactsToAddressBook);
+  const addContactsToGroup = useContactsStore((s) => s.addContactsToGroup);
+  const groups = React.useMemo(() => allContacts.filter(isGroup), [allContacts]);
 
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const [moreOpen, setMoreOpen] = React.useState(false);
   const [moveOpen, setMoveOpen] = React.useState(false);
+  const [groupPickerOpen, setGroupPickerOpen] = React.useState(false);
 
   if (!contact) {
     return (
@@ -108,7 +111,9 @@ export default function ContactDetailScreen() {
   }
 
   const name = getContactDisplayName(contact) || 'Unnamed';
-  const nickname = getPrimaryNickname(contact);
+  const nickname = contact.nicknames
+    ? Object.values(contact.nicknames).map((n) => n.name).filter(Boolean).join(', ')
+    : getPrimaryNickname(contact);
   const email = getContactPrimaryEmail(contact);
   const phone = contact.phones ? Object.values(contact.phones)[0]?.number : '';
   const photoUri = getContactPhotoUri(contact);
@@ -133,7 +138,8 @@ export default function ContactDetailScreen() {
   const bookNames = bookIds
     .map((id) => addressBooks.find((b) => b.id === id)?.name)
     .filter(Boolean) as string[];
-  const subtitleParts = [jobTitles[0]?.name, org].filter(Boolean) as string[];
+  // On an organization card the org name is already the heading; don't repeat it.
+  const subtitleParts = [jobTitles[0]?.name, org === name ? undefined : org].filter(Boolean) as string[];
   const hasGender = !!(contact.speakToAs && (contact.speakToAs.grammaticalGender || contact.speakToAs.pronouns));
   const firstPronoun = contact.speakToAs?.pronouns
     ? Object.values(contact.speakToAs.pronouns)[0]?.pronouns
@@ -213,8 +219,15 @@ export default function ContactDetailScreen() {
       Alert.alert('No address book', 'Cannot duplicate without an address book.');
       return;
     }
+    // Drop the UID too: the copy gets a fresh one on create, otherwise group
+    // membership by uid matches both cards and CardDAV sees two cards with one UID.
     const {
       id: _id,
+      uid: _uid,
+      originalId: _originalId,
+      accountId: _accountId,
+      accountName: _accountName,
+      isShared: _isShared,
       addressBookIds: _abIds,
       created: _created,
       updated: _updated,
@@ -249,6 +262,11 @@ export default function ContactDetailScreen() {
       icon: <Copy size={16} color={c.text} />,
       label: 'Duplicate',
       onPress: () => { void doDuplicate(); },
+    },
+    !isGroup(contact) && {
+      icon: <Users size={16} color={c.text} />,
+      label: 'Add to group',
+      onPress: () => setGroupPickerOpen(true),
     },
     addressBooks.length > 0 && {
       icon: <FolderInput size={16} color={c.text} />,
@@ -630,6 +648,28 @@ export default function ContactDetailScreen() {
         visible={moreOpen}
         items={moreItems}
         onClose={() => setMoreOpen(false)}
+      />
+
+      <MoreActionsSheet
+        visible={groupPickerOpen}
+        onClose={() => setGroupPickerOpen(false)}
+        items={[
+          ...groups.map((g): MoreItem => ({
+            icon: <Users size={16} color={c.text} />,
+            label: getContactDisplayName(g) || 'Group',
+            onPress: () => {
+              addContactsToGroup(g.id, [contact.id]).catch((err) => {
+                Alert.alert('Add to group failed', err instanceof Error ? err.message : 'Unknown error');
+              });
+            },
+          })),
+          ...(groups.length > 0 ? [{ separator: true } as MoreItem] : []),
+          {
+            icon: <Plus size={16} color={c.text} />,
+            label: 'New group…',
+            onPress: () => navigation.navigate('ContactForm', { asGroup: true, memberIds: [contact.id] }),
+          },
+        ]}
       />
 
       <AddressBookPickerSheet
