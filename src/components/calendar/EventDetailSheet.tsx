@@ -3,7 +3,6 @@ import {
   Animated,
   Dimensions,
   Easing,
-  Linking,
   Modal,
   Pressable,
   ScrollView,
@@ -11,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { openExternalUrl } from '../../lib/open-url';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   AlignLeft,
@@ -275,7 +275,7 @@ export function EventDetailSheet({
                 </View>
                 <Pressable
                   style={styles.joinBtn}
-                  onPress={() => { void Linking.openURL(videoUri); }}
+                  onPress={() => { void openExternalUrl(videoUri, { confirm: true }); }}
                 >
                   <Text style={styles.joinBtnText}>{t('calendar.detail.open_link', 'Open link')}</Text>
                 </Pressable>

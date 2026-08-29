@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
+import { openExternalUrl } from '../../lib/open-url';
 import {
   CalendarPlus, Check, HelpCircle, X, MapPin, Video, Clock, CalendarDays, AlertTriangle,
   ShieldCheck, ShieldAlert, ChevronDown,
@@ -256,7 +257,7 @@ export function CalendarInvitationBanner({ email, jmapAccountId }: Props) {
         <Row icon={<MapPin size={15} color={c.textMuted} />} text={location} styles={styles} />
       ) : null}
       {videoUri ? (
-        <Pressable style={styles.detailRow} onPress={() => { void Linking.openURL(videoUri); }}>
+        <Pressable style={styles.detailRow} onPress={() => { void openExternalUrl(videoUri, { confirm: true }); }}>
           <Video size={15} color={c.textMuted} />
           <Text style={[styles.detailText, { color: c.primary }]} numberOfLines={1}>
             {t('calendar.invitation.join_video', 'Join video call')}
