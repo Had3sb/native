@@ -140,12 +140,27 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
         // that's a cancellation, not a failure, so leave them where they were.
         finishIfSignedIn(wasAuthenticated);
       } catch (err) {
+        // The webmail hands back the password even when the account needs a
+        // second factor; finish the sign-in here with a code instead of
+        // failing (the user already proved the password once).
+        const pending = useAuthStore.getState().pendingTotpLogin;
+        if (err instanceof Error && err.name === 'TotpRequiredError' && pending) {
+          setEmail(pending.username);
+          setPassword(pending.password);
+          setServerUrl(pending.serverUrl);
+          setTotpRequired(true);
+          setBusy(null);
+          setNotice(describeLoginError(err, { serverUrl: target }));
+          setHistory((prev) => [...prev, step]);
+          setStep('password');
+          return;
+        }
         setNotice(describeLoginError(err, { serverUrl: target }));
       } finally {
         setBusy(null);
       }
     },
-    [finishIfSignedIn, isAddMode, loginViaWebmail],
+    [finishIfSignedIn, isAddMode, loginViaWebmail, step],
   );
 
   const handleEmailContinue = React.useCallback(async () => {

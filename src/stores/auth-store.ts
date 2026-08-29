@@ -41,6 +41,12 @@ export interface AuthState {
   accountId: string | null;
   activeAccountId: string | null;
   client: typeof jmapClient | null;
+  /**
+   * Set when a password sign-in was refused with "MFA code required"; the
+   * login screen re-runs it with a code via `login(..., { totp })`. Cleared
+   * on the next successful sign-in.
+   */
+  pendingTotpLogin: { serverUrl: string; username: string; password: string } | null;
 
   login: (
     serverUrl: string,
@@ -232,6 +238,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   accountId: null,
   activeAccountId: null,
   client: null,
+  pendingTotpLogin: null,
 
   login: async (serverUrl, username, password, opts) => {
     set({ isLoading: true, error: null });
@@ -270,8 +277,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       useEmailStore.getState().setActiveAccount(accountId);
 
       applyConnectedState(set, session, serverUrl.replace(/\/+$/, ''), username, accountId);
+      set({ pendingTotpLogin: null });
       void syncAccountDisplayName(accountId);
     } catch (err) {
+      if (err instanceof Error && err.name === 'TotpRequiredError') {
+        // Keep what the user (or the webmail hand-off) supplied so the code
+        // step doesn't make them retype the password.
+        set({ pendingTotpLogin: { serverUrl: serverUrl.replace(/\/+$/, ''), username, password } });
+      }
       const message = err instanceof Error && err.name === 'TotpRequiredError'
         ? 'Two-factor code required'
         : err instanceof AuthenticationError
