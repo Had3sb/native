@@ -188,7 +188,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
 
 ### Security hardening (RN)
 
-- [ ] **`Linking.openURL` with unvalidated URIs from server data (contacts, calendar invitations)** — `P2` — `rn-only-bug`
+- [x] **`Linking.openURL` with unvalidated URIs from server data (contacts, calendar invitations)** — `P2` — `rn-only-bug` — fixed in 96272b6 (contacts 63bf392, calendar/invitation links confirm the host)
   - What WEB does: links are sanitized in the viewer; iCal/vCard URLs open via anchor with `rel=noopener` (viewer agent's area); `isValidUnsubscribeUrl` gates unsubscribe links (`components/email/unsubscribe-banner.tsx:63`).
   - What RN does: `openUrl(uri)` on a contact's stored URL (`src/screens/ContactDetailScreen.tsx:173-175`) and `Linking.openURL(videoUri)` on `virtualLocations[0].uri` from an incoming invitation (`src/components/calendar/EventDetailSheet.tsx:169`, `234`; `src/components/email/CalendarInvitationBanner.tsx:92`, `159`) accept any scheme: `intent://...#Intent;component=...;end` launches arbitrary exported activities on Android, `file://`, `content://`, or third-party deep links. EmailBodyView already restricts to `https?|mailto|tel|sms` (`src/components/EmailBodyView.tsx:715-723`).
   - Fix hint: a shared `openExternalUrl()` that allows only `https?:`, `mailto:`, `tel:`, `sms:` and shows the host in a confirmation for invitation links.

@@ -41,7 +41,7 @@ sample of the 32 P1 findings was additionally spot-checked by hand.
 
 ## Baseline health of this repo (2026-08-29)
 
-- [ ] **`npm test` is red on `main`** — `P2` — `rn-only-bug`
+- [x] **`npm test` is red on `main`** — `P2` — `rn-only-bug` *(fixed in b84d4d8)*
   - `src/stores/__tests__/auth-store.test.ts` fails to load with
     `SyntaxError: Unexpected token 'typeof'`. The chain
     `auth-store → email-store → outbox-store → network-store` imports
@@ -52,7 +52,7 @@ sample of the 32 P1 findings was additionally spot-checked by hand.
     `../outbox-store` itself.
   - Fix hint: add `vi.mock('@react-native-community/netinfo', () => ({ default: { addEventListener: vi.fn(() => () => {}), fetch: vi.fn(async () => ({ isConnected: true, isInternetReachable: true })) } }))`
     to `src/test-setup.ts`. Expected afterwards: 31/31 suites (432+ tests).
-- [ ] **CI runs neither `tsc` nor `vitest`** — `P2` — `missing`
+- [x] **CI runs neither `tsc` nor `vitest`** — `P2` — `missing` *(fixed in fb4796e)*
   - `.github/workflows/` only has `release-android.yml` and `release-ios.yml`.
     Add a `ci.yml` running `npm ci && npm run typecheck && npm test` on push/PR.
 - `npx tsc --noEmit` is clean.
@@ -60,10 +60,20 @@ sample of the 32 P1 findings was additionally spot-checked by hand.
   (native #5) in `src/stores/email-store.ts`, `src/stores/settings-store.ts`,
   `src/screens/EmailListScreen.tsx`, `src/stores/__tests__/email-store.test.ts`.
   Findings that touch list ordering assume that lands.
-- [ ] **README is stale** — `P3` — it says "Filters & rules, S/MIME, plugins,
+- [x] **README is stale** — `P3` — it says "Filters & rules, S/MIME, plugins, *(fixed in 9ae91a6)*
   themes, file storage – UI stubs only". Filters, Files and file sharing are
   real (see areas 07); S/MIME, plugins, themes and sidebar apps are still
   stubs (area 08).
+
+## Status after the 2026-08-29 fix pass
+
+Worked down the same day, area by area, by one orchestrating session plus one
+agent per area, each change committed on its own (`type: short description`).
+Per-area counts of ticked items are in the area files; every tick carries the
+commit hash. The remaining `- [ ]` items are either deferred with a note
+("deferred: …") or need work outside this repo (webmail hand-off `flow=oauth`
+for TOTP accounts, relay APNs/UnifiedPush transports, a server-side settings
+store for native #1).
 
 ## Areas
 
@@ -86,42 +96,42 @@ priority tag too, so P-sums can differ by one or two from the item count).
 ## All P1 findings (fix these first)
 
 ### Data loss / wrong send
-- [ ] No draft autosave, no save-on-close, and the OS back gesture bypasses the discard guard — closing a compose loses everything. → [04](docs/parity/04-composer-send.md)
-- [ ] Cannot open or edit an existing draft (Drafts folder opens the read-only viewer). → [04](docs/parity/04-composer-send.md)
-- [ ] Message is filed into **Sent before `EmailSubmission/set`**; a failed send leaves a never-sent copy in Sent and a retry duplicates it. → [04](docs/parity/04-composer-send.md)
-- [ ] `In-Reply-To` / `References` are written with the **JMAP email id** instead of the RFC Message-ID (`messageId`/`references` are never even fetched) — every reply breaks threading in recipients' clients. → [03](docs/parity/03-email-viewer.md), [04](docs/parity/04-composer-send.md)
-- [ ] Reply addressing: `Reply-To` ignored, the user's own address kept on reply-all, wrong recipients on self-sent replies (#703, 1.9.0). → [03](docs/parity/03-email-viewer.md)
-- [ ] **Forward drops every attachment.** → [03](docs/parity/03-email-viewer.md), [04](docs/parity/04-composer-send.md)
-- [ ] Sieve: RN generator has no `attachment` field and emits `header :contains "undefined" ""` for webmail-authored attachment rules — **any save on the phone corrupts the shared server script**. → [07](docs/parity/07-filters-vacation-files.md)
-- [ ] Sieve: multi-value conditions (`string[]`, webmail 1.7.3) make the whole script "opaque" on RN; "Reset to visual builder" then wipes all rules. → [07](docs/parity/07-filters-vacation-files.md)
-- [ ] `FilterRuleModal` is always mounted and never re-seeds: editing rule B shows and **saves rule A's fields under B's id**. → [07](docs/parity/07-filters-vacation-files.md)
-- [ ] Calendar recurrence scope dialog is a stub: "This event" / "This and following" act as "All events" — deleting one occurrence **destroys the series**. → [05](docs/parity/05-calendar.md)
-- [ ] Editing an expanded occurrence rewrites the master's `start` to the occurrence date (series shifts, earlier occurrences vanish). → [05](docs/parity/05-calendar.md)
-- [ ] All-day events grow by one day on every create-via-toggle and every re-save. → [05](docs/parity/05-calendar.md)
-- [ ] Events are created without `timeZone` (floating time). → [05](docs/parity/05-calendar.md)
-- [ ] Invitations are never sent: participants use the retired `sendTo`, no organizer participant, no `organizerCalendarAddress` (#500, #731). → [05](docs/parity/05-calendar.md)
-- [ ] vCard import writes dates as raw strings instead of RFC 9553 PartialDate (#224) — Stalwart rejects the whole card, so any contact with a birthday is lost on import. → [06](docs/parity/06-contacts.md)
+- [x] No draft autosave, no save-on-close, and the OS back gesture bypasses the discard guard — closing a compose loses everything. → [04](docs/parity/04-composer-send.md) *(fixed in 5b72c4d)*
+- [x] Cannot open or edit an existing draft (Drafts folder opens the read-only viewer). → [04](docs/parity/04-composer-send.md) *(fixed in 5b72c4d)*
+- [x] Message is filed into **Sent before `EmailSubmission/set`**; a failed send leaves a never-sent copy in Sent and a retry duplicates it. → [04](docs/parity/04-composer-send.md) *(fixed in ccbe67c)*
+- [x] `In-Reply-To` / `References` are written with the **JMAP email id** instead of the RFC Message-ID (`messageId`/`references` are never even fetched) — every reply breaks threading in recipients' clients. → [03](docs/parity/03-email-viewer.md), [04](docs/parity/04-composer-send.md) *(fixed in 7f956d6)*
+- [x] Reply addressing: `Reply-To` ignored, the user's own address kept on reply-all, wrong recipients on self-sent replies (#703, 1.9.0). → [03](docs/parity/03-email-viewer.md) *(fixed in 7f956d6)*
+- [x] **Forward drops every attachment.** → [03](docs/parity/03-email-viewer.md), [04](docs/parity/04-composer-send.md) *(fixed in 7f956d6)*
+- [x] Sieve: RN generator has no `attachment` field and emits `header :contains "undefined" ""` for webmail-authored attachment rules — **any save on the phone corrupts the shared server script**. → [07](docs/parity/07-filters-vacation-files.md) *(fixed in 1c6aa68)*
+- [x] Sieve: multi-value conditions (`string[]`, webmail 1.7.3) make the whole script "opaque" on RN; "Reset to visual builder" then wipes all rules. → [07](docs/parity/07-filters-vacation-files.md) *(fixed in 1c6aa68)*
+- [x] `FilterRuleModal` is always mounted and never re-seeds: editing rule B shows and **saves rule A's fields under B's id**. → [07](docs/parity/07-filters-vacation-files.md) *(fixed in 1c6aa68)*
+- [x] Calendar recurrence scope dialog is a stub: "This event" / "This and following" act as "All events" — deleting one occurrence **destroys the series**. → [05](docs/parity/05-calendar.md) *(fixed in 161baf1)*
+- [x] Editing an expanded occurrence rewrites the master's `start` to the occurrence date (series shifts, earlier occurrences vanish). → [05](docs/parity/05-calendar.md) *(fixed in 161baf1)*
+- [x] All-day events grow by one day on every create-via-toggle and every re-save. → [05](docs/parity/05-calendar.md) *(fixed in 58a6f45)*
+- [x] Events are created without `timeZone` (floating time). → [05](docs/parity/05-calendar.md) *(fixed in 58a6f45)*
+- [x] Invitations are never sent: participants use the retired `sendTo`, no organizer participant, no `organizerCalendarAddress` (#500, #731). → [05](docs/parity/05-calendar.md) *(fixed in 5dc4070)*
+- [x] vCard import writes dates as raw strings instead of RFC 9553 PartialDate (#224) — Stalwart rejects the whole card, so any contact with a birthday is lost on import. → [06](docs/parity/06-contacts.md) *(fixed in e650cb2)*
 
 ### Core flow blocked / wrong content shown
-- [ ] TOTP / 2FA password login is impossible (402 is shown as a generic failure). → [01](docs/parity/01-auth-accounts.md)
-- [ ] Webmail password handoff breaks for TOTP-protected accounts (cross-repo: webmail should hand off `flow=oauth` after a TOTP-upgraded login). → [01](docs/parity/01-auth-accounts.md)
-- [ ] A failed "add account" resets the singleton client before connecting, killing the live session until relaunch. → [01](docs/parity/01-auth-accounts.md)
-- [ ] Account Security screen is dead against every Stalwart server: it checks `session.capabilities` but Stalwart advertises `urn:stalwart:jmap` only in `accountCapabilities` (verified on 0.16.19) — **native #47**. → [01](docs/parity/01-auth-accounts.md)
-- [ ] Thread view: only the newest message of a thread is reachable; older messages cannot be opened unless threading is disabled. → [03](docs/parity/03-email-viewer.md)
-- [ ] Pager shows another message's body (or nothing) when the opened id is not in the active folder page — unified inbox, group inboxes, contact activity. → [02](docs/parity/02-mail-list-folders.md), [03](docs/parity/03-email-viewer.md)
-- [ ] HTML-only messages are rendered — and quoted in replies — as raw HTML source (**native #46**). `<style>` stripping and an old dark-mode CSS revision are the likely cause of **native #49**. → [03](docs/parity/03-email-viewer.md)
+- [x] TOTP / 2FA password login is impossible (402 is shown as a generic failure). → [01](docs/parity/01-auth-accounts.md) *(fixed in b52768e)*
+- [x] Webmail password handoff breaks for TOTP-protected accounts (cross-repo: webmail should hand off `flow=oauth` after a TOTP-upgraded login). → [01](docs/parity/01-auth-accounts.md) *(fixed in 0d94d76)*
+- [x] A failed "add account" resets the singleton client before connecting, killing the live session until relaunch. → [01](docs/parity/01-auth-accounts.md) *(fixed in b52768e)*
+- [x] Account Security screen is dead against every Stalwart server: it checks `session.capabilities` but Stalwart advertises `urn:stalwart:jmap` only in `accountCapabilities` (verified on 0.16.19) — **native #47**. → [01](docs/parity/01-auth-accounts.md) *(fixed in 032732c)*
+- [x] Thread view: only the newest message of a thread is reachable; older messages cannot be opened unless threading is disabled. → [03](docs/parity/03-email-viewer.md) *(fixed in d2ed27f)*
+- [x] Pager shows another message's body (or nothing) when the opened id is not in the active folder page — unified inbox, group inboxes, contact activity. → [02](docs/parity/02-mail-list-folders.md), [03](docs/parity/03-email-viewer.md) *(fixed in c8be383)*
+- [x] HTML-only messages are rendered — and quoted in replies — as raw HTML source (**native #46**). `<style>` stripping and an old dark-mode CSS revision are the likely cause of **native #49**. → [03](docs/parity/03-email-viewer.md) *(fixed in 06742ef)*
 
 ### JMAP client, live sync, security
-- [ ] No request deadline on any fetch — a stalled socket (iOS background suspension, dead pooled connection) hangs send/save forever (#702). → [09](docs/parity/09-jmap-core-sync-security.md)
-- [ ] Most `src/api/*.ts` functions index `methodResponses[0][1]` blindly and never check `error` / `notUpdated` / `notDestroyed` — a rejected mutation is reported as success and the outbox drops it. → [09](docs/parity/09-jmap-core-sync-security.md)
-- [ ] Password change leaves the stored credential stale; the next launch evicts the account. → [09](docs/parity/09-jmap-core-sync-security.md)
-- [ ] No `AppState` handling: SSE is never paused in background nor recovered on foreground, and `react-native-sse` never reconnects after a status-0 network error — push is silently dead after the first blip. → [09](docs/parity/09-jmap-core-sync-security.md)
-- [ ] SSE `Authorization` header is captured once; after an OAuth refresh every reconnect sends the stale token (401 → re-poll every 5 s forever). → [09](docs/parity/09-jmap-core-sync-security.md)
-- [ ] Push effect is keyed on the singleton client, so the SSE stream stays bound to the previous account after `switchAccount`. → [09](docs/parity/09-jmap-core-sync-security.md)
-- [ ] Webmail password handoff sends the clear-text password in a custom-scheme redirect fragment that any app can register; OAuth `state` uses `Math.random`; `server_url`/`token_endpoint` in the callback are trusted as-is. → [09](docs/parity/09-jmap-core-sync-security.md), [01](docs/parity/01-auth-accounts.md)
+- [x] No request deadline on any fetch — a stalled socket (iOS background suspension, dead pooled connection) hangs send/save forever (#702). → [09](docs/parity/09-jmap-core-sync-security.md) *(fixed in 0b1c240)*
+- [x] Most `src/api/*.ts` functions index `methodResponses[0][1]` blindly and never check `error` / `notUpdated` / `notDestroyed` — a rejected mutation is reported as success and the outbox drops it. → [09](docs/parity/09-jmap-core-sync-security.md) *(fixed in ccbe67c)*
+- [x] Password change leaves the stored credential stale; the next launch evicts the account. → [09](docs/parity/09-jmap-core-sync-security.md) *(fixed in 032732c)*
+- [x] No `AppState` handling: SSE is never paused in background nor recovered on foreground, and `react-native-sse` never reconnects after a status-0 network error — push is silently dead after the first blip. → [09](docs/parity/09-jmap-core-sync-security.md) *(fixed in edc26ce)*
+- [x] SSE `Authorization` header is captured once; after an OAuth refresh every reconnect sends the stale token (401 → re-poll every 5 s forever). → [09](docs/parity/09-jmap-core-sync-security.md) *(fixed in edc26ce)*
+- [x] Push effect is keyed on the singleton client, so the SSE stream stays bound to the previous account after `switchAccount`. → [09](docs/parity/09-jmap-core-sync-security.md) *(fixed in edc26ce)*
+- [x] Webmail password handoff sends the clear-text password in a custom-scheme redirect fragment that any app can register; OAuth `state` uses `Math.random`; `server_url`/`token_endpoint` in the callback are trusted as-is. → [09](docs/parity/09-jmap-core-sync-security.md), [01](docs/parity/01-auth-accounts.md) *(fixed in 2c0dbd1)*
 
 ### Repo health
-- [ ] `npm test` is red on `main` (see Baseline health above).
+- [x] `npm test` is red on `main` (see Baseline health above). *(fixed in b84d4d8)*
 
 ## Native issues mapped to findings
 
