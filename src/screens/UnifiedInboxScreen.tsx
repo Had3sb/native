@@ -316,7 +316,7 @@ export default function UnifiedInboxScreen({ navigation, route }: Props) {
               </Text>
               {starred && <Star size={12} color={c.starred} fill={c.starred} />}
               {item.hasAttachment && <Paperclip size={12} color={c.textMuted} />}
-              <Text style={styles.time}>{formatListDate(item.receivedAt, { dateFormat, timeFormat, locale })}</Text>
+              <Text style={styles.time}>{formatListDate(item.receivedAt, { dateFormat, timeFormat, locale, t })}</Text>
             </View>
             <Text style={[styles.subject, unread && styles.bold]} numberOfLines={1}>
               {item.subject || '(no subject)'}

@@ -1,9 +1,10 @@
 // Persistent offline action queue ("outbox") for mail mutations.
 //
-// Every mutation the app performs on a message reduces to one of three
+// Every mutation the app performs on a message reduces to one of four
 // idempotent primitives:
 //   - keywords:  replace the full keyword map  (read/unread, flag, pin, …)
-//   - mailboxes: replace the full mailboxIds map (move, archive, trash)
+//   - mailboxes: replace the full mailboxIds map (move, trash)
+//   - archive:   file into Archive with the user's year/month auto-foldering
 //   - destroy:   permanently delete the message
 //
 // Because each primitive assigns the *whole* target state rather than a delta,
@@ -20,15 +21,23 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { generateUUID } from '../lib/uuid';
-import { isTransientNetworkError } from '../lib/network-error';
+import { isTransientNetworkError, isAuthError } from '../lib/network-error';
 import { useNetworkStore } from './network-store';
 import { jmapClient } from '../api/jmap-client';
-import { setEmailKeywords, setEmailMailboxes, destroyEmails } from '../api/email';
+import {
+  setEmailKeywords, setEmailMailboxes, destroyEmails, archiveEmails, unprefixMailboxId,
+} from '../api/email';
+import type { ArchiveMode } from './settings-store';
 
 const KEY_PREFIX = 'webmail:outbox:v1:';
+const FAILED_SUFFIX = ':failed';
 // Give up on an op that the server keeps rejecting (a non-transient failure)
 // after this many attempts so one poison entry can't wedge the whole queue.
 const MAX_ATTEMPTS = 5;
+// Back-off after a transient break (a blip NetInfo never reports, a server
+// hiccup): 5 s, 15 s, 45 s, … capped at 5 minutes.
+const RETRY_BASE_MS = 5_000;
+const RETRY_MAX_MS = 5 * 60_000;
 
 function storageKey(accountId: string): string {
   return `${KEY_PREFIX}${accountId}`;
@@ -40,6 +49,19 @@ function storageKey(accountId: string): string {
 export type OutboxOp =
   | { kind: 'keywords'; emailId: string; accountId?: string; keywords: Record<string, boolean> }
   | { kind: 'mailboxes'; emailId: string; accountId?: string; mailboxIds: Record<string, boolean> }
+  | {
+      /**
+       * Archive with the configured year/month auto-foldering re-applied on
+       * replay (the plain `mailboxes` fallback used to land in the Archive
+       * root). `archiveMailboxId` is the raw id of the account's Archive.
+       */
+      kind: 'archive';
+      emailId: string;
+      accountId?: string;
+      archiveMailboxId: string;
+      mode: ArchiveMode;
+      receivedAt: string;
+    }
   | { kind: 'destroy'; emailId: string; accountId?: string };
 
 export interface OutboxEntry {
@@ -54,8 +76,16 @@ interface OutboxState {
   // Currently-loaded account bucket. null = detached (no reads/writes).
   activeAccountId: string | null;
   entries: OutboxEntry[];
+  /**
+   * Ops the server rejected repeatedly. They are kept (not dropped silently)
+   * so the user can retry or discard them; the list view is refreshed when an
+   * op lands here so the optimistic edit is reverted.
+   */
+  failed: OutboxEntry[];
   hydrated: boolean;
   flushing: boolean;
+  /** Set after an authentication failure; cleared by setAccount()/login. */
+  paused: boolean;
 
   setAccount: (accountId: string | null) => Promise<void>;
   hydrate: () => Promise<void>;
@@ -63,6 +93,9 @@ interface OutboxState {
   count: () => number;
   pendingForEmail: (emailId: string) => OutboxEntry[];
   flush: () => Promise<void>;
+  /** Move every failed op back into the queue and flush. */
+  retryFailed: () => Promise<void>;
+  discardFailed: () => void;
   clear: () => Promise<void>;
 }
 
@@ -72,9 +105,15 @@ function persist(accountId: string, entries: OutboxEntry[]): void {
   });
 }
 
-async function load(accountId: string): Promise<OutboxEntry[]> {
+function persistFailed(accountId: string, failed: OutboxEntry[]): void {
+  void AsyncStorage.setItem(storageKey(accountId) + FAILED_SUFFIX, JSON.stringify(failed)).catch((err) => {
+    console.warn('[outbox] persist failed-list failed', err);
+  });
+}
+
+async function load(accountId: string, suffix = ''): Promise<OutboxEntry[]> {
   try {
-    const raw = await AsyncStorage.getItem(storageKey(accountId));
+    const raw = await AsyncStorage.getItem(storageKey(accountId) + suffix);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed as OutboxEntry[];
@@ -91,29 +130,88 @@ async function runOp(op: OutboxOp): Promise<void> {
       return setEmailKeywords(op.emailId, op.keywords, op.accountId);
     case 'mailboxes':
       return setEmailMailboxes(op.emailId, op.mailboxIds, op.accountId);
+    case 'archive': {
+      // The foldering needs the account's current folder list; read it from
+      // the email store lazily (it imports this module, so no static import).
+      const { useEmailStore } = await import('./email-store');
+      const all = useEmailStore.getState().mailboxes;
+      const scoped = all
+        .filter((m) => (op.accountId ? m.isShared && m.accountId === op.accountId : !m.isShared))
+        .map((m) => (m.isShared
+          ? { ...m, id: m.originalId ?? m.id, parentId: m.parentId ? unprefixMailboxId(m.parentId, m.accountId) : m.parentId }
+          : m));
+      await archiveEmails(
+        [{ id: op.emailId, receivedAt: op.receivedAt }],
+        op.archiveMailboxId,
+        op.mode,
+        scoped,
+        op.accountId,
+      );
+      return;
+    }
     case 'destroy':
       return destroyEmails([op.emailId], op.accountId);
+  }
+}
+
+// A move-like op replaces the whole mailboxIds map; `mailboxes` and `archive`
+// therefore coalesce with each other (the latest wins).
+function opFamily(op: OutboxOp): string {
+  return op.kind === 'archive' ? 'mailboxes' : op.kind;
+}
+
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryAttempt = 0;
+
+function clearRetry(): void {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+
+function scheduleRetry(): void {
+  clearRetry();
+  const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 3 ** retryAttempt);
+  retryAttempt += 1;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    void useOutboxStore.getState().flush();
+  }, delay);
+}
+
+// Revert the optimistic edit the dropped op stood for: re-read the list.
+async function refreshAfterDrop(): Promise<void> {
+  try {
+    const { useEmailStore } = await import('./email-store');
+    const store = useEmailStore.getState();
+    await Promise.all([store.fetchMailboxes(), store.refreshEmails()]);
+  } catch (err) {
+    console.warn('[outbox] refresh after drop failed', err);
   }
 }
 
 export const useOutboxStore = create<OutboxState>((set, get) => ({
   activeAccountId: null,
   entries: [],
+  failed: [],
   hydrated: false,
   flushing: false,
+  paused: false,
 
   setAccount: async (accountId) => {
     const state = get();
     if (state.activeAccountId === accountId) {
       if (!state.hydrated) await get().hydrate();
+      set({ paused: false });
       return;
     }
-    set({ activeAccountId: accountId, entries: [], hydrated: false });
+    clearRetry();
+    retryAttempt = 0;
+    set({ activeAccountId: accountId, entries: [], failed: [], hydrated: false, paused: false });
     if (accountId) {
-      const entries = await load(accountId);
+      const [entries, failed] = await Promise.all([load(accountId), load(accountId, FAILED_SUFFIX)]);
       // Re-check in case another setAccount raced past us.
       if (get().activeAccountId !== accountId) return;
-      set({ entries, hydrated: true });
+      set({ entries, failed, hydrated: true });
     } else {
       set({ hydrated: true });
     }
@@ -127,9 +225,9 @@ export const useOutboxStore = create<OutboxState>((set, get) => ({
       set({ hydrated: true });
       return;
     }
-    const entries = await load(accountId);
+    const [entries, failed] = await Promise.all([load(accountId), load(accountId, FAILED_SUFFIX)]);
     if (get().activeAccountId !== accountId) return;
-    set({ entries, hydrated: true });
+    set({ entries, failed, hydrated: true });
   },
 
   enqueue: (op) => {
@@ -152,10 +250,10 @@ export const useOutboxStore = create<OutboxState>((set, get) => ({
     } else {
       // A queued destroy wins; further edits to a doomed message are pointless.
       if (entries.some((e) => sameMessage(e.op) && e.op.kind === 'destroy')) return;
-      // Coalesce: replace any pending op of the same kind for this message
+      // Coalesce: replace any pending op of the same family for this message
       // (full-state replace makes the latest one authoritative). Keep its
       // position so creation order is preserved for replay.
-      const idx = entries.findIndex((e) => sameMessage(e.op) && e.op.kind === op.kind);
+      const idx = entries.findIndex((e) => sameMessage(e.op) && opFamily(e.op) === opFamily(op));
       if (idx >= 0) {
         entries[idx] = { ...entries[idx], op, attempts: 0, lastError: undefined };
       } else {
@@ -172,7 +270,7 @@ export const useOutboxStore = create<OutboxState>((set, get) => ({
   pendingForEmail: (emailId) => get().entries.filter((e) => e.op.emailId === emailId),
 
   flush: async () => {
-    if (get().flushing) return;
+    if (get().flushing || get().paused) return;
     const accountId = get().activeAccountId;
     if (!accountId) return;
     if (get().entries.length === 0) return;
@@ -181,6 +279,8 @@ export const useOutboxStore = create<OutboxState>((set, get) => ({
     if (!useNetworkStore.getState().online) return;
 
     set({ flushing: true });
+    let brokeTransient = false;
+    let dropped = false;
     try {
       // Process oldest-first so dependent moves replay in the order they were
       // made. We snapshot the order but re-read the live list each iteration,
@@ -198,19 +298,29 @@ export const useOutboxStore = create<OutboxState>((set, get) => ({
         try {
           await runOp(entry.op);
           removeEntry(accountId, entry.id);
+          retryAttempt = 0;
         } catch (err) {
           if (get().activeAccountId !== accountId) break;
-          if (isTransientNetworkError(err)) {
-            // Connectivity blip — stop and let the next flush retry from here.
+          if (isAuthError(err)) {
+            // Revoked password / expired session: nothing will succeed until
+            // the user signs in again. Keep the queue and stop trying.
             recordError(accountId, entry.id, err, false);
+            set({ paused: true });
             break;
           }
-          // Server rejected it. Count the attempt; drop once we've given up so
-          // one bad op can't block everything behind it.
+          if (isTransientNetworkError(err)) {
+            // Connectivity blip — stop and retry with back-off.
+            recordError(accountId, entry.id, err, false);
+            brokeTransient = true;
+            break;
+          }
+          // Server rejected it. Count the attempt; park it in `failed` once
+          // we've given up so one bad op can't block everything behind it.
           const attempts = (entry.attempts ?? 0) + 1;
           if (attempts >= MAX_ATTEMPTS) {
-            console.warn('[outbox] dropping op after repeated failures', entry.op.kind, err);
-            removeEntry(accountId, entry.id);
+            console.warn('[outbox] parking op after repeated failures', entry.op.kind, err);
+            moveToFailed(accountId, entry.id, err);
+            dropped = true;
           } else {
             recordError(accountId, entry.id, err, true);
           }
@@ -219,13 +329,38 @@ export const useOutboxStore = create<OutboxState>((set, get) => ({
     } finally {
       set({ flushing: false });
     }
+    if (brokeTransient && get().entries.length > 0) scheduleRetry();
+    if (dropped) void refreshAfterDrop();
+  },
+
+  retryFailed: async () => {
+    const accountId = get().activeAccountId;
+    if (!accountId) return;
+    const failed = get().failed;
+    if (failed.length === 0) return;
+    const entries = [
+      ...get().entries,
+      ...failed.map((e) => ({ ...e, attempts: 0, lastError: undefined })),
+    ];
+    set({ entries, failed: [], paused: false });
+    persist(accountId, entries);
+    persistFailed(accountId, []);
+    await get().flush();
+  },
+
+  discardFailed: () => {
+    const accountId = get().activeAccountId;
+    set({ failed: [] });
+    if (accountId) persistFailed(accountId, []);
   },
 
   clear: async () => {
     const accountId = get().activeAccountId;
-    set({ entries: [] });
+    clearRetry();
+    set({ entries: [], failed: [] });
     if (accountId) {
       await AsyncStorage.removeItem(storageKey(accountId)).catch(() => undefined);
+      await AsyncStorage.removeItem(storageKey(accountId) + FAILED_SUFFIX).catch(() => undefined);
     }
   },
 }));
@@ -238,6 +373,20 @@ function removeEntry(accountId: string, id: string): void {
   const entries = store.entries.filter((e) => e.id !== id);
   useOutboxStore.setState({ entries });
   persist(accountId, entries);
+}
+
+function moveToFailed(accountId: string, id: string, err: unknown): void {
+  const store = useOutboxStore.getState();
+  if (store.activeAccountId !== accountId) return;
+  const entry = store.entries.find((e) => e.id === id);
+  const entries = store.entries.filter((e) => e.id !== id);
+  const message = err instanceof Error ? err.message : String(err);
+  const failed = entry
+    ? [...store.failed, { ...entry, attempts: (entry.attempts ?? 0) + 1, lastError: message }]
+    : store.failed;
+  useOutboxStore.setState({ entries, failed });
+  persist(accountId, entries);
+  persistFailed(accountId, failed);
 }
 
 function recordError(accountId: string, id: string, err: unknown, incrementAttempt: boolean): void {
@@ -263,15 +412,16 @@ export interface ApplyResult {
 // Run a batch of ops now when we're online and nothing is already queued for
 // any of the affected messages; otherwise queue them for later replay. An
 // optional `onlineRun` lets callers keep a richer single-round-trip online
-// path (e.g. batch move, or archive's year/month auto-foldering) while still
-// degrading to the idempotent primitives offline.
+// path (e.g. batch move) while still degrading to the idempotent primitives
+// offline — which replay with the same semantics (an `archive` op re-applies
+// the year/month foldering on replay).
 export async function applyOrQueueBatch(
   ops: OutboxOp[],
   onlineRun?: () => Promise<void>,
 ): Promise<ApplyResult> {
   if (ops.length === 0) return { queued: false };
   const store = useOutboxStore.getState();
-  const online = useNetworkStore.getState().online && jmapClient.isConnected;
+  const online = useNetworkStore.getState().online && jmapClient.isConnected && !store.paused;
   const hasQueued = ops.some((op) =>
     store.entries.some((e) => e.op.emailId === op.emailId),
   );

@@ -28,6 +28,7 @@ import { useKeywordsStore, type KeywordDef } from '../stores/keywords-store';
 import { useLocaleStore } from '../stores/locale-store';
 import { useSearchHistoryStore } from '../stores/search-history-store';
 import { useContactsStore } from '../stores/contacts-store';
+import { useOutboxStore } from '../stores/outbox-store';
 import { getContactDisplayName } from '../lib/contact-utils';
 import { formatListDate } from '../lib/date-format';
 import {
@@ -114,6 +115,7 @@ const EmailRow = React.memo(function EmailRow({
   const dateFormat = useSettingsStore((s) => s.dateFormat);
   const timeFormat = useSettingsStore((s) => s.timeFormat);
   const locale = useLocaleStore((s) => s.locale);
+  const tr = useLocaleStore((s) => s.t);
   const { name: senderName, email: senderEmail } = getCounterpart(item, showRecipient);
   const unread = isUnread(item);
   const starred = isStarred(item);
@@ -201,7 +203,7 @@ const EmailRow = React.memo(function EmailRow({
                 <Text style={styles.threadBadgeText}>{threadCount}</Text>
               </View>
             )}
-            <Text style={[styles.emailDate, dyn.caption]}>{formatListDate(item.receivedAt, { dateFormat, timeFormat, locale })}</Text>
+            <Text style={[styles.emailDate, dyn.caption]}>{formatListDate(item.receivedAt, { dateFormat, timeFormat, locale, t: tr })}</Text>
           </View>
         </View>
 
@@ -290,6 +292,11 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
   const recentSearches = useSearchHistoryStore((s) => s.recentSearches);
   const removeRecentSearch = useSearchHistoryStore((s) => s.removeRecentSearch);
   const contacts = useContactsStore((s) => s.contacts);
+  // Queued changes the server rejected repeatedly: surfaced with retry/discard
+  // instead of being dropped silently.
+  const failedOps = useOutboxStore((s) => s.failed);
+  const retryFailedOps = useOutboxStore((s) => s.retryFailed);
+  const discardFailedOps = useOutboxStore((s) => s.discardFailed);
 
   const swipeLeftAction = useSettingsStore((s) => s.swipeLeftAction);
   const swipeRightAction = useSettingsStore((s) => s.swipeRightAction);
@@ -1205,6 +1212,21 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
 
       <OfflineBanner hint={emails.length > 0 ? t('email_list.showing_cached', 'Showing cached mail') : undefined} />
 
+      {failedOps.length > 0 && (
+        <View style={[styles.emptyFolderBanner, { borderColor: c.error }]}>
+          <Text style={styles.emptyFolderHint} numberOfLines={2}>
+            {t('email_list.outbox_failed', `${failedOps.length} changes could not be saved to the server.`, { count: failedOps.length })}
+            {failedOps[0]?.lastError ? ` ${failedOps[0].lastError}` : ''}
+          </Text>
+          <Pressable onPress={() => { void retryFailedOps(); }} style={styles.emptyFolderButton} hitSlop={6}>
+            <Text style={[styles.emptyFolderButtonText, { color: c.primary }]}>{t('common.retry', 'Retry')}</Text>
+          </Pressable>
+          <Pressable onPress={discardFailedOps} style={styles.emptyFolderButton} hitSlop={6}>
+            <Text style={styles.emptyFolderButtonText}>{t('email_list.outbox_discard', 'Discard')}</Text>
+          </Pressable>
+        </View>
+      )}
+
       {/* Email list */}
       {loading && emails.length === 0 ? (
         <View style={styles.loadingContainer}>
@@ -1504,16 +1526,20 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
         );
       })()}
 
+      {/* Every account's folders are offered: a move into another account's
+          folder is a copy+delete through the blob (webmail 1.7.2). */}
       <MoveSheet
         visible={pendingMoveId !== null}
         onClose={() => setPendingMoveId(null)}
-        mailboxes={scopedMailboxes}
+        mailboxes={mailboxes}
         currentMailboxId={currentMailboxId}
         onPick={(toId) => {
           const id = pendingMoveId;
           setPendingMoveId(null);
           if (id && currentMailboxId && toId !== currentMailboxId) {
-            void moveToMailboxAction(id, currentMailboxId, toId);
+            const ids = idsForRow(id);
+            if (ids.length > 1) void moveEmailsToMailbox(ids, toId);
+            else void moveToMailboxAction(id, currentMailboxId, toId);
           }
         }}
       />
@@ -1521,7 +1547,7 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
       <MoveSheet
         visible={batchMoveOpen}
         onClose={() => setBatchMoveOpen(false)}
-        mailboxes={scopedMailboxes}
+        mailboxes={mailboxes}
         currentMailboxId={currentMailboxId}
         onPick={handleBatchMovePick}
       />

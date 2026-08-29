@@ -1,11 +1,12 @@
 // Background sync that fills the offline mail cache. Runs the discovery
-// query (Email/query filtered by `after`), then fetches full bodies in
+// query (Email/query filtered by `after`) for the user's own account and
+// every shared (group) account in the session, then fetches full bodies in
 // batches, reporting progress to the offline-cache-store so the
 // OfflineCacheBanner and the Settings screen can show live updates.
 
 import { jmapClient } from '../api/jmap-client';
 import { queryEmailsByFilter, getFullEmails } from '../api/email';
-import { useOfflineCacheStore } from '../stores/offline-cache-store';
+import { useOfflineCacheStore, cacheKey } from '../stores/offline-cache-store';
 import type { Email } from '../api/types';
 
 // Approximate the on-disk size of a serialised Email so we can show "Y MB
@@ -21,7 +22,7 @@ function approxSize(email: Email): number {
 }
 
 // Hard cap so a misconfigured "30 days" against a noisy account doesn't try
-// to enumerate 100k messages.
+// to enumerate 100k messages. Shared accounts share the budget.
 const DISCOVERY_LIMIT = 5000;
 // Each Email/get request is bounded by the server's maxObjectsInGet. We
 // further chunk to keep individual responses small (a 50-message response
@@ -32,6 +33,12 @@ export interface RunOptions {
   days: number;
   /** Hard cap on the cache in megabytes; oldest mail is evicted to fit. */
   maxMB?: number;
+}
+
+interface SyncTarget {
+  /** JMAP account override; undefined = the user's own account. */
+  accountId?: string;
+  ids: string[];
 }
 
 export async function runOfflineSync(opts: RunOptions): Promise<void> {
@@ -50,9 +57,12 @@ export async function runOfflineSync(opts: RunOptions): Promise<void> {
 
   const since = new Date(startedAt - opts.days * 24 * 60 * 60 * 1000).toISOString();
 
-  let ids: string[] = [];
+  // Own mail first, then each shared/group account. A shared account that
+  // cannot be reached is skipped rather than failing the whole sync; the
+  // own-account discovery failing is fatal as before.
+  const targets: SyncTarget[] = [];
   try {
-    ids = await queryEmailsByFilter({ after: since }, DISCOVERY_LIMIT);
+    targets.push({ accountId: undefined, ids: await queryEmailsByFilter({ after: since }, DISCOVERY_LIMIT) });
   } catch (err) {
     cache.setSyncState({
       phase: 'error',
@@ -61,24 +71,46 @@ export async function runOfflineSync(opts: RunOptions): Promise<void> {
     });
     return;
   }
+  let budget = Math.max(0, DISCOVERY_LIMIT - targets[0].ids.length);
+  for (const acc of jmapClient.getSharedMailAccounts()) {
+    if (budget <= 0) break;
+    try {
+      const ids = await queryEmailsByFilter({ after: since }, budget, acc.id);
+      targets.push({ accountId: acc.id, ids });
+      budget -= ids.length;
+    } catch (err) {
+      console.warn('[offline-sync] shared account discovery failed:', acc.id, err);
+    }
+  }
 
   // Drop entries from the cache that fell out of the lookback window — the
   // user expects the cache to track "the last X days", not grow forever.
-  const keepSet = new Set(ids);
-  const stale = Object.keys(cache.index.entries).filter((id) => !keepSet.has(id));
-  if (stale.length > 0) {
-    await cache.remove(stale);
+  const keepSet = new Set<string>();
+  for (const tgt of targets) for (const id of tgt.ids) keepSet.add(cacheKey(id, tgt.accountId));
+  const staleByAccount = new Map<string | undefined, string[]>();
+  for (const entry of Object.values(cache.index.entries)) {
+    const key = cacheKey(entry.id, entry.jmapAccountId);
+    if (keepSet.has(key)) continue;
+    const list = staleByAccount.get(entry.jmapAccountId);
+    if (list) list.push(entry.id); else staleByAccount.set(entry.jmapAccountId, [entry.id]);
+  }
+  for (const [accountId, ids] of staleByAccount) {
+    if (ids.length > 0) await cache.remove(ids, accountId);
   }
 
-  const total = ids.length;
+  const total = targets.reduce((n, tgt) => n + tgt.ids.length, 0);
   cache.setSyncState({ phase: 'fetching', total, completed: 0, fetched: 0, bytes: 0 });
 
   // Skip already-cached ids — bodies on disk are immutable per messageId.
-  const toFetch = ids.filter((id) => !cache.has(id));
-  const skipped = total - toFetch.length;
+  const work = targets.map((tgt) => ({
+    accountId: tgt.accountId,
+    ids: tgt.ids.filter((id) => !cache.has(id, tgt.accountId)),
+  }));
+  const toFetchCount = work.reduce((n, tgt) => n + tgt.ids.length, 0);
+  const skipped = total - toFetchCount;
   cache.setSyncState({ completed: skipped });
 
-  if (toFetch.length === 0) {
+  if (toFetchCount === 0) {
     if (opts.maxMB) await cache.evictToFit(opts.maxMB * 1024 * 1024);
     cache.setSyncState({
       phase: 'done',
@@ -96,42 +128,44 @@ export async function runOfflineSync(opts: RunOptions): Promise<void> {
   let bytes = 0;
   let completed = skipped;
 
-  for (let i = 0; i < toFetch.length; i += chunkSize) {
-    if (useOfflineCacheStore.getState().consumeAbort()) {
-      cache.setSyncState({
-        phase: 'cancelled',
-        finishedAt: Date.now(),
-      });
-      return;
+  for (const tgt of work) {
+    for (let i = 0; i < tgt.ids.length; i += chunkSize) {
+      if (useOfflineCacheStore.getState().consumeAbort()) {
+        cache.setSyncState({
+          phase: 'cancelled',
+          finishedAt: Date.now(),
+        });
+        return;
+      }
+
+      const chunk = tgt.ids.slice(i, i + chunkSize);
+      let emails: Email[];
+      try {
+        emails = await getFullEmails(chunk, tgt.accountId);
+      } catch (err) {
+        cache.setSyncState({
+          phase: 'error',
+          message: err instanceof Error ? err.message : 'Fetch failed',
+          finishedAt: Date.now(),
+        });
+        return;
+      }
+
+      for (const email of emails) {
+        const size = approxSize(email);
+        await cache.put(email, size, tgt.accountId);
+        fetched += 1;
+        bytes += size;
+        completed += 1;
+      }
+
+      // Some chunked ids may have been deleted server-side between query and
+      // fetch — they don't come back. Account for that in the completed count
+      // so the progress bar still finishes at 100%.
+      completed += chunk.length - emails.length;
+
+      cache.setSyncState({ completed, fetched, bytes });
     }
-
-    const chunk = toFetch.slice(i, i + chunkSize);
-    let emails: Email[];
-    try {
-      emails = await getFullEmails(chunk);
-    } catch (err) {
-      cache.setSyncState({
-        phase: 'error',
-        message: err instanceof Error ? err.message : 'Fetch failed',
-        finishedAt: Date.now(),
-      });
-      return;
-    }
-
-    for (const email of emails) {
-      const size = approxSize(email);
-      await cache.put(email, size);
-      fetched += 1;
-      bytes += size;
-      completed += 1;
-    }
-
-    // Some chunked ids may have been deleted server-side between query and
-    // fetch — they don't come back. Account for that in the completed count
-    // so the progress bar still finishes at 100%.
-    completed += chunk.length - emails.length;
-
-    cache.setSyncState({ completed, fetched, bytes });
   }
 
   // Trim the cache back under its size cap, shedding the oldest mail. Done

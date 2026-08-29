@@ -27,8 +27,10 @@ import {
   searchEmails as apiSearchEmails,
   markAsSpam as apiMarkAsSpam,
   undoSpam as apiUndoSpam,
+  destroyEmails as apiDestroyEmails,
   unprefixMailboxId,
 } from '../api/email';
+import { useNetworkStore } from './network-store';
 import { JMAPMethodError } from '../api/jmap-result';
 import { mailboxesForSiblingOf, findJunkMailbox } from '../lib/mailbox-tree';
 import { toWildcardQuery } from '../lib/search-utils';
@@ -74,11 +76,15 @@ const provisionRetried = new Set<string>();
 
 // Keep the offline body cache consistent with an optimistic/queued mutation so
 // re-opening a message while offline shows the change. Fire-and-forget.
-function patchCache(id: string, changes: { keywords?: Record<string, boolean>; mailboxIds?: Record<string, boolean> }): void {
-  void useOfflineCacheStore.getState().patch(id, changes);
+function patchCache(
+  id: string,
+  changes: { keywords?: Record<string, boolean>; mailboxIds?: Record<string, boolean> },
+  accountId?: string,
+): void {
+  void useOfflineCacheStore.getState().patch(id, changes, accountId);
 }
-function dropFromCache(ids: string[]): void {
-  void useOfflineCacheStore.getState().remove(ids);
+function dropFromCache(ids: string[], accountId?: string): void {
+  void useOfflineCacheStore.getState().remove(ids, accountId);
 }
 // Compute an email's full mailboxIds map after removing one mailbox and adding
 // another — the idempotent target the outbox replays for a move/trash.
@@ -720,6 +726,7 @@ export const useEmailStore = create<EmailState>()(
           seededEmails = await cacheStore.getEmailsInMailbox(
             rawMailboxId(state.mailboxes, mailboxId),
             Math.max(limit, 50),
+            refFor(state.mailboxes, mailboxId).accountId,
           );
           // The cache returns newest-first; flip for an ascending sort.
           if (useSettingsStore.getState().mailSortAscending) seededEmails.reverse();
@@ -939,15 +946,15 @@ export const useEmailStore = create<EmailState>()(
       // Opportunistically refresh the cached copy so the next offline open
       // reflects the latest keywords without needing a full sync.
       const cache = useOfflineCacheStore.getState();
-      if (cache.has(id)) {
+      if (cache.has(id, accountId)) {
         try {
           const size = JSON.stringify(fresh).length;
-          await cache.put(fresh, size);
+          await cache.put(fresh, size, accountId);
         } catch { /* ignore — best-effort refresh */ }
       }
       return fresh;
     } catch (err) {
-      const cached = await useOfflineCacheStore.getState().get(id);
+      const cached = await useOfflineCacheStore.getState().get(id, accountId);
       if (cached) return cached;
       throw err;
     }
@@ -972,7 +979,7 @@ export const useEmailStore = create<EmailState>()(
       ),
       ...(state.filters.isUnread === true ? { retainedIds: retain(get().retainedIds, [emailId]) } : {}),
     });
-    patchCache(emailId, { keywords: nextKeywords });
+    patchCache(emailId, { keywords: nextKeywords }, owner);
   },
 
   markUnread: async (emailId) => {
@@ -992,7 +999,7 @@ export const useEmailStore = create<EmailState>()(
       ),
       ...(state.filters.isUnread === false ? { retainedIds: retain(get().retainedIds, [emailId]) } : {}),
     });
-    patchCache(emailId, { keywords: rest });
+    patchCache(emailId, { keywords: rest }, currentAccountId(state));
   },
 
   toggleStar: async (emailId, starred) => {
@@ -1019,7 +1026,7 @@ export const useEmailStore = create<EmailState>()(
         ? { retainedIds: retain(get().retainedIds, [emailId]) }
         : {}),
     });
-    patchCache(emailId, { keywords });
+    patchCache(emailId, { keywords }, currentAccountId(state));
   },
 
   togglePin: async (emailId, pinned) => {
@@ -1045,7 +1052,7 @@ export const useEmailStore = create<EmailState>()(
         e.id === emailId ? { ...e, keywords } : e,
       ),
     });
-    patchCache(emailId, { keywords });
+    patchCache(emailId, { keywords }, currentAccountId(state));
   },
 
   markSpam: async (emailIds) => {
@@ -1092,7 +1099,7 @@ export const useEmailStore = create<EmailState>()(
         items,
       },
     });
-    for (const e of targets) patchCache(e.id, { mailboxIds: junkTarget, keywords: nextKeywords.get(e.id) });
+    for (const e of targets) patchCache(e.id, { mailboxIds: junkTarget, keywords: nextKeywords.get(e.id) }, junk.accountId);
   },
 
   unmarkSpam: async (emailIds) => {
@@ -1135,7 +1142,7 @@ export const useEmailStore = create<EmailState>()(
         items,
       },
     });
-    for (const e of targets) patchCache(e.id, { mailboxIds: inboxTarget, keywords: nextKeywords.get(e.id) });
+    for (const e of targets) patchCache(e.id, { mailboxIds: inboxTarget, keywords: nextKeywords.get(e.id) }, inbox.accountId);
   },
 
   moveToMailbox: async (emailId, fromMailboxId, toMailboxId) => {
@@ -1143,11 +1150,19 @@ export const useEmailStore = create<EmailState>()(
     const email = state.emails.find((e) => e.id === emailId);
     const from = refFor(state.mailboxes, fromMailboxId);
     const to = refFor(state.mailboxes, toMailboxId);
-    // A single Email/set is scoped to one account, so there's no move between
-    // the user's own folders and a shared account's (or between two shared
-    // accounts) — that would be a copy-then-delete across accounts.
+    // A single Email/set is scoped to one account: a move between the user's
+    // own folders and a shared account's (or between two shared accounts) is
+    // a copy-then-delete across accounts (webmail 1.7.2), online only.
     if (from.accountId !== to.accountId) {
-      set({ error: t('email_list.move_same_account', 'Messages can only be moved within the same account') });
+      if (!email) return;
+      try {
+        await crossAccountMove([email], from, to);
+      } catch (err) {
+        set({ error: err instanceof Error ? err.message : t('notifications.move_failed', 'Move failed') });
+        return;
+      }
+      set({ emails: get().emails.filter((e) => e.id !== emailId) });
+      dropFromCache([emailId], from.accountId);
       return;
     }
     const original = email ? { ...email.mailboxIds } : null;
@@ -1158,7 +1173,7 @@ export const useEmailStore = create<EmailState>()(
       () => moveEmail(emailId, from.id, to.id, from.accountId),
     );
     set({ emails: get().emails.filter((e) => e.id !== emailId) });
-    patchCache(emailId, { mailboxIds: target });
+    patchCache(emailId, { mailboxIds: target }, from.accountId);
 
     if (email && original) {
       const targetName = mailboxPath(get().mailboxes, toMailboxId);
@@ -1199,10 +1214,12 @@ export const useEmailStore = create<EmailState>()(
     // op replays as a plain move into Archive.
     const { queued } = await applyOrQueue(
       {
-        kind: 'mailboxes',
+        kind: 'archive',
         emailId,
         accountId: archive.accountId,
-        mailboxIds: { [archive.id]: true },
+        archiveMailboxId: archive.id,
+        mode,
+        receivedAt: email.receivedAt,
       },
       () => apiArchiveEmails(
         [{ id: email.id, receivedAt: email.receivedAt }],
@@ -1223,7 +1240,7 @@ export const useEmailStore = create<EmailState>()(
         items: [{ email, originalMailboxIds: original }],
       },
     });
-    patchCache(emailId, { mailboxIds: { [archive.id]: true } });
+    patchCache(emailId, { mailboxIds: { [archive.id]: true } }, archive.accountId);
 
     // Auto-sort modes may have created new year/month folders - refresh the
     // mailbox list so the sidebar picks them up on the next render. Skip when
@@ -1263,7 +1280,7 @@ export const useEmailStore = create<EmailState>()(
         { kind: 'destroy', emailId, accountId: trash.accountId },
         () => apiDeleteEmail(emailId, trash.id, trash.id, trash.accountId),
       );
-      dropFromCache([emailId]);
+      dropFromCache([emailId], trash.accountId);
     } else {
       const target = mailboxesAfterMove(email?.mailboxIds, source.id, trash.id);
       await applyOrQueue(
@@ -1280,9 +1297,9 @@ export const useEmailStore = create<EmailState>()(
           accountId: source.accountId,
           keywords: nextKeywords,
         });
-        patchCache(emailId, { mailboxIds: target, keywords: nextKeywords });
+        patchCache(emailId, { mailboxIds: target, keywords: nextKeywords }, source.accountId);
       } else {
-        patchCache(emailId, { mailboxIds: target });
+        patchCache(emailId, { mailboxIds: target }, source.accountId);
       }
     }
     set({ emails: get().emails.filter((e) => e.id !== emailId) });
@@ -1325,10 +1342,12 @@ export const useEmailStore = create<EmailState>()(
 
     const { queued } = await applyOrQueueBatch(
       targets.map((e): OutboxOp => ({
-        kind: 'mailboxes',
+        kind: 'archive',
         emailId: e.id,
         accountId: archive.accountId,
-        mailboxIds: archiveTarget,
+        archiveMailboxId: archive.id,
+        mode,
+        receivedAt: e.receivedAt,
       })),
       () => apiArchiveEmails(
         targets.map((e) => ({ id: e.id, receivedAt: e.receivedAt })),
@@ -1352,7 +1371,7 @@ export const useEmailStore = create<EmailState>()(
         items,
       },
     });
-    for (const e of targets) patchCache(e.id, { mailboxIds: archiveTarget });
+    for (const e of targets) patchCache(e.id, { mailboxIds: archiveTarget }, archive.accountId);
 
     if (mode !== 'single' && !queued) void get().fetchMailboxes();
   },
@@ -1362,13 +1381,21 @@ export const useEmailStore = create<EmailState>()(
     if (!currentMailboxId || toMailboxId === currentMailboxId) return;
     const source = refFor(mailboxes, currentMailboxId);
     const to = refFor(mailboxes, toMailboxId);
-    // See moveToMailbox: one Email/set can't span two accounts.
-    if (source.accountId !== to.accountId) {
-      set({ error: t('email_list.move_same_account', 'Messages can only be moved within the same account') });
-      return;
-    }
     const targets = emails.filter((e) => emailIds.includes(e.id));
     if (targets.length === 0) return;
+    // See moveToMailbox: one Email/set can't span two accounts — copy+delete.
+    if (source.accountId !== to.accountId) {
+      try {
+        await crossAccountMove(targets, source, to);
+      } catch (err) {
+        set({ error: err instanceof Error ? err.message : t('notifications.move_failed', 'Move failed') });
+        return;
+      }
+      const moved = new Set(targets.map((e) => e.id));
+      set({ emails: get().emails.filter((e) => !moved.has(e.id)) });
+      dropFromCache(targets.map((e) => e.id), source.accountId);
+      return;
+    }
 
     const items = targets.map((e) => ({ email: e, originalMailboxIds: { ...e.mailboxIds } }));
 
@@ -1384,7 +1411,7 @@ export const useEmailStore = create<EmailState>()(
 
     const removed = new Set(targets.map((e) => e.id));
     for (const e of targets) {
-      patchCache(e.id, { mailboxIds: mailboxesAfterMove(e.mailboxIds, source.id, to.id) });
+      patchCache(e.id, { mailboxIds: mailboxesAfterMove(e.mailboxIds, source.id, to.id) }, source.accountId);
     }
     const targetName = mailboxPath(mailboxes, toMailboxId);
     set({
@@ -1473,12 +1500,12 @@ export const useEmailStore = create<EmailState>()(
       }
     });
 
-    if (toDestroy.length > 0) dropFromCache(toDestroy.map((e) => e.id));
+    if (toDestroy.length > 0) dropFromCache(toDestroy.map((e) => e.id), trash.accountId);
     for (const e of toTrash) {
       patchCache(e.id, {
         mailboxIds: mailboxesAfterMove(e.mailboxIds, source.id, trash.id),
         ...(markReadKeywords.has(e.id) ? { keywords: markReadKeywords.get(e.id) } : {}),
-      });
+      }, source.accountId);
     }
 
     const removed = new Set(targets.map((e) => e.id));
@@ -1530,7 +1557,7 @@ export const useEmailStore = create<EmailState>()(
         ? { retainedIds: retain(get().retainedIds, updates.map((u) => u.id)) }
         : {}),
     });
-    for (const u of updates) patchCache(u.id, { keywords: u.keywords });
+    for (const u of updates) patchCache(u.id, { keywords: u.keywords }, owner);
   },
 
   undoLast: async () => {
@@ -1572,7 +1599,7 @@ export const useEmailStore = create<EmailState>()(
         patchCache(it.email.id, {
           mailboxIds: it.originalMailboxIds,
           ...(it.originalKeywords ? { keywords: it.originalKeywords } : {}),
-        });
+        }, entry.accountId);
       }
     } catch (err) {
       set({ error: err instanceof Error ? err.message : t('email_list.undo_failed', 'Undo failed') });
@@ -1708,6 +1735,27 @@ export const useEmailStore = create<EmailState>()(
     },
   ),
 );
+
+// Copy-then-delete across accounts (webmail `crossAccountMoveEmails`, 1.7.2):
+// download each message's blob from the source account, upload it to the
+// target account, Email/import it into the target folder with its keywords,
+// then destroy the original. Online only — there is no idempotent replay.
+async function crossAccountMove(targets: Email[], from: MailboxRef, to: MailboxRef): Promise<void> {
+  if (!useNetworkStore.getState().online || !jmapClient.isConnected) {
+    throw new Error(t('email_list.cross_account_move_offline', 'Moving between accounts needs a connection'));
+  }
+  const { uploadBytes } = await import('../api/blob');
+  for (const e of targets) {
+    const full = e.blobId ? e : await getFullEmail(e.id, from.accountId);
+    if (!full.blobId) throw new Error('Message has no blob');
+    const bytes = await jmapClient.fetchBlobArrayBuffer(full.blobId, undefined, 'message/rfc822', from.accountId);
+    const { blobId } = await uploadBytes(new Uint8Array(bytes), 'message/rfc822', to.accountId);
+    const keywords: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(e.keywords ?? {})) if (v) keywords[k] = true;
+    await importEmailBlob(blobId, to.id, keywords, to.accountId);
+    await apiDestroyEmails([e.id], from.accountId);
+  }
+}
 
 // ── Refresh implementations (wrapped by coalesceRefresh above) ─────────
 
@@ -2047,6 +2095,7 @@ async function refreshEmailsImpl(): Promise<void> {
             const cached = await cacheStore.getEmailsInMailbox(
               ref.id,
               Math.max(limit, 50),
+              ref.accountId,
             );
             if (sortAscending) cached.reverse();
             if (

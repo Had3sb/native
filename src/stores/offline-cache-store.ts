@@ -24,11 +24,20 @@ function entryKey(accountId: string, emailId: string): string {
   return `${ENTRY_KEY_PREFIX}${accountId}:${emailId}`;
 }
 
+// Index/entry key of a message. JMAP ids are only unique per account, so a
+// message from a shared (group) account is namespaced by its owning JMAP
+// account id; the user's own mail keeps the bare id (backwards compatible).
+export function cacheKey(emailId: string, jmapAccountId?: string): string {
+  return jmapAccountId ? `${jmapAccountId}:${emailId}` : emailId;
+}
+
 export interface OfflineCacheIndexEntry {
   id: string;
   receivedAt: string;
   size: number;          // approx bytes of cached payload
   cachedAt: number;
+  /** Owning JMAP account for a shared/group message; unset for own mail. */
+  jmapAccountId?: string;
 }
 
 interface CacheIndex {
@@ -66,14 +75,14 @@ interface OfflineCacheState {
   // AsyncStorage. Pass null to detach (no reads/writes will hit storage).
   setAccount: (accountId: string | null) => Promise<void>;
   hydrate: () => Promise<void>;
-  has: (id: string) => boolean;
-  get: (id: string) => Promise<Email | null>;
-  put: (email: Email, approxBytes: number) => Promise<void>;
+  has: (id: string, jmapAccountId?: string) => boolean;
+  get: (id: string, jmapAccountId?: string) => Promise<Email | null>;
+  put: (email: Email, approxBytes: number, jmapAccountId?: string) => Promise<void>;
   // Shallow-merge a change into a cached email (no-op when not cached). Used to
   // keep the cached body consistent with an optimistic/queued mutation so a
   // re-open while offline reflects the new keywords / mailboxIds.
-  patch: (id: string, changes: Partial<Pick<Email, 'keywords' | 'mailboxIds'>>) => Promise<void>;
-  remove: (ids: string[]) => Promise<void>;
+  patch: (id: string, changes: Partial<Pick<Email, 'keywords' | 'mailboxIds'>>, jmapAccountId?: string) => Promise<void>;
+  remove: (ids: string[], jmapAccountId?: string) => Promise<void>;
   // Evict oldest-received entries until the cache fits within maxBytes. Keeps
   // the persisted cache from growing without bound on a noisy account.
   evictToFit: (maxBytes: number) => Promise<void>;
@@ -83,7 +92,7 @@ interface OfflineCacheState {
   // sorted by `receivedAt` descending. Used by selectMailbox to seed the
   // list when the network is unavailable. Loads each entry from
   // AsyncStorage; the index doesn't carry the mailbox set.
-  getEmailsInMailbox: (mailboxId: string, limit?: number) => Promise<Email[]>;
+  getEmailsInMailbox: (mailboxId: string, limit?: number, jmapAccountId?: string) => Promise<Email[]>;
 
   totalSize: () => number;
   totalCount: () => number;
@@ -163,14 +172,15 @@ export const useOfflineCacheStore = create<OfflineCacheState>((set, get) => ({
     set({ index, hydrated: true });
   },
 
-  has: (id) => Boolean(get().index.entries[id]),
+  has: (id, jmapAccountId) => Boolean(get().index.entries[cacheKey(id, jmapAccountId)]),
 
-  get: async (id) => {
+  get: async (id, jmapAccountId) => {
     const state = get();
     if (!state.activeAccountId) return null;
-    if (!state.index.entries[id]) return null;
+    const key = cacheKey(id, jmapAccountId);
+    if (!state.index.entries[key]) return null;
     try {
-      const raw = await AsyncStorage.getItem(entryKey(state.activeAccountId, id));
+      const raw = await AsyncStorage.getItem(entryKey(state.activeAccountId, key));
       if (!raw) return null;
       return JSON.parse(raw) as Email;
     } catch (err) {
@@ -179,12 +189,13 @@ export const useOfflineCacheStore = create<OfflineCacheState>((set, get) => ({
     }
   },
 
-  put: async (email, approxBytes) => {
+  put: async (email, approxBytes, jmapAccountId) => {
     const state = get();
     const accountId = state.activeAccountId;
     if (!accountId) return;
+    const key = cacheKey(email.id, jmapAccountId);
     try {
-      await AsyncStorage.setItem(entryKey(accountId, email.id), JSON.stringify(email));
+      await AsyncStorage.setItem(entryKey(accountId, key), JSON.stringify(email));
     } catch (err) {
       console.warn('[offline-cache] put failed', email.id, err);
       return;
@@ -195,11 +206,12 @@ export const useOfflineCacheStore = create<OfflineCacheState>((set, get) => ({
     if (get().activeAccountId !== accountId) return;
     const nextEntries = {
       ...get().index.entries,
-      [email.id]: {
+      [key]: {
         id: email.id,
         receivedAt: email.receivedAt,
         size: approxBytes,
         cachedAt: Date.now(),
+        ...(jmapAccountId ? { jmapAccountId } : {}),
       },
     };
     const index = { entries: nextEntries };
@@ -207,31 +219,33 @@ export const useOfflineCacheStore = create<OfflineCacheState>((set, get) => ({
     persistIndex(accountId, index);
   },
 
-  patch: async (id, changes) => {
+  patch: async (id, changes, jmapAccountId) => {
     const accountId = get().activeAccountId;
-    if (!accountId || !get().index.entries[id]) return;
+    const key = cacheKey(id, jmapAccountId);
+    if (!accountId || !get().index.entries[key]) return;
     try {
-      const raw = await AsyncStorage.getItem(entryKey(accountId, id));
+      const raw = await AsyncStorage.getItem(entryKey(accountId, key));
       if (!raw) return;
       const email = JSON.parse(raw) as Email;
       const updated: Email = { ...email, ...changes };
       if (get().activeAccountId !== accountId) return;
-      await AsyncStorage.setItem(entryKey(accountId, id), JSON.stringify(updated));
+      await AsyncStorage.setItem(entryKey(accountId, key), JSON.stringify(updated));
     } catch (err) {
       console.warn('[offline-cache] patch failed', id, err);
     }
   },
 
-  remove: async (ids) => {
+  remove: async (ids, jmapAccountId) => {
     if (ids.length === 0) return;
     const accountId = get().activeAccountId;
     if (!accountId) return;
+    const keys = ids.map((id) => cacheKey(id, jmapAccountId));
     await Promise.all(
-      ids.map((id) => AsyncStorage.removeItem(entryKey(accountId, id)).catch(() => undefined)),
+      keys.map((key) => AsyncStorage.removeItem(entryKey(accountId, key)).catch(() => undefined)),
     );
     if (get().activeAccountId !== accountId) return;
     const next = { ...get().index.entries };
-    for (const id of ids) delete next[id];
+    for (const key of keys) delete next[key];
     const index = { entries: next };
     set({ index });
     persistIndex(accountId, index);
@@ -250,13 +264,19 @@ export const useOfflineCacheStore = create<OfflineCacheState>((set, get) => ({
       const bt = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
       return at - bt;
     });
-    const toRemove: string[] = [];
+    const toRemove: Array<{ id: string; jmapAccountId?: string }> = [];
     for (const entry of sorted) {
       if (total <= maxBytes) break;
-      toRemove.push(entry.id);
+      toRemove.push({ id: entry.id, jmapAccountId: entry.jmapAccountId });
       total -= entry.size;
     }
-    if (toRemove.length > 0) await get().remove(toRemove);
+    // Group by namespace so each remove() call addresses the right keys.
+    const byAccount = new Map<string | undefined, string[]>();
+    for (const r of toRemove) {
+      const list = byAccount.get(r.jmapAccountId);
+      if (list) list.push(r.id); else byAccount.set(r.jmapAccountId, [r.id]);
+    }
+    for (const [jmapAccountId, ids] of byAccount) await get().remove(ids, jmapAccountId);
   },
 
   clearAll: async () => {
@@ -272,13 +292,14 @@ export const useOfflineCacheStore = create<OfflineCacheState>((set, get) => ({
     persistIndex(accountId, index);
   },
 
-  getEmailsInMailbox: async (mailboxId, limit = 200) => {
+  getEmailsInMailbox: async (mailboxId, limit = 200, jmapAccountId) => {
     const state = get();
     const accountId = state.activeAccountId;
     if (!accountId) return [];
     // Sort the index by receivedAt descending first so we don't have to read
-    // entries we won't return — the index already carries receivedAt.
-    const sorted = Object.values(state.index.entries).sort((a, b) => {
+    // entries we won't return — the index already carries receivedAt. Only
+    // the requested namespace (own mail, or one shared account) is scanned.
+    const sorted = Object.values(state.index.entries).filter((e) => e.jmapAccountId === jmapAccountId).sort((a, b) => {
       const at = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
       const bt = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
       return bt - at;
@@ -287,7 +308,7 @@ export const useOfflineCacheStore = create<OfflineCacheState>((set, get) => ({
     for (const entry of sorted) {
       if (matches.length >= limit) break;
       try {
-        const raw = await AsyncStorage.getItem(entryKey(accountId, entry.id));
+        const raw = await AsyncStorage.getItem(entryKey(accountId, cacheKey(entry.id, entry.jmapAccountId)));
         if (!raw) continue;
         const email = JSON.parse(raw) as Email;
         if (email.mailboxIds?.[mailboxId]) {

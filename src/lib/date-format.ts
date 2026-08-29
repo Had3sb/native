@@ -14,9 +14,23 @@ import type { DateFormat, TimeFormat } from '../stores/settings-store';
  *
  * `locale` is the language subtag from the locale store (e.g. "en", "de").
  */
+type Translate = (key: string, fallback?: string, params?: Record<string, string | number>) => string;
+
+// Relative strings ("Just now", "5m ago") through the locale catalog when a
+// translate function is supplied; the compact English form otherwise.
+function relativeLabel(
+  t: Translate | undefined,
+  unit: 'minute' | 'hour' | 'day',
+  count: number,
+): string {
+  if (!t) return `${count}${unit[0]} ago`;
+  const key = `date.${unit}s_ago${count === 1 ? '' : '_plural'}`;
+  return t(key, `${count}${unit[0]} ago`, { count });
+}
+
 export function formatListDate(
   date: Date | string,
-  opts: { dateFormat: DateFormat; timeFormat: TimeFormat; locale: string },
+  opts: { dateFormat: DateFormat; timeFormat: TimeFormat; locale: string; t?: Translate },
 ): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   if (isNaN(d.getTime())) return '';
@@ -35,10 +49,10 @@ export function formatListDate(
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(diff / 86400000);
-    if (minutes < 1) return 'Just now';
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
+    if (minutes < 1) return opts.t ? opts.t('date.just_now', 'Just now') : 'Just now';
+    if (minutes < 60) return relativeLabel(opts.t, 'minute', minutes);
+    if (hours < 24) return relativeLabel(opts.t, 'hour', hours);
+    if (days < 7) return relativeLabel(opts.t, 'day', days);
     return d.toLocaleDateString(intlLocale, {
       month: 'short',
       day: 'numeric',

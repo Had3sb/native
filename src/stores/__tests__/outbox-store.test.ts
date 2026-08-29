@@ -177,3 +177,65 @@ describe('flush', () => {
     expect(useOutboxStore.getState().entries).toHaveLength(0);
   });
 });
+
+describe('failed ops and archive replay', () => {
+  it('parks a poison op in `failed` instead of dropping it, and retryFailed re-queues it', async () => {
+    useNetworkStore.setState({ online: false });
+    useOutboxStore.getState().enqueue({ kind: 'keywords', emailId: 'e1', keywords: { $seen: true } });
+    useNetworkStore.setState({ online: true });
+
+    setEmailKeywords.mockRejectedValue(new Error('JMAP request failed: 400'));
+    for (let i = 0; i < 5; i++) await useOutboxStore.getState().flush();
+    expect(useOutboxStore.getState().entries).toHaveLength(0);
+    expect(useOutboxStore.getState().failed).toHaveLength(1);
+    expect(useOutboxStore.getState().failed[0].lastError).toContain('400');
+
+    setEmailKeywords.mockResolvedValue(undefined);
+    await useOutboxStore.getState().retryFailed();
+    expect(useOutboxStore.getState().failed).toHaveLength(0);
+    expect(useOutboxStore.getState().entries).toHaveLength(0);
+    expect(setEmailKeywords).toHaveBeenLastCalledWith('e1', { $seen: true }, undefined);
+  });
+
+  it('discardFailed forgets parked ops', async () => {
+    useNetworkStore.setState({ online: false });
+    useOutboxStore.getState().enqueue({ kind: 'keywords', emailId: 'e1', keywords: { $seen: true } });
+    useNetworkStore.setState({ online: true });
+    setEmailKeywords.mockRejectedValue(new Error('JMAP request failed: 400'));
+    for (let i = 0; i < 5; i++) await useOutboxStore.getState().flush();
+    expect(useOutboxStore.getState().failed).toHaveLength(1);
+    useOutboxStore.getState().discardFailed();
+    expect(useOutboxStore.getState().failed).toHaveLength(0);
+  });
+
+  it('pauses the queue on an authentication failure without counting an attempt', async () => {
+    useNetworkStore.setState({ online: false });
+    useOutboxStore.getState().enqueue({ kind: 'keywords', emailId: 'e1', keywords: { $seen: true } });
+    useNetworkStore.setState({ online: true });
+    const err = new Error('Session expired');
+    err.name = 'AuthenticationError';
+    setEmailKeywords.mockRejectedValueOnce(err);
+
+    await useOutboxStore.getState().flush();
+    expect(useOutboxStore.getState().paused).toBe(true);
+    expect(useOutboxStore.getState().entries).toHaveLength(1);
+    expect(useOutboxStore.getState().entries[0].attempts).toBe(0);
+
+    // A second flush is a no-op while paused; re-attaching the account lifts it.
+    setEmailKeywords.mockClear();
+    await useOutboxStore.getState().flush();
+    expect(setEmailKeywords).not.toHaveBeenCalled();
+    await useOutboxStore.getState().setAccount(ACCOUNT);
+    expect(useOutboxStore.getState().paused).toBe(false);
+  });
+
+  it('an archive op coalesces with a pending move of the same message', () => {
+    useNetworkStore.setState({ online: false });
+    const store = useOutboxStore.getState();
+    store.enqueue({ kind: 'mailboxes', emailId: 'e1', mailboxIds: { trash: true } });
+    store.enqueue({ kind: 'archive', emailId: 'e1', archiveMailboxId: 'arch', mode: 'year', receivedAt: '2026-01-01T00:00:00Z' });
+    const entries = useOutboxStore.getState().entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0].op.kind).toBe('archive');
+  });
+});

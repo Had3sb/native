@@ -14,6 +14,7 @@ vi.mock('../../api/email', () => ({
   getEmailsWithState: vi.fn(async () => ({ list: [], state: 'em-state-0' })),
   getEmailChanges: vi.fn(async () => null),
   getFullEmail: vi.fn(),
+  importEmailBlob: vi.fn(async () => 'imported-1'),
   setEmailKeywords: vi.fn(),
   setKeywordsForEmails: vi.fn(),
   moveEmail: vi.fn(),
@@ -33,6 +34,10 @@ vi.mock('../../api/email', () => ({
 
 // locale-store pulls in expo-localization / react-native I18nManager; the
 // store only needs t() for toast labels.
+vi.mock('../../api/blob', () => ({
+  uploadBytes: vi.fn(async () => ({ blobId: 'blob-new', size: 3, type: 'message/rfc822' })),
+}));
+
 vi.mock('../locale-store', () => ({
   t: (_key: string, fallback?: string) => fallback ?? _key,
   useLocaleStore: { getState: () => ({ locale: 'en', t: (_k: string, f?: string) => f ?? _k }) },
@@ -128,6 +133,7 @@ vi.mock('../../api/jmap-client', () => ({
     getMaxObjectsInGet: () => 500,
     getMaxCallsInRequest: () => 16,
     getSharedMailAccounts: () => [{ id: 'grp-1', name: 'Support' }],
+    fetchBlobArrayBuffer: vi.fn(async () => new Uint8Array([1, 2, 3]).buffer),
     // The keyword-sort polarity probe runs through this; answering
     // unsupportedSort keeps the sort at the plain receivedAt comparator the
     // assertions below expect.
@@ -856,19 +862,23 @@ describe('email-store', () => {
       expect(useEmailStore.getState().emails).toHaveLength(0);
     });
 
-    it('refuses to move a message between accounts', async () => {
+    it('moves a message between accounts by copying the blob and destroying the original (1.7.2)', async () => {
+      const mockImport = emailApi.importEmailBlob as ReturnType<typeof vi.fn>;
+      const mockDestroy = emailApi.destroyEmails as ReturnType<typeof vi.fn>;
       useEmailStore.setState({
         mailboxes: [ownInbox, sharedInbox],
         currentMailboxId: 'grp-1:s-inbox',
-        emails: [{ id: 'e1', keywords: {}, mailboxIds: { 's-inbox': true } } as any],
+        emails: [{ id: 'e1', blobId: 'blob-1', keywords: { $seen: true, $flagged: false }, mailboxIds: { 's-inbox': true } } as any],
       });
 
       await useEmailStore.getState().moveToMailbox('e1', 'grp-1:s-inbox', 'mb-1');
 
       expect(mockMoveEmail).not.toHaveBeenCalled();
+      expect(mockImport).toHaveBeenCalledWith('blob-new', 'mb-1', { $seen: true }, undefined);
+      expect(mockDestroy).toHaveBeenCalledWith(['e1'], 'grp-1');
       const state = useEmailStore.getState();
-      expect(state.error).toMatch(/same account/);
-      expect(state.emails).toHaveLength(1);
+      expect(state.error).toBeNull();
+      expect(state.emails).toHaveLength(0);
     });
   });
 });
