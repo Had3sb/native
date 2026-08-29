@@ -50,7 +50,7 @@ describe('translation coverage', () => {
         if (!en.has(m[1])) missing.push(`${m[1]}  (${relative(SRC_ROOT, file)})`);
       }
     }
-    expect(missing, `keys missing from locales/en/common.json + locales/rn/en.json:\n${missing.join('\n')}`).toEqual([]);
+    expect(missing, `keys missing from locales/en/common.json + locales/rn/en.json (run: npm run i18n:harvest):\n${missing.join('\n')}`).toEqual([]);
   });
 
   it('every template t() key prefix has at least one English entry', () => {

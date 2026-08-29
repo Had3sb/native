@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "bump": "node scripts/bump-version.mjs",
-    "sync-locales": "node scripts/sync-locales.mjs"
+    "sync-locales": "node scripts/sync-locales.mjs",
+    "i18n:harvest": "node scripts/harvest-rn-keys.mjs",
+    "i18n:check": "node scripts/harvest-rn-keys.mjs --check"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -27,6 +29,7 @@
     "expo-crypto": "~15.0.9",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.21",
+    "expo-image-manipulator": "~14.0.8",
     "expo-image-picker": "~17.0.10",
     "expo-intent-launcher": "~13.0.8",
     "expo-localization": "~17.0.8",
