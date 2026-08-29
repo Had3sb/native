@@ -51,6 +51,7 @@ import { generateTotpEnrolment, type TotpEnrolment } from '../../lib/totp';
 function ClientCertSection() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [certAlias, setCertAlias] = useState<string | null>(null);
   const [certBusy, setCertBusy] = useState(false);
 
@@ -66,7 +67,7 @@ function ClientCertSection() {
       const alias = await pickClientCertAlias(host);
       setCertAlias(alias);
     } catch (err) {
-      Alert.alert('Pick failed', err instanceof Error ? err.message : String(err));
+      Alert.alert(t('settings.security.client_cert.pick_failed', "Pick failed"), err instanceof Error ? err.message : String(err));
     } finally {
       setCertBusy(false);
     }
@@ -75,12 +76,12 @@ function ClientCertSection() {
   const onClearCert = () => {
     if (certBusy) return;
     Alert.alert(
-      'Stop using client certificate?',
-      'New requests will no longer present a certificate. The certificate stays installed in Android.',
+      t('settings.security.client_cert.clear_title', "Stop using client certificate?"),
+      t('settings.security.client_cert.clear_message', "New requests will no longer present a certificate. The certificate stays installed in Android."),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel', "Cancel"), style: 'cancel' },
         {
-          text: 'Clear',
+          text: t('settings.security.client_cert.clear', "Clear"),
           style: 'destructive',
           onPress: async () => {
             setCertBusy(true);
@@ -98,25 +99,29 @@ function ClientCertSection() {
 
   return (
     <SettingsSection
-      title="TLS client certificate"
-      description="Picks an installed Android certificate to authenticate to the server during the TLS handshake. Useful when the reverse proxy enforces mTLS."
+      title={t('settings.security.client_cert.title', "TLS client certificate")}
+      description={t('settings.security.client_cert.description', "Picks an installed Android certificate to authenticate to the server during the TLS handshake. Useful when the reverse proxy enforces mTLS.")}
     >
       <View style={styles.certRow}>
         <ShieldCheck size={18} color={certAlias ? c.success : c.mutedForeground} />
         <View style={{ flex: 1 }}>
-          <Text style={styles.certStatus}>{certAlias ? `Active: ${certAlias}` : 'Not set'}</Text>
+          <Text style={styles.certStatus}>
+            {certAlias
+              ? t('settings.security.client_cert.active', 'Active: {alias}', { alias: certAlias })
+              : t('settings.security.client_cert.not_set', "Not set")}
+          </Text>
           <Text style={styles.certHint}>
-            Install the certificate via Android Settings → Security → Encryption &amp; credentials, then pick it here.
+            {t('settings.security.client_cert.hint', "Install the certificate via Android Settings → Security → Encryption & credentials, then pick it here.")}
           </Text>
         </View>
       </View>
       <View style={styles.rowGap}>
         <Button variant="outline" size="sm" disabled={certBusy} onPress={() => { void onPickCert(); }}>
-          {certAlias ? 'Choose another' : 'Pick certificate'}
+          {certAlias ? t('settings.security.client_cert.choose_another', "Choose another") : t('settings.security.client_cert.pick', "Pick certificate")}
         </Button>
         {certAlias && (
           <Button variant="outline" size="sm" disabled={certBusy} onPress={onClearCert}>
-            Clear
+            {t('settings.security.client_cert.clear', "Clear")}
           </Button>
         )}
       </View>
@@ -128,6 +133,7 @@ function ClientCertSection() {
 function PasswordChangeSection() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [currentPwd, setCurrentPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [confirmPwd, setConfirmPwd] = useState('');
@@ -138,45 +144,45 @@ function PasswordChangeSection() {
 
   const submit = async () => {
     setError(null);
-    if (newPwd.length < 8) { setError('New password must be at least 8 characters.'); return; }
-    if (newPwd !== confirmPwd) { setError('Passwords do not match.'); return; }
+    if (newPwd.length < 8) { setError(t('settings.security.password.too_short', "New password must be at least 8 characters.")); return; }
+    if (newPwd !== confirmPwd) { setError(t('settings.security.password.mismatch', "Passwords do not match.")); return; }
     setSaving(true);
     try {
       await changePassword(currentPwd, newPwd);
       setCurrentPwd(''); setNewPwd(''); setConfirmPwd('');
-      Alert.alert('Password changed', 'Your account password was updated.');
+      Alert.alert(t('settings.security.password.changed_title', "Password changed"), t('settings.security.password.changed', "Your account password was updated."));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to change password.');
+      setError(err instanceof Error ? err.message : t('settings.security.password.error', "Failed to change password."));
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <SettingsSection title="Password" description="Change the password for this account.">
+    <SettingsSection title={t('settings.security.password.title', "Password")} description={t('settings.security.password.description', "Change the password for this account.")}>
       <View style={{ gap: spacing.md }}>
         <View style={styles.pwField}>
-          <Text style={styles.pwLabel}>Current password</Text>
+          <Text style={styles.pwLabel}>{t('settings.security.password.current', "Current password")}</Text>
           <View style={styles.pwInputRow}>
             <Input value={currentPwd} onChangeText={setCurrentPwd} secureTextEntry={!showCurrent} autoCapitalize="none" containerStyle={{ flex: 1 }} />
-            <Pressable style={styles.eyeBtn} onPress={() => setShowCurrent((v) => !v)}>
+            <Pressable style={styles.eyeBtn} onPress={() => setShowCurrent((v) => !v)} accessibilityRole="button" accessibilityLabel={t('settings.security.password.toggle_visibility', "Show or hide password")}>
               {showCurrent ? <EyeOff size={16} color={c.mutedForeground} /> : <Eye size={16} color={c.mutedForeground} />}
             </Pressable>
           </View>
         </View>
 
         <View style={styles.pwField}>
-          <Text style={styles.pwLabel}>New password</Text>
+          <Text style={styles.pwLabel}>{t('settings.security.password.new', "New password")}</Text>
           <View style={styles.pwInputRow}>
             <Input value={newPwd} onChangeText={setNewPwd} secureTextEntry={!showNew} autoCapitalize="none" containerStyle={{ flex: 1 }} />
-            <Pressable style={styles.eyeBtn} onPress={() => setShowNew((v) => !v)}>
+            <Pressable style={styles.eyeBtn} onPress={() => setShowNew((v) => !v)} accessibilityRole="button" accessibilityLabel={t('settings.security.password.toggle_visibility', "Show or hide password")}>
               {showNew ? <EyeOff size={16} color={c.mutedForeground} /> : <Eye size={16} color={c.mutedForeground} />}
             </Pressable>
           </View>
         </View>
 
         <View style={styles.pwField}>
-          <Text style={styles.pwLabel}>Confirm password</Text>
+          <Text style={styles.pwLabel}>{t('settings.security.password.confirm', "Confirm password")}</Text>
           <Input value={confirmPwd} onChangeText={setConfirmPwd} secureTextEntry={!showNew} autoCapitalize="none" />
         </View>
 
@@ -190,7 +196,7 @@ function PasswordChangeSection() {
             onPress={() => { void submit(); }}
             icon={<Key size={14} color={c.primaryForeground} />}
           >
-            Change Password
+            {t('settings.security.password.change', "Change Password")}
           </Button>
         </View>
       </View>
@@ -201,6 +207,7 @@ function PasswordChangeSection() {
 // ── Display name ──────────────────────────────────────────
 function DisplayNameSection({ initial, onSaved }: { initial: string; onSaved: (name: string) => void }) {
   const c = useColors();
+  const t = useLocaleStore((s) => s.t);
   const [name, setName] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -215,18 +222,18 @@ function DisplayNameSection({ initial, onSaved }: { initial: string; onSaved: (n
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      Alert.alert('Update failed', err instanceof Error ? err.message : 'Failed to update display name.');
+      Alert.alert(t('settings.security.display_name.error_title', "Update failed"), err instanceof Error ? err.message : t('settings.security.display_name.error', "Failed to update display name."));
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <SettingItem label="Display name" description="The name shown on this account.">
+    <SettingItem label={t('settings.security.display_name.label', "Display name")} description={t('settings.security.display_name.description', "The name shown on this account.")}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-        <Input value={name} onChangeText={setName} placeholder="Display name" containerStyle={{ width: 150 }} />
+        <Input value={name} onChangeText={setName} placeholder={t('settings.security.display_name.label', "Display name")} containerStyle={{ width: 150 }} />
         <Button size="sm" loading={saving} disabled={saving || name === initial} onPress={() => { void save(); }}>
-          {saved ? <Check size={14} color={c.primaryForeground} /> : 'Save'}
+          {saved ? <Check size={14} color={c.primaryForeground} /> : t('common.save', "Save")}
         </Button>
       </View>
     </SettingItem>
@@ -237,6 +244,7 @@ function DisplayNameSection({ initial, onSaved }: { initial: string; onSaved: (n
 function TotpSection({ enabled, onChanged }: { enabled: boolean; onChanged: () => void }) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [enrolment, setEnrolment] = useState<TotpEnrolment | null>(null);
   const [disableOpen, setDisableOpen] = useState(false);
   const [password, setPassword] = useState('');
@@ -262,30 +270,30 @@ function TotpSection({ enabled, onChanged }: { enabled: boolean; onChanged: () =
 
   const confirmEnable = async () => {
     if (!enrolment) return;
-    if (!password) { setError('Enter your current password.'); return; }
-    if (!otpCode.trim()) { setError('Enter the 6-digit code from your app.'); return; }
+    if (!password) { setError(t('settings.security.two_factor.password_required', "Enter your current password.")); return; }
+    if (!otpCode.trim()) { setError(t('settings.security.two_factor.code_required', "Enter the 6-digit code from your app.")); return; }
     setSaving(true);
     try {
       await enableTotp(password, enrolment.url, otpCode.trim());
       reset();
       onChanged();
-      Alert.alert('Two-factor enabled', 'You will be asked for a code at next sign-in.');
+      Alert.alert(t('settings.security.two_factor.enabled_title', "Two-factor enabled"), t('settings.security.two_factor.enabled_message', "You will be asked for a code at next sign-in."));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to enable two-factor authentication.');
+      setError(err instanceof Error ? err.message : t('settings.security.two_factor.enable_error', "Failed to enable two-factor authentication."));
     } finally {
       setSaving(false);
     }
   };
 
   const confirmDisable = async () => {
-    if (!password) { setError('Enter your current password.'); return; }
+    if (!password) { setError(t('settings.security.two_factor.password_required', "Enter your current password.")); return; }
     setSaving(true);
     try {
       await disableTotp(password);
       reset();
       onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to disable two-factor authentication.');
+      setError(err instanceof Error ? err.message : t('settings.security.two_factor.disable_error', "Failed to disable two-factor authentication."));
     } finally {
       setSaving(false);
     }
@@ -295,14 +303,14 @@ function TotpSection({ enabled, onChanged }: { enabled: boolean; onChanged: () =
     <View style={{ gap: spacing.md }}>
       <View style={styles.headerRow}>
         <Shield size={16} color={c.mutedForeground} />
-        <Text style={styles.headerTitle}>Two-Factor Authentication</Text>
+        <Text style={styles.headerTitle}>{t('settings.security.two_factor.section_title', "Two-Factor Authentication")}</Text>
       </View>
 
-      <SettingItem label="Authenticator app" description="Require a one-time code at login." noBorder>
+      <SettingItem label={t('settings.security.two_factor.label', "Authenticator app")} description={t('settings.security.two_factor.description', "Require a one-time code at login.")} noBorder>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
           <ToggleSwitch checked={enabled || !!enrolment} onChange={handleToggle} disabled={saving} />
           <Text style={[styles.statusText, { color: enabled ? c.success : c.mutedForeground }]}>
-            {enabled ? 'Active' : 'Inactive'}
+            {enabled ? t('settings.security.two_factor.active', "Active") : t('settings.security.two_factor.inactive', "Inactive")}
           </Text>
         </View>
       </SettingItem>
@@ -310,48 +318,48 @@ function TotpSection({ enabled, onChanged }: { enabled: boolean; onChanged: () =
       {enrolment && (
         <View style={styles.panel}>
           <Text style={styles.panelHint}>
-            Add this secret to your authenticator app, then enter the 6-digit code to confirm.
+            {t('settings.security.two_factor.enrol_hint', "Add this secret to your authenticator app, then enter the 6-digit code to confirm.")}
           </Text>
           <Button
             variant="outline"
             size="sm"
             icon={<ExternalLink size={14} color={c.text} />}
-            onPress={() => { void Linking.openURL(enrolment.url).catch(() => Alert.alert('No authenticator app', 'Could not open an authenticator app. Add the secret below manually.')); }}
+            onPress={() => { void Linking.openURL(enrolment.url).catch(() => Alert.alert(t('settings.security.two_factor.no_app_title', "No authenticator app"), t('settings.security.two_factor.no_app', "Could not open an authenticator app. Add the secret below manually."))); }}
           >
-            Add to authenticator app
+            {t('settings.security.two_factor.open_app', "Add to authenticator app")}
           </Button>
           <View>
-            <Text style={styles.pwLabel}>Or enter this secret manually</Text>
+            <Text style={styles.pwLabel}>{t('settings.security.two_factor.manual_secret', "Or enter this secret manually")}</Text>
             <Text selectable style={styles.secretText}>{enrolment.secretFormatted}</Text>
           </View>
           <View>
-            <Text style={styles.pwLabel}>Current password</Text>
+            <Text style={styles.pwLabel}>{t('settings.security.password.current', "Current password")}</Text>
             <Input value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" />
           </View>
           <View>
-            <Text style={styles.pwLabel}>Verification code</Text>
+            <Text style={styles.pwLabel}>{t('settings.security.two_factor.code', "Verification code")}</Text>
             <Input value={otpCode} onChangeText={setOtpCode} keyboardType="number-pad" maxLength={6} />
           </View>
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           <View style={styles.rowGap}>
             <Button size="sm" loading={saving} disabled={saving || !password || !otpCode} onPress={() => { void confirmEnable(); }}>
-              Confirm
+              {t('common.confirm', "Confirm")}
             </Button>
-            <Button variant="ghost" size="sm" onPress={reset}>Cancel</Button>
+            <Button variant="ghost" size="sm" onPress={reset}>{t('common.cancel', "Cancel")}</Button>
           </View>
         </View>
       )}
 
       {disableOpen && (
         <View style={styles.panel}>
-          <Text style={styles.panelHint}>Enter your password to turn off two-factor authentication.</Text>
-          <Input value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" placeholder="Current password" />
+          <Text style={styles.panelHint}>{t('settings.security.two_factor.disable_hint', "Enter your password to turn off two-factor authentication.")}</Text>
+          <Input value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" placeholder={t('settings.security.password.current', "Current password")} />
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           <View style={styles.rowGap}>
             <Button variant="destructive" size="sm" loading={saving} disabled={saving || !password} onPress={() => { void confirmDisable(); }}>
-              Disable
+              {t('settings.security.two_factor.disable', "Disable")}
             </Button>
-            <Button variant="ghost" size="sm" onPress={reset}>Cancel</Button>
+            <Button variant="ghost" size="sm" onPress={reset}>{t('common.cancel', "Cancel")}</Button>
           </View>
         </View>
       )}
@@ -378,6 +386,7 @@ interface CredentialSectionProps {
 function CredentialSection({ icon: Icon, title, description, nameLabel, namePlaceholder, entries, onCreate, onRemove }: CredentialSectionProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState('');
   const [expiry, setExpiry] = useState<Date | null>(null);
@@ -401,23 +410,23 @@ function CredentialSection({ icon: Icon, title, description, nameLabel, namePlac
       resetForm();
       setShowAdd(false);
     } catch (err) {
-      Alert.alert('Could not create', err instanceof Error ? err.message : undefined);
+      Alert.alert(t('settings.security.credentials.create_error', "Could not create"), err instanceof Error ? err.message : undefined);
     } finally {
       setSaving(false);
     }
   };
 
   const handleRemove = (id: string) => {
-    Alert.alert('Remove credential?', 'Any client using it will stop working.', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('settings.security.credentials.remove_title', "Remove credential?"), t('settings.security.credentials.remove_message', "Any client using it will stop working."), [
+      { text: t('common.cancel', "Cancel"), style: 'cancel' },
       {
-        text: 'Remove',
+        text: t('common.remove', "Remove"),
         style: 'destructive',
         onPress: async () => {
           try {
             await onRemove(id);
           } catch (err) {
-            Alert.alert('Could not remove', err instanceof Error ? err.message : undefined);
+            Alert.alert(t('settings.security.credentials.remove_error', "Could not remove"), err instanceof Error ? err.message : undefined);
           }
         },
       },
@@ -437,17 +446,17 @@ function CredentialSection({ icon: Icon, title, description, nameLabel, namePlac
           <Text style={styles.headerTitle}>{title}</Text>
         </View>
         <Button variant="outline" size="sm" icon={<Plus size={14} color={c.text} />} onPress={() => setShowAdd((v) => !v)}>
-          Add
+          {t('common.add', "Add")}
         </Button>
       </View>
       <Text style={styles.panelHint}>{description}</Text>
 
       {createdSecret && (
         <View style={styles.panel}>
-          <Text style={styles.panelHint}>Copy this now — it is shown only once. Tap and hold to select.</Text>
+          <Text style={styles.panelHint}>{t('settings.security.credentials.copy_now', "Copy this now — it is shown only once. Tap and hold to select.")}</Text>
           <Text selectable style={styles.secretText}>{createdSecret}</Text>
           <View style={{ alignItems: 'flex-start' }}>
-            <Button variant="ghost" size="sm" onPress={() => setCreatedSecret(null)}>Done</Button>
+            <Button variant="ghost" size="sm" onPress={() => setCreatedSecret(null)}>{t('common.done', "Done")}</Button>
           </View>
         </View>
       )}
@@ -459,13 +468,13 @@ function CredentialSection({ icon: Icon, title, description, nameLabel, namePlac
             <Input value={name} onChangeText={setName} placeholder={namePlaceholder} />
           </View>
           <View>
-            <Text style={styles.pwLabel}>Expires (optional)</Text>
+            <Text style={styles.pwLabel}>{t('settings.security.credentials.expires', "Expires (optional)")}</Text>
             <View style={styles.rowGap}>
               <Button variant="outline" size="sm" icon={<Calendar size={14} color={c.text} />} onPress={() => setShowPicker(true)}>
-                {expiry ? expiry.toLocaleDateString() : 'No expiry'}
+                {expiry ? expiry.toLocaleDateString() : t('settings.security.credentials.no_expiry', "No expiry")}
               </Button>
               {expiry && (
-                <Pressable style={styles.clearExpiry} onPress={() => setExpiry(null)}>
+                <Pressable style={styles.clearExpiry} onPress={() => setExpiry(null)} accessibilityRole="button" accessibilityLabel={t('settings.security.credentials.clear_expiry', "Clear expiry")}>
                   <X size={14} color={c.mutedForeground} />
                 </Pressable>
               )}
@@ -475,13 +484,13 @@ function CredentialSection({ icon: Icon, title, description, nameLabel, namePlac
             )}
           </View>
           <View>
-            <Text style={styles.pwLabel}>Allowed IPs (optional)</Text>
+            <Text style={styles.pwLabel}>{t('settings.security.credentials.allowed_ips', "Allowed IPs (optional)")}</Text>
             <Input value={allowedIpsRaw} onChangeText={setAllowedIpsRaw} placeholder="1.2.3.4, 10.0.0.0/8" autoCapitalize="none" />
-            <Text style={styles.fieldHint}>Comma or space separated. Leave empty to allow any IP.</Text>
+            <Text style={styles.fieldHint}>{t('settings.security.credentials.allowed_ips_hint', "Comma or space separated. Leave empty to allow any IP.")}</Text>
           </View>
           <View style={styles.rowGap}>
-            <Button size="sm" loading={saving} disabled={saving || !name.trim()} onPress={() => { void handleAdd(); }}>Create</Button>
-            <Button variant="ghost" size="sm" onPress={() => { setShowAdd(false); resetForm(); }}>Cancel</Button>
+            <Button size="sm" loading={saving} disabled={saving || !name.trim()} onPress={() => { void handleAdd(); }}>{t('common.create', "Create")}</Button>
+            <Button variant="ghost" size="sm" onPress={() => { setShowAdd(false); resetForm(); }}>{t('common.cancel', "Cancel")}</Button>
           </View>
         </View>
       )}
@@ -495,7 +504,7 @@ function CredentialSection({ icon: Icon, title, description, nameLabel, namePlac
                 {entry.createdAt && (
                   <Text style={styles.credMeta}>
                     {new Date(entry.createdAt).toLocaleDateString()}
-                    {entry.expiresAt ? ` · expires ${new Date(entry.expiresAt).toLocaleDateString()}` : ''}
+                    {entry.expiresAt ? ` · ${t('settings.security.credentials.expires_on', 'expires {date}', { date: new Date(entry.expiresAt).toLocaleDateString() })}` : ''}
                   </Text>
                 )}
                 {entry.allowedIps.length > 0 && (
@@ -506,14 +515,14 @@ function CredentialSection({ icon: Icon, title, description, nameLabel, namePlac
                   </View>
                 )}
               </View>
-              <Pressable style={styles.iconBtn} onPress={() => handleRemove(entry.id)}>
+              <Pressable style={styles.iconBtn} onPress={() => handleRemove(entry.id)} accessibilityRole="button" accessibilityLabel={t('common.remove', "Remove")}>
                 <Trash2 size={16} color={c.error} />
               </Pressable>
             </View>
           ))}
         </View>
       ) : (
-        <Text style={styles.emptyText}>None yet.</Text>
+        <Text style={styles.emptyText}>{t('settings.security.credentials.none', "None yet.")}</Text>
       )}
     </View>
   );
@@ -523,19 +532,20 @@ function CredentialSection({ icon: Icon, title, description, nameLabel, namePlac
 function EmailClientSection() {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const username = jmapClient.username ?? '';
 
   return (
     <View style={{ gap: spacing.md }}>
       <View style={styles.headerRow}>
         <Monitor size={16} color={c.mutedForeground} />
-        <Text style={styles.headerTitle}>Email client setup</Text>
+        <Text style={styles.headerTitle}>{t('settings.security.email_client.title', "Email Client Setup")}</Text>
       </View>
       <Text style={styles.panelHint}>
-        To configure another mail client, use the username below and an app password (create one above) as the password.
+        {t('settings.security.email_client.password_instructions', "Use your JMAP username above along with an app password to sign in to your email client. Create an app password in the section above if you haven't already.")}
       </Text>
       <View style={styles.panel}>
-        <Text style={styles.pwLabel}>JMAP / IMAP username</Text>
+        <Text style={styles.pwLabel}>{t('settings.security.email_client.jmap_username_label', "JMAP Username")}</Text>
         <Text selectable style={styles.secretText}>{username}</Text>
       </View>
     </View>
@@ -853,9 +863,9 @@ export function AccountSecuritySettings() {
     try {
       setAuth(await fetchAuthInfo());
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Failed to load security settings.');
+      setLoadError(err instanceof Error ? err.message : t('settings.security.load_error', 'Failed to load security settings.'));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -878,12 +888,12 @@ export function AccountSecuritySettings() {
           if (principal.status === 'fulfilled') setDisplayName(principal.value.displayName);
         }
       } catch (err) {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load security settings.');
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : t('settings.security.load_error', 'Failed to load security settings.'));
       }
     })();
 
     return () => { cancelled = true; };
-  }, [isOAuth, reloadCrypto]);
+  }, [isOAuth, reloadCrypto, t]);
 
   return (
     <View style={styles.container}>
@@ -892,7 +902,7 @@ export function AccountSecuritySettings() {
       {supported === null && (
         <View style={styles.loadingRow}>
           <ActivityIndicator color={c.mutedForeground} />
-          <Text style={styles.panelHint}>Detecting server features…</Text>
+          <Text style={styles.panelHint}>{t('settings.security.detecting', "Detecting server features…")}</Text>
         </View>
       )}
 
@@ -927,10 +937,10 @@ export function AccountSecuritySettings() {
 
             <CredentialSection
               icon={Smartphone}
-              title="App passwords"
-              description="Generate passwords for other mail clients that can't do interactive login."
-              nameLabel="Name"
-              namePlaceholder="e.g. Thunderbird laptop"
+              title={t('settings.security.app_passwords.title', "App Passwords")}
+              description={t('settings.security.app_passwords.description', "Generate passwords for other mail clients that can't do interactive login.")}
+              nameLabel={t('settings.security.app_passwords.name_label', "Name")}
+              namePlaceholder={t('settings.security.app_passwords.name_placeholder', "e.g. Thunderbird laptop")}
               entries={auth?.appPasswords ?? []}
               onCreate={async (input) => { const r = await createAppPassword(input); await reloadAuth(); return r; }}
               onRemove={async (id) => { await removeAppPassword(id); await reloadAuth(); }}
@@ -938,10 +948,10 @@ export function AccountSecuritySettings() {
 
             <CredentialSection
               icon={Terminal}
-              title="API keys"
-              description="Tokens for scripts and integrations that use the JMAP API."
-              nameLabel="Name"
-              namePlaceholder="e.g. Backup script"
+              title={t('settings.security.api_keys.title', "API Keys")}
+              description={t('settings.security.api_keys.description', "Create API keys for scripts and integrations that talk to the server directly")}
+              nameLabel={t('settings.security.api_keys.name_label', "Key Name")}
+              namePlaceholder={t('settings.security.api_keys.name_placeholder', "e.g. Backup script, CI runner")}
               entries={auth?.apiKeys ?? []}
               onCreate={async (input) => { const r = await createApiKey(input); await reloadAuth(); return r; }}
               onRemove={async (id) => { await removeApiKey(id); await reloadAuth(); }}

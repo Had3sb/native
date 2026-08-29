@@ -16,6 +16,11 @@
     "events": {
       "tap_to_create": "Tap + to create one"
     },
+    "form": {
+      "description_placeholder": "Notes, agenda…",
+      "location_placeholder": "Place or address",
+      "time": "Time"
+    },
     "invitation": {
       "accept": "Yes",
       "add_error": "Could not add the event",
@@ -87,6 +92,7 @@
     "editor_unavailable": "Could not read the message content. Copy your text, then close and reopen the composer.",
     "identity_unavailable": "Identity unavailable",
     "image_load_failed": "Could not load image",
+    "no_recipient": "(no recipient)",
     "no_sent_folder": "No Sent folder found",
     "permission_camera": "Camera permission is required to take a photo.",
     "permission_photos": "Photo library permission is required to attach images.",
@@ -108,6 +114,7 @@
     "schedule_unsupported_title": "Scheduling unavailable",
     "scheduled_body": "Your message will be sent at {time}.",
     "scheduled_title": "Scheduled",
+    "send_failed": "Failed to send",
     "send_now": "Send now",
     "send_timeout_body": "The message may already have gone out. Check your Sent folder before sending it again.",
     "send_timeout_title": "No answer from the server",
@@ -149,6 +156,7 @@
     "unknown_tag": "not defined here"
   },
   "email_viewer": {
+    "add_sender_to_contacts": "Add sender to contacts",
     "address_actions": {
       "add_contact": "Add to contacts",
       "compose": "New message",
@@ -177,6 +185,9 @@
       "title": "Color Tag",
       "yellow": "Yellow"
     },
+    "delete_permanently_message": "This message will be deleted permanently and cannot be recovered.",
+    "delete_permanently_title": "Delete permanently?",
+    "export_failed": "Export failed",
     "forwarded": "Forwarded",
     "preview": {
       "open_external": "Open in app",
@@ -186,13 +197,18 @@
     "received_via": "to {name}",
     "remove_color": "Remove tag",
     "replied": "Replied",
+    "sender_actions": "Sender…",
     "set_color": "Set tag",
     "show_all_count": "Show all ({count})",
     "show_less": "Show less",
     "smime_unsupported": "Signed/encrypted with S/MIME - not supported on mobile",
+    "source_too_large": "The message is too large to display in full. Share the full source instead.",
+    "thread_loading": "Loading conversation...",
     "unsubscribe_banner": {
       "no_identity": "No sending identity available"
-    }
+    },
+    "view_dark_mode": "View in dark mode",
+    "view_light_mode": "View in light mode"
   },
   "files": {
     "done": "Done",
@@ -308,6 +324,14 @@
     "dismiss": "Not now",
     "enable": "Enable",
     "title": "Get notified about new mail"
+  },
+  "scheduled": {
+    "cancel_body": "The message will not be delivered. A copy stays in your Sent folder.",
+    "cancel_failed": "Cancel failed",
+    "edit_failed": "Could not open the message for editing",
+    "keep_scheduled": "Keep scheduled",
+    "reschedule_failed": "Reschedule failed",
+    "send_now_failed": "Could not send now"
   },
   "settings": {
     "account": {
@@ -512,11 +536,52 @@
       "mobile_explainer": "The mobile app has no plugin runtime. Install and manage plugins from the webmail under Settings → Plugins; themes and filters they provide are not applied here."
     },
     "security": {
+      "client_cert": {
+        "active": "Active: {alias}",
+        "choose_another": "Choose another",
+        "clear": "Clear",
+        "clear_message": "New requests will no longer present a certificate. The certificate stays installed in Android.",
+        "clear_title": "Stop using client certificate?",
+        "description": "Picks an installed Android certificate to authenticate to the server during the TLS handshake. Useful when the reverse proxy enforces mTLS.",
+        "hint": "Install the certificate via Android Settings → Security → Encryption & credentials, then pick it here.",
+        "not_set": "Not set",
+        "pick": "Pick certificate",
+        "pick_failed": "Pick failed",
+        "title": "TLS client certificate"
+      },
+      "credentials": {
+        "allowed_ips": "Allowed IPs (optional)",
+        "allowed_ips_hint": "Comma or space separated. Leave empty to allow any IP.",
+        "clear_expiry": "Clear expiry",
+        "copy_now": "Copy this now — it is shown only once. Tap and hold to select.",
+        "create_error": "Could not create",
+        "expires": "Expires (optional)",
+        "expires_on": "expires {date}",
+        "no_expiry": "No expiry",
+        "none": "None yet.",
+        "remove_error": "Could not remove",
+        "remove_message": "Any client using it will stop working.",
+        "remove_title": "Remove credential?"
+      },
+      "display_name": {
+        "error_title": "Update failed"
+      },
       "encryption": {
         "no_keys": "Add a public key first - encryption at rest needs one."
       },
+      "load_error": "Failed to load security settings.",
       "not_supported": "Account security management requires a Stalwart server. These features are not available for this account.",
       "offline": "You are offline. Account security settings need a live connection to the server.",
+      "password": {
+        "change": "Change Password",
+        "changed": "Your account password was updated.",
+        "changed_title": "Password changed",
+        "description": "Change the password for this account.",
+        "error": "Failed to change password.",
+        "mismatch": "Passwords do not match.",
+        "toggle_visibility": "Show or hide password",
+        "too_short": "New password must be at least 8 characters."
+      },
       "public_keys": {
         "add_error": "Failed to add public key",
         "description": "S/MIME certificates and PGP keys stored on the server. They are used for encryption at rest.",
@@ -525,6 +590,27 @@
         "remove_message": "Encryption at rest that uses this key will stop working.",
         "remove_title": "Remove public key?",
         "title": "Public Keys"
+      },
+      "two_factor": {
+        "active": "Active",
+        "code": "Verification code",
+        "code_required": "Enter the 6-digit code from your app.",
+        "description": "Require a one-time code at login.",
+        "disable": "Disable",
+        "disable_error": "Failed to disable two-factor authentication.",
+        "disable_hint": "Enter your password to turn off two-factor authentication.",
+        "enable_error": "Failed to enable two-factor authentication.",
+        "enabled_message": "You will be asked for a code at next sign-in.",
+        "enabled_title": "Two-factor enabled",
+        "enrol_hint": "Add this secret to your authenticator app, then enter the 6-digit code to confirm.",
+        "inactive": "Inactive",
+        "label": "Authenticator app",
+        "manual_secret": "Or enter this secret manually",
+        "no_app": "Could not open an authenticator app. Add the secret below manually.",
+        "no_app_title": "No authenticator app",
+        "open_app": "Add to authenticator app",
+        "password_required": "Enter your current password.",
+        "section_title": "Two-Factor Authentication"
       }
     },
     "sidebar_apps": {
