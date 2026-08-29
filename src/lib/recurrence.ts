@@ -217,8 +217,9 @@ export function buildRuleFromEditorValue(
     '@type': 'RecurrenceRule',
     frequency: value.frequency,
     interval: Math.max(1, value.interval),
-    rscale: 'gregorian',
-    skip: 'omit',
+    // No rscale/skip: Stalwart serialises them into the RRULE as
+    // RSCALE=GREGORIAN;SKIP=OMIT, which DAVx5 rejects and which breaks
+    // Android CalDAV sync for the whole calendar (#805).
     firstDayOfWeek: 'mo',
   };
 

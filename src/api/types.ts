@@ -452,30 +452,33 @@ export interface CalendarEvent {
   description?: string;
   start: string;
   duration?: string;
-  timeZone?: string;
+  // `null` on write clears a field the server holds (JSON drops `undefined`,
+  // so an omitted key keeps the old value). All-day events carry a null zone.
+  timeZone?: string | null;
   showWithoutTime?: boolean;
   utcStart?: string;
   utcEnd?: string;
   status?: string;
   freeBusyStatus?: string;
-  participants?: Record<string, Participant>;
-  // Scheduling (iTIP/iMIP). `replyTo` tells the server where RSVP replies go;
-  // Stalwart additionally exposes the organizer as `organizerCalendarAddress`.
-  replyTo?: Record<string, string>;
-  organizerCalendarAddress?: string;
+  participants?: Record<string, Participant> | null;
+  // Scheduling (iTIP/iMIP). Stalwart derives the iCalendar ORGANIZER solely
+  // from `organizerCalendarAddress` (a `mailto:` URI); RFC 8984's `replyTo` is
+  // retired in jscalendarbis and only kept here so old values round-trip.
+  replyTo?: Record<string, string> | null;
+  organizerCalendarAddress?: string | null;
   sequence?: number;
-  recurrenceRules?: RecurrenceRule[];
-  recurrenceOverrides?: Record<string, Partial<CalendarEvent>>;
-  excludedRecurrenceRules?: RecurrenceRule[];
+  recurrenceRules?: RecurrenceRule[] | null;
+  recurrenceOverrides?: Record<string, Partial<CalendarEvent>> | null;
+  excludedRecurrenceRules?: RecurrenceRule[] | null;
   recurrenceId?: string;
   originalId?: string;
   // Client-only: the event's server-side calendarIds (raw, unprefixed), kept
   // when `calendarIds` is remapped to namespaced store ids for shared events.
   originalCalendarIds?: Record<string, boolean>;
   useDefaultAlerts?: boolean;
-  alerts?: Record<string, Alert>;
-  locations?: Record<string, EventLocation>;
-  virtualLocations?: Record<string, VirtualLocation>;
+  alerts?: Record<string, Alert> | null;
+  locations?: Record<string, EventLocation> | null;
+  virtualLocations?: Record<string, VirtualLocation> | null;
   links?: Record<string, { href: string; rel?: string }>;
   created?: string;
   updated?: string;

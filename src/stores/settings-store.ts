@@ -169,6 +169,9 @@ interface PersistedSettings {
   calendarShowTimeInMonth: boolean;
   calendarShowWeekNumbers: boolean;
   calendarHoverPreview: CalendarHoverPreview;
+  // IANA zone the calendar works in, or 'auto' to follow the device (#755).
+  // Same key semantics as the webmail's `timeZone` setting.
+  calendarTimeZone: string;
   showBirthdayCalendar: boolean;
   enableCalendarTasks: boolean;
   showTasksOnCalendar: boolean;
@@ -281,6 +284,7 @@ const DEFAULT_PERSISTED: PersistedSettings = {
   calendarShowTimeInMonth: true,
   calendarShowWeekNumbers: false,
   calendarHoverPreview: 'delay-500ms',
+  calendarTimeZone: 'auto',
   showBirthdayCalendar: true,
   enableCalendarTasks: false,
   showTasksOnCalendar: true,

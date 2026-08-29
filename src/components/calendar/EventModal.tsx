@@ -39,10 +39,12 @@ import { useColors } from '../../theme/colors';
 import {
   buildAllDayDuration,
   getCalendarColor,
+  getEventDisplayEndDate,
   getEventEndDate,
   getEventStartDate,
   getPrimaryCalendarId,
 } from '../../lib/calendar-utils';
+import { getEffectiveTimeZone } from '../../lib/calendar-timezone';
 import {
   alertsToReminders,
   remindersToAlerts,
@@ -195,7 +197,10 @@ export function EventModal({
       setDescription(event.description || '');
       setAllDay(!!event.showWithoutTime);
       setStart(getEventStartDate(event));
-      setEnd(getEventEndDate(event));
+      // All-day events store an exclusive end (start + P1D = next day 00:00);
+      // the editor works with the inclusive last day, otherwise every re-save
+      // grows the event by one day.
+      setEnd(event.showWithoutTime ? getEventDisplayEndDate(event) : getEventEndDate(event));
       setCalendarId(getPrimaryCalendarId(event) || calendars[0]?.id || '');
       setParticipants(event.participants || {});
       const detected = detectRecurrence(event);
@@ -230,11 +235,13 @@ export function EventModal({
 
   React.useEffect(() => {
     if (allDay) {
+      // `end` is the inclusive last day for all-day events, so a one-day
+      // event has end === start (not the next day).
       const s = new Date(start);
       s.setHours(0, 0, 0, 0);
       const e = new Date(end);
       e.setHours(0, 0, 0, 0);
-      if (e <= s) e.setDate(s.getDate() + 1);
+      if (e < s) e.setTime(s.getTime());
       setStart(s);
       setEnd(e);
     }
@@ -244,11 +251,13 @@ export function EventModal({
   const updateStart = (next: Date) => {
     const diff = end.getTime() - start.getTime();
     setStart(next);
-    setEnd(new Date(next.getTime() + Math.max(diff, 15 * 60_000)));
+    setEnd(new Date(next.getTime() + (allDay ? Math.max(diff, 0) : Math.max(diff, 15 * 60_000))));
   };
 
   const updateEnd = (next: Date) => {
-    if (next <= start) {
+    if (allDay) {
+      setEnd(next < start ? new Date(start) : next);
+    } else if (next <= start) {
       setEnd(addMinutes(start, 15));
     } else {
       setEnd(next);
@@ -259,26 +268,51 @@ export function EventModal({
     if (!title.trim() || !calendarId) return;
     setSaving(true);
     try {
+      // JSON drops `undefined`, so a cleared field must be sent as an explicit
+      // `null` when editing or the server keeps the old value.
+      const had = (key: keyof CalendarEvent): boolean => {
+        const v = event?.[key];
+        return !!v && (typeof v !== 'object' || Object.keys(v as object).length > 0);
+      };
+      const clearedOr = <T,>(value: T | undefined, key: keyof CalendarEvent): T | null | undefined =>
+        value !== undefined ? value : isEdit && had(key) ? null : undefined;
+
+      const recurrenceRules =
+        recurrence === 'custom'
+          ? customRule
+            ? [customRule]
+            : undefined
+          : recurrenceFromOption(recurrence);
       const data: Partial<CalendarEvent> = {
         title: title.trim(),
-        description: description.trim() || undefined,
-        showWithoutTime: allDay || undefined,
+        description: description.trim() || (isEdit && event?.description ? '' : undefined),
+        showWithoutTime: allDay || (isEdit ? false : undefined),
         start: allDay
           ? format(start, "yyyy-MM-dd'T'00:00:00")
           : format(start, "yyyy-MM-dd'T'HH:mm:ss"),
         duration: allDay ? buildAllDayDuration(start, end) : buildDuration(start, end),
-        participants: Object.keys(participants).length > 0 ? participants : undefined,
-        recurrenceRules:
-          recurrence === 'custom'
-            ? customRule
-              ? [customRule]
-              : undefined
-            : recurrenceFromOption(recurrence),
-        alerts: remindersToAlerts(reminders),
+        // A floating (zone-less) start renders at a different instant for
+        // every viewer; label the wall-clock with the zone it was entered in.
+        // All-day events are date-only and carry no zone.
+        timeZone: allDay ? null : getEffectiveTimeZone(),
+        participants: clearedOr(
+          Object.keys(participants).length > 0 ? participants : undefined,
+          'participants',
+        ),
+        recurrenceRules: clearedOr(recurrenceRules, 'recurrenceRules'),
+        alerts: clearedOr(remindersToAlerts(reminders), 'alerts'),
         useDefaultAlerts: reminders.length > 0 ? false : undefined,
-        locations: buildLocations(location),
-        virtualLocations: buildVirtualLocations(videoUrl),
+        locations: clearedOr(buildLocations(location), 'locations'),
+        virtualLocations: clearedOr(buildVirtualLocations(videoUrl), 'virtualLocations'),
       };
+      if (data.recurrenceRules === null) {
+        // Dropping the rule leaves per-occurrence data dangling.
+        if (had('recurrenceOverrides')) data.recurrenceOverrides = null;
+        if (had('excludedRecurrenceRules')) data.excludedRecurrenceRules = null;
+      }
+      for (const key of Object.keys(data) as (keyof CalendarEvent)[]) {
+        if (data[key] === undefined) delete data[key];
+      }
       await onSave(data, calendarId);
       onClose();
     } finally {

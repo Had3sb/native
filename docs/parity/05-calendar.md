@@ -7,17 +7,17 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Recurrence
 
-- [ ] **Recurrence scope dialog is a stub: "This event" / "This and following" behave as "All events"** — `P1` — `missing`
+- [x] **Recurrence scope dialog is a stub: "This event" / "This and following" behave as "All events"** — `P1` — `missing` — fixed in 161baf1
   - What WEB does: `handleScopeSelect` implements all three scopes: "this" writes a `recurrenceOverrides/<recurrenceId>` patch (or the synthetic id on Stalwart >= 0.16.20), "this_and_future" truncates the master with `until` and creates a new series, "all" patches the master; delete does the mirror (exclude / truncate / destroy) and refetches the range (ref `components/calendar/calendar-app.tsx:842-998`, `lib/recurrence-overrides.ts:21-32`, changelog 1.9.0 "Edit a single recurring occurrence via a one-shot override patch").
   - What RN does: `handleScopeSelect` ignores the chosen scope with a TODO ("treat all scopes as 'all'") and either opens the edit modal on the occurrence or deletes `action.event.id`, which the store resolves to the master via `originalId` (ref `src/screens/CalendarScreen.tsx:347-363`, `src/stores/calendar-store.ts:306-329`). Choosing "This event" on delete destroys the entire series.
   - Fix hint: port WEB's `handleScopeSelect`/`truncateRecurrenceAtEvent`/`findMasterEvent` into CalendarScreen; add `buildRecurrenceOverridePatch` (WEB `lib/recurrence-overrides.ts`) and `RECURRENCE_OVERRIDE_IMMUTABLE_KEYS`; for "this" write `{ [`recurrenceOverrides/${recurrenceId}`]: override }` on `originalId`; for delete-this write `{ excluded: true }`; refresh after.
 
-- [ ] **Editing an expanded occurrence rewrites the master's `start` to the occurrence date (series shifts / earlier occurrences vanish)** — `P1` — `bug`
+- [x] **Editing an expanded occurrence rewrites the master's `start` to the occurrence date (series shifts / earlier occurrences vanish)** — `P1` — `bug` — fixed in 161baf1
   - What WEB does: for scope "all" the updates go to the master but `start` from an occurrence is never applied to the master unless the user changed it; scope "this" goes into an override (ref `components/calendar/calendar-app.tsx:930-943`).
   - What RN does: `EventModal` seeds `start` from the occurrence (`getEventStartDate(event)`, `src/components/calendar/EventModal.tsx:197`) and `handleSave` always sends `start` + `duration` (`EventModal.tsx:262-281`); `updateEvent` resolves the occurrence to `originalId` and PATCHes the master (`src/stores/calendar-store.ts:306-318`). Any occurrence edit moves the whole series to that occurrence's date.
   - Fix hint: part of the scope work above; when scope is "all", drop `start` from the patch unless the user actually changed the date/time relative to the occurrence, or compute the delta and apply it to the master's `start`.
 
-- [ ] **Store's optimistic merge after an occurrence edit only updates one occurrence** — `P2` — `bug`
+- [x] **Store's optimistic merge after an occurrence edit only updates one occurrence** — `P2` — `bug` — fixed in 161baf1
   - What WEB does: after any occurrence or master mutation with expanded occurrences in view it refetches the visible range (`stores/calendar-store.ts:186-206, 749-751`).
   - What RN does: `updateEvent` maps only `e.id === id` (`src/stores/calendar-store.ts:315-317`), so sibling occurrences keep the old title/time until a pull-to-refresh; `deleteEvent` removes only the tapped occurrence from state while the server destroyed the master (`:320-329`).
   - Fix hint: after mutating a `recurrenceId`/`recurrenceRules` event call `get().refresh()` (RN already has it) like WEB's `refetchAfterOccurrenceMutation`.
