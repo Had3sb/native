@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { jmapClient, AuthenticationError, NetworkError } from '../api/jmap-client';
 import type { JMAPSession } from '../api/types';
+import { getIdentities } from '../api/identity';
+import { fetchPrincipal, isStalwartSupported } from '../api/account-security';
 import { useAccountStore } from './account-store';
 import { useEmailStore } from './email-store';
 import { useContactsStore } from './contacts-store';
@@ -39,12 +41,19 @@ export interface AuthState {
   activeAccountId: string | null;
   client: typeof jmapClient | null;
 
-  login: (serverUrl: string, username: string, password: string, opts?: { addAccount?: boolean }) => Promise<void>;
+  login: (
+    serverUrl: string,
+    username: string,
+    password: string,
+    opts?: { addAccount?: boolean; totp?: string },
+  ) => Promise<void>;
   loginViaWebmail: (webmailUrl: string, opts?: { addAccount?: boolean }) => Promise<void>;
   loginViaPairing: (webmailUrl: string, code: string, opts?: { addAccount?: boolean }) => Promise<void>;
   logout: () => Promise<void>;
   logoutAll: () => Promise<void>;
   switchAccount: (accountId: string) => Promise<void>;
+  /** Sign a non-active account out and drop its caches; the active one stays. */
+  removeAccount: (accountId: string) => Promise<void>;
   restoreSession: () => Promise<boolean>;
   retrySession: () => Promise<boolean>;
   clearError: () => void;
@@ -98,6 +107,38 @@ function refetchFeatureStores(): void {
   }
 }
 
+// Refresh the registry's display name / address from the server (#900): the
+// primary identity first, then the Stalwart principal's "Full name" when the
+// account advertises the extension. Fire-and-forget; a failure keeps whatever
+// the registry already had.
+async function syncAccountDisplayName(accountId: string): Promise<void> {
+  try {
+    const accountStore = useAccountStore.getState();
+    const entry = accountStore.getAccountById(accountId);
+    if (!entry) return;
+    const updates: { displayName?: string; email?: string } = {};
+    const identities = await getIdentities().catch(() => []);
+    const primary = identities.find((i) => i.email?.toLowerCase() === entry.email?.toLowerCase())
+      ?? identities.find((i) => i.email?.toLowerCase() === entry.username?.toLowerCase())
+      ?? identities[0];
+    if (primary?.name?.trim()) updates.displayName = primary.name.trim();
+    if (primary?.email && !entry.email.includes('@')) updates.email = primary.email;
+    if (isStalwartSupported()) {
+      const principal = await fetchPrincipal().catch(() => null);
+      if (principal?.displayName?.trim()) updates.displayName = principal.displayName.trim();
+      if (!updates.email && principal?.emails[0] && !entry.email.includes('@')) {
+        updates.email = principal.emails[0];
+      }
+    }
+    if (Object.keys(updates).length === 0) return;
+    if (useAccountStore.getState().getAccountById(accountId)) {
+      useAccountStore.getState().updateAccount(accountId, updates);
+    }
+  } catch {
+    // cosmetic - never block sign-in on it
+  }
+}
+
 // Shared tail of the OAuth sign-in flows (browser handoff and cross-device QR
 // pairing both end here). Bootstraps a JMAP session from the token bundle,
 // registers the account, and flips the store to connected. Throws on failure
@@ -108,16 +149,23 @@ async function completeOAuthHandoff(
   result: Extract<HandoffResult, { flow: 'oauth' }>,
   opts?: { addAccount?: boolean },
 ): Promise<void> {
-  if (opts?.addAccount && get().isAuthenticated) {
-    jmapClient.reset();
+  // Adding an account must not destroy the live one: the singleton keeps the
+  // previous connection until the new sign-in has actually succeeded, and a
+  // failure puts it straight back.
+  const previous = opts?.addAccount && get().isAuthenticated ? jmapClient.snapshot() : null;
+
+  let connected: { session: JMAPSession; username: string; accountId: string };
+  try {
+    connected = await jmapClient.connectWithOAuth(result.serverUrl, result.tokens);
+  } catch (err) {
+    if (previous) jmapClient.restoreSnapshot(previous);
+    throw err;
+  }
+  const { session, username, accountId } = connected;
+  if (previous) {
     useContactsStore.getState().reset();
     useCalendarStore.getState().reset();
   }
-
-  const { session, username, accountId } = await jmapClient.connectWithOAuth(
-    result.serverUrl,
-    result.tokens,
-  );
 
   const accountStore = useAccountStore.getState();
   accountStore.addAccount({
@@ -133,6 +181,7 @@ async function completeOAuthHandoff(
   useEmailStore.getState().setActiveAccount(accountId);
 
   applyConnectedState(set, session, result.serverUrl.replace(/\/+$/, ''), username, accountId);
+  void syncAccountDisplayName(accountId);
 }
 
 function applyConnectedState(
@@ -170,17 +219,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (serverUrl, username, password, opts) => {
     set({ isLoading: true, error: null });
+    // Adding an additional account: keep the live connection until the new
+    // sign-in succeeded so a typo doesn't kill the current session.
+    const previous = opts?.addAccount && get().isAuthenticated ? jmapClient.snapshot() : null;
     try {
-      // Adding an additional account - snapshot the current account away so
-      // its cache survives, then reset the JMAP client for the new login.
-      // Contacts/calendar are still single-bucket, so wipe those.
-      if (opts?.addAccount && get().isAuthenticated) {
-        jmapClient.reset();
+      let session: JMAPSession;
+      try {
+        session = await jmapClient.connect(serverUrl, username, password, opts?.totp);
+      } catch (err) {
+        if (previous) jmapClient.restoreSnapshot(previous);
+        throw err;
+      }
+      // Contacts/calendar are still single-bucket, so wipe those now that
+      // the new account is the one the client serves.
+      if (previous) {
         useContactsStore.getState().reset();
         useCalendarStore.getState().reset();
       }
-
-      const session = await jmapClient.connect(serverUrl, username, password);
       const accountId = generateAccountId(username, serverUrl.replace(/\/+$/, ''));
 
       const accountStore = useAccountStore.getState();
@@ -199,12 +254,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       useEmailStore.getState().setActiveAccount(accountId);
 
       applyConnectedState(set, session, serverUrl.replace(/\/+$/, ''), username, accountId);
+      void syncAccountDisplayName(accountId);
     } catch (err) {
-      const message = err instanceof AuthenticationError
-        ? 'Invalid username or password'
-        : err instanceof Error
-          ? err.message
-          : 'Connection failed';
+      const message = err instanceof Error && err.name === 'TotpRequiredError'
+        ? 'Two-factor code required'
+        : err instanceof AuthenticationError
+          ? 'Invalid username or password'
+          : err instanceof Error
+            ? err.message
+            : 'Connection failed';
       set({ isLoading: false, error: message });
       throw err;
     }
@@ -384,13 +442,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // jmapClient first. If it fails, restore the previous active account
     // so we don't leave the user stranded on a half-switched state.
     const previousActive = get().activeAccountId;
+    // loadAccount overwrites the client's credentials/session; keep the live
+    // connection around so a failed switch can put it back instead of
+    // leaving the previous account dead until relaunch.
+    const previousClient = jmapClient.snapshot();
+    const restorePrevious = () => {
+      jmapClient.restoreSnapshot(previousClient);
+      if (previousActive) useEmailStore.getState().setActiveAccount(previousActive);
+    };
     try {
       const ok = await jmapClient.loadAccount(accountId);
       if (!ok) {
         // Credentials missing - evict stale entry and surface error
         accountStore.removeAccount(accountId);
         useEmailStore.getState().removeAccount(accountId);
-        if (previousActive) useEmailStore.getState().setActiveAccount(previousActive);
+        restorePrevious();
         set({ isLoading: false, error: 'Session expired for this account' });
         return;
       }
@@ -399,13 +465,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         await jmapClient.clearAccountCredentials(accountId).catch(() => undefined);
         accountStore.removeAccount(accountId);
         useEmailStore.getState().removeAccount(accountId);
-        if (previousActive) useEmailStore.getState().setActiveAccount(previousActive);
+        restorePrevious();
         set({ isLoading: false, error: 'Session expired for this account' });
         return;
       }
       // NetworkError or anything else - keep the previous active account
       // intact instead of stranding the user on a half-switched state.
-      if (previousActive) useEmailStore.getState().setActiveAccount(previousActive);
+      restorePrevious();
+      accountStore.updateAccount(accountId, {
+        hasError: true,
+        errorMessage: err instanceof Error ? err.message : 'Failed to switch account',
+      });
       set({
         isLoading: false,
         error: err instanceof Error ? err.message : 'Failed to switch account',
@@ -429,6 +499,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     applyConnectedState(set, session, target.serverUrl, target.username, accountId);
     refetchFeatureStores();
+    void syncAccountDisplayName(accountId);
+  },
+
+  removeAccount: async (accountId) => {
+    if (get().activeAccountId === accountId) {
+      await get().logout();
+      return;
+    }
+    const accountStore = useAccountStore.getState();
+    if (!accountStore.getAccountById(accountId)) return;
+    await teardownPushNotificationsForAccount(accountId).catch(() => undefined);
+    await jmapClient.clearAccountCredentials(accountId).catch(() => undefined);
+    useEmailStore.getState().removeAccount(accountId);
+    accountStore.removeAccount(accountId);
   },
 
   restoreSession: async () => {
@@ -537,6 +621,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // is live. Feature stores show persisted data immediately; this swaps
       // in fresh data once the network round-trip completes.
       refetchFeatureStores();
+      void syncAccountDisplayName(target.id);
       return true;
     } catch {
       set({ isLoading: false, hasRestoredSession: true });
@@ -592,3 +677,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   clearError: () => set({ error: null }),
 }));
+
+// A 401 on a live session (revoked password/token, expired refresh token)
+// used to leave the user on a dead session until relaunch: nothing outside
+// the login flow handled `AuthenticationError`, and `retrySession` bailed
+// because `session` was still the stale object. Drop the session and retry
+// once; if the credentials really are dead, `retrySession` evicts the
+// account and shows the login screen with "Session expired".
+let authFailureInFlight = false;
+jmapClient.onAuthFailure(() => {
+  if (authFailureInFlight) return;
+  const state = useAuthStore.getState();
+  if (!state.isAuthenticated || !state.session) return;
+  authFailureInFlight = true;
+  useAuthStore.setState({ session: null });
+  void state.retrySession().finally(() => {
+    authFailureInFlight = false;
+  });
+});

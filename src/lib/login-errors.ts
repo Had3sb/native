@@ -36,6 +36,38 @@ export function describeLoginError(err: unknown, context: LoginErrorContext = {}
   const lower = message.toLowerCase();
   const host = hostLabel(context.serverUrl);
 
+  if (name === 'TotpRequiredError' || message === 'TOTP_REQUIRED' || lower.includes('two-factor code required')) {
+    return {
+      title: 'Enter your two-factor code',
+      detail: 'This account is protected with two-factor sign-in. Type the 6-digit code from your authenticator app.',
+    };
+  }
+
+  if (name === 'TotpLoginError' && lower.includes('invalid')) {
+    return {
+      title: "That didn't work",
+      detail: 'Check your password and the current code from your authenticator app, then try again.',
+    };
+  }
+
+  if (name === 'RateLimitError' || /\b429\b/.test(message) || lower.includes('rate limited')) {
+    const retryMs = (err as { retryAfterMs?: number } | null)?.retryAfterMs;
+    const seconds = typeof retryMs === 'number' && Number.isFinite(retryMs) ? Math.max(1, Math.round(retryMs / 1000)) : null;
+    return {
+      title: 'Too many attempts',
+      detail: seconds
+        ? `The server asked us to wait. Try again in about ${seconds} seconds.`
+        : 'The server asked us to wait a moment. Try again shortly.',
+    };
+  }
+
+  if (lower.includes('session discovery failed') && /\b402\b/.test(message)) {
+    return {
+      title: 'Enter your two-factor code',
+      detail: 'This account is protected with two-factor sign-in. Type the 6-digit code from your authenticator app.',
+    };
+  }
+
   if (name === 'AuthenticationError' || lower.includes('invalid username or password')) {
     return {
       title: "That didn't work",
@@ -73,6 +105,13 @@ export function describeLoginError(err: unknown, context: LoginErrorContext = {}
     return {
       title: `Can't reach ${host}`,
       detail: 'Check your connection and the server address, then try again.',
+    };
+  }
+
+  if (lower.includes('session discovery failed') && /\b5\d\d\b/.test(message)) {
+    return {
+      title: `${host} is having trouble`,
+      detail: 'The server answered with an error. Try again in a few minutes.',
     };
   }
 

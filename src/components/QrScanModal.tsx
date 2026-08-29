@@ -63,7 +63,7 @@ export function QrScanModal({ visible, onClose, onScanned }: QrScanModalProps) {
               <View style={styles.hintWrap}>
                 <Text style={styles.hintTitle}>Open Bulwark on your computer</Text>
                 <Text style={styles.hint}>
-                  Settings → Devices → Add phone shows a code. Point the camera at it.
+                  Settings → Security → Link device shows a code. Point the camera at it.
                 </Text>
               </View>
             </View>

@@ -12,6 +12,10 @@ interface PasswordStepProps {
   password: string;
   onChangeEmail: (value: string) => void;
   onChangePassword: (value: string) => void;
+  /** Second factor, shown once the server answered 402 "MFA code required". */
+  totp?: string;
+  totpRequired?: boolean;
+  onChangeTotp?: (value: string) => void;
   onSubmit: () => void;
   notice?: { title: string; detail?: string } | null;
 }
@@ -28,6 +32,9 @@ export default function PasswordStep({
   password,
   onChangeEmail,
   onChangePassword,
+  totp = '',
+  totpRequired = false,
+  onChangeTotp,
   onSubmit,
   notice,
 }: PasswordStepProps) {
@@ -65,8 +72,8 @@ export default function PasswordStep({
         secureTextEntry={!showPassword}
         autoComplete="current-password"
         textContentType="password"
-        returnKeyType="go"
-        onSubmitEditing={onSubmit}
+        returnKeyType={totpRequired ? 'next' : 'go'}
+        onSubmitEditing={totpRequired ? undefined : onSubmit}
         rightIcon={
           <Pressable
             onPress={() => setShowPassword((v) => !v)}
@@ -78,6 +85,22 @@ export default function PasswordStep({
           </Pressable>
         }
       />
+
+      {totpRequired ? (
+        <Input
+          label="Two-factor code"
+          placeholder="123456"
+          value={totp}
+          onChangeText={(value) => onChangeTotp?.(value)}
+          autoFocus
+          keyboardType="number-pad"
+          autoComplete="one-time-code"
+          textContentType="oneTimeCode"
+          maxLength={8}
+          returnKeyType="go"
+          onSubmitEditing={onSubmit}
+        />
+      ) : null}
 
       {notice ? <LoginNotice title={notice.title} detail={notice.detail} /> : null}
 

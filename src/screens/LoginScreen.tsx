@@ -55,6 +55,10 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
   // when discovery actually found one.
   const [serverDiscovered, setServerDiscovered] = React.useState(false);
   const [password, setPassword] = React.useState('');
+  // Second factor. Shown only after the server asked for it (402), so the
+  // common no-2FA sign-in stays a two-field form.
+  const [totp, setTotp] = React.useState('');
+  const [totpRequired, setTotpRequired] = React.useState(false);
   const [failedDomain, setFailedDomain] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<LoginErrorCopy | null>(null);
   const [searching, setSearching] = React.useState(false);
@@ -198,18 +202,31 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
       return;
     }
 
+    if (totpRequired && !/^\d{6,8}$/.test(totp.trim())) {
+      setNotice({ title: 'Enter the 6-digit code from your authenticator app' });
+      return;
+    }
+
     setNotice(null);
     setBusy('connecting');
     const wasAuthenticated = useAuthStore.getState().isAuthenticated;
     try {
-      await login(target, email.trim(), password, { addAccount: isAddMode });
+      await login(target, email.trim(), password, {
+        addAccount: isAddMode,
+        totp: totpRequired ? totp.trim() : undefined,
+      });
       finishIfSignedIn(wasAuthenticated);
     } catch (err) {
+      if (err instanceof Error && err.name === 'TotpRequiredError') {
+        setTotpRequired(true);
+        setNotice(describeLoginError(err, { serverUrl: target }));
+        return;
+      }
       setNotice(describeLoginError(err, { serverUrl: target }));
     } finally {
       setBusy(null);
     }
-  }, [email, finishIfSignedIn, isAddMode, login, password, serverInput, serverUrl]);
+  }, [email, finishIfSignedIn, isAddMode, login, password, serverInput, serverUrl, totp, totpRequired]);
 
   const handleScanned = React.useCallback(
     async (data: string) => {
@@ -218,7 +235,7 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
       if (!payload) {
         setNotice({
           title: "That code isn't a Bulwark sign-in code",
-          detail: 'Open Bulwark on the web, then Settings → Devices to show one.',
+          detail: 'Open Bulwark on the web, then Settings → Security → Link device to show one.',
         });
         return;
       }
@@ -363,6 +380,12 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
             onChangePassword={(value) => {
               setNotice(null);
               setPassword(value);
+            }}
+            totp={totp}
+            totpRequired={totpRequired}
+            onChangeTotp={(value) => {
+              setNotice(null);
+              setTotp(value.replace(/\s+/g, ''));
             }}
             onSubmit={() => void handlePasswordSubmit()}
             notice={notice}
