@@ -12,9 +12,8 @@ import { buildReplyRecipients } from '../../lib/reply-recipients';
 import { buildReplySubject } from '../../lib/subject-prefix';
 import { computeReplyThreadingHeaders } from '../../lib/email-threading';
 import { findReceivingIdentity } from '../../lib/email-headers';
-import { plainTextBody } from '../../lib/email-body';
+import { pickEmailBody, plainTextBody } from '../../lib/email-body';
 import { htmlToPlainText } from '../../lib/compose-html';
-import { pickEmailBody } from '../../lib/email-body';
 import { mailboxesForSiblingOf } from '../../lib/mailbox-tree';
 import { emailDisplayDate, formatFullDateTime } from '../../lib/email-date';
 
