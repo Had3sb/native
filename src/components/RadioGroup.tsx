@@ -26,7 +26,7 @@ export default function RadioGroup({ options, value, onChange, style }: RadioGro
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
   return (
-    <View style={[styles.container, style]}>
+    <View style={[styles.container, style]} accessibilityRole="radiogroup">
       {options.map((opt) => {
         const selected = opt.value === value;
         return (
@@ -34,6 +34,9 @@ export default function RadioGroup({ options, value, onChange, style }: RadioGro
             key={opt.value}
             style={[styles.option, selected ? styles.optionSelected : styles.optionUnselected]}
             onPress={() => onChange(opt.value)}
+            accessibilityRole="radio"
+            accessibilityState={{ selected, checked: selected }}
+            accessibilityLabel={opt.label}
           >
             <Text style={[styles.optionText, selected ? styles.textSelected : styles.textUnselected]}>
               {opt.label}

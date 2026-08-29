@@ -12,6 +12,7 @@ import { FlaskConical, Lock, ChevronDown, Check } from 'lucide-react-native';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import ToggleSwitchComponent from '../ToggleSwitch';
+import { useLocaleStore } from '../../stores/locale-store';
 
 /**
  * Mirrors webmail settings-section.tsx:
@@ -39,13 +40,14 @@ export function SettingsSection({
 }: SettingsSectionProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   return (
     <View style={styles.section}>
       {experimental && (
         <View style={styles.experimentalBanner}>
-          <FlaskConical size={20} color="#fbbf24" />
+          <FlaskConical size={20} color={c.warning} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.experimentalTitle}>Experimental Feature</Text>
+            <Text style={styles.experimentalTitle}>{t('settings.experimental.title', 'Experimental Feature')}</Text>
             {experimentalDescription && (
               <Text style={styles.experimentalDesc}>{experimentalDescription}</Text>
             )}
@@ -119,13 +121,16 @@ export function RadioGroup({ value, onChange, options, style }: RadioGroupProps)
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
   return (
-    <View style={[styles.radioGroup, style]}>
+    <View style={[styles.radioGroup, style]} accessibilityRole="radiogroup">
       {options.map((opt) => {
         const selected = opt.value === value;
         return (
           <Pressable
             key={opt.value}
             onPress={() => onChange(opt.value)}
+            accessibilityRole="radio"
+            accessibilityState={{ selected, checked: selected }}
+            accessibilityLabel={opt.label}
             style={[
               styles.radioOption,
               selected ? styles.radioSelected : styles.radioUnselected,
@@ -159,7 +164,13 @@ export function Select({ value, onChange, options, style }: SelectProps) {
 
   return (
     <>
-      <Pressable style={[styles.select, style]} onPress={() => setOpen(true)}>
+      <Pressable
+        style={[styles.select, style]}
+        onPress={() => setOpen(true)}
+        accessibilityRole="combobox"
+        accessibilityLabel={current?.label ?? ''}
+        accessibilityState={{ expanded: open }}
+      >
         <Text style={styles.selectText}>{current?.label ?? ''}</Text>
         <ChevronDown size={14} color={c.mutedForeground} />
       </Pressable>
@@ -177,6 +188,8 @@ export function Select({ value, onChange, options, style }: SelectProps) {
                 return (
                   <Pressable
                     key={opt.value}
+                    accessibilityRole="menuitem"
+                    accessibilityState={{ selected }}
                     style={({ pressed }) => [
                       styles.selectItem,
                       pressed && styles.selectItemPressed,
@@ -220,18 +233,18 @@ function makeStyles(c: ThemePalette) {
     flexDirection: 'row',
     gap: spacing.md,
     borderWidth: 1,
-    borderColor: 'rgba(252, 211, 77, 0.4)',
-    backgroundColor: 'rgba(120, 53, 15, 0.25)',
+    borderColor: c.warning,
+    backgroundColor: c.warningBg,
     padding: spacing.md,
     borderRadius: radius.md,
   },
   experimentalTitle: {
     ...typography.bodyMedium,
-    color: '#fcd34d',
+    color: c.text,
   },
   experimentalDesc: {
     ...typography.caption,
-    color: '#fde68a',
+    color: c.textSecondary,
     marginTop: 2,
   },
   settingItem: {

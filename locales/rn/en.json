@@ -1,9 +1,39 @@
 {
+  "advanced_search": {
+    "after": "After",
+    "before": "Before",
+    "no_attachment": "No attachment",
+    "not_starred": "Not starred"
+  },
   "calendar": {
     "event_modal": {
       "participant_placeholder": "Add participant by email"
     },
+    "invitation": {
+      "accept": "Yes",
+      "add_error": "Could not add the event",
+      "add_to_calendar": "Add to calendar",
+      "added": "Added to calendar",
+      "already_in_calendar": "Already in your calendar",
+      "cancelled": "This event was cancelled",
+      "decline": "No",
+      "join_video": "Join video call",
+      "no_writable_calendar": "No writable calendar available",
+      "organizer": "Organizer",
+      "reading": "Reading invitation…",
+      "reply": "A participant replied to this invitation",
+      "response_error": "Could not send your response",
+      "response_sent": "Response sent",
+      "tentative": "Maybe",
+      "title": "Calendar invitation",
+      "trust_verified": "Sender verified"
+    },
     "management": {
+      "clear_confirm": "Remove all",
+      "clear_description": "Every event in this calendar will be deleted. Events that also belong to another calendar are only unlinked.",
+      "clear_title": "Remove all events?",
+      "delete_description": "The calendar and all of its events will be deleted. This cannot be undone.",
+      "delete_title": "Delete calendar?",
       "description_placeholder": "Optional",
       "edit_calendar": "Edit calendar",
       "new_calendar": "New calendar"
@@ -22,10 +52,13 @@
   "common": {
     "add": "Add",
     "back": "Back",
+    "confirm": "Confirm",
     "create": "Create",
     "dismiss": "Dismiss",
     "done": "Done",
-    "remove": "Remove"
+    "remove": "Remove",
+    "retry": "Retry",
+    "undo": "Undo"
   },
   "context_menu": {
     "color_tag": "Tag",
@@ -48,27 +81,41 @@
     "schedule_unsupported_title": "Scheduling unavailable",
     "scheduled_body": "Your message will be sent at {time}.",
     "scheduled_title": "Scheduled",
+    "send_now": "Send now",
     "send_timeout_body": "The message may already have gone out. Check your Sent folder before sending it again.",
     "send_timeout_title": "No answer from the server",
+    "undo_send_label": "Sending in {seconds}s…",
     "validation": {
       "subject_required": "Add a subject"
     }
   },
   "email_list": {
-    "error": "Error",
-    "marked_as_spam": "Marked as spam",
-    "marked_not_spam": "Marked as not spam",
-    "move_same_account": "Messages can only be moved within the same account",
-    "moved_to_trash": "Email moved to Trash",
-    "no_archive_folder": "Could not find an Archive folder on the server.",
-    "no_junk_folder": "Could not find a Spam/Junk folder on the server.",
-    "no_trash_folder": "Could not find a Trash folder on the server. Please check your mailbox configuration.",
-    "undo_failed": "Undo failed",
-    "marked_as_spam_count": "{count, plural, one {# email} other {# emails}} marked as spam",
-    "marked_not_spam_count": "{count, plural, one {# email} other {# emails}} marked as not spam",
     "emails_archived_count": "{count, plural, one {# email} other {# emails}} archived",
     "emails_moved_to": "{count, plural, one {# email} other {# emails}} moved to {mailbox}",
-    "moved_to_trash_count": "{count, plural, one {# email} other {# emails}} moved to Trash"
+    "error": "Error",
+    "marked_as_spam": "Marked as spam",
+    "marked_as_spam_count": "{count, plural, one {# email} other {# emails}} marked as spam",
+    "marked_not_spam": "Marked as not spam",
+    "marked_not_spam_count": "{count, plural, one {# email} other {# emails}} marked as not spam",
+    "move_same_account": "Messages can only be moved within the same account",
+    "moved_to_trash": "Email moved to Trash",
+    "moved_to_trash_count": "{count, plural, one {# email} other {# emails}} moved to Trash",
+    "no_archive_folder": "Could not find an Archive folder on the server.",
+    "no_junk_folder": "Could not find a Spam/Junk folder on the server.",
+    "no_mailboxes": "No mailboxes found",
+    "no_mailboxes_hint": "Check that your JMAP account has mail capability.",
+    "no_trash_folder": "Could not find a Trash folder on the server. Please check your mailbox configuration.",
+    "offline_nothing_cached": "No connection. Showing nothing because no mail has been cached yet.",
+    "open_draft_failed": "Could not open the draft.",
+    "recent_searches": "Recent searches",
+    "scope_all_folders": "All folders",
+    "scope_this_folder": "This folder",
+    "search_placeholder": "Search mail...",
+    "showing_cached": "Showing cached mail",
+    "swipe_move": "Move",
+    "swipe_spam": "Spam",
+    "total": "total",
+    "undo_failed": "Undo failed"
   },
   "email_viewer": {
     "color_tag": {
@@ -230,6 +277,9 @@
       "experimental": "Experimental",
       "not_implemented": "Not implemented",
       "unavailable": "Unavailable"
+    },
+    "experimental": {
+      "title": "Experimental Feature"
     },
     "keywords": {
       "reset_defaults": "Reset to Defaults"

@@ -1,17 +1,29 @@
 import React from 'react';
-import { View, Text, Pressable, StyleSheet, Modal } from 'react-native';
+import { View, Text, StyleSheet, Modal, TextInput, type TextInputProps } from 'react-native';
 import { AlertTriangle } from 'lucide-react-native';
 import Button from './Button';
 import { spacing, radius, typography, type ThemePalette } from '../theme/tokens';
 import { useColors } from '../theme/colors';
+import { useLocaleStore } from '../stores/locale-store';
+
+interface DialogInput {
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder?: string;
+  // Extra TextInput props (keyboardType, autoCapitalize, secureTextEntry…).
+  props?: Omit<TextInputProps, 'value' | 'onChangeText' | 'placeholder' | 'style'>;
+}
 
 interface DialogProps {
   visible: boolean;
   title: string;
-  message: string;
+  message?: string;
   variant?: 'default' | 'destructive';
   confirmText?: string;
   cancelText?: string;
+  // Turns the confirm dialog into a prompt (webmail prompt-dialog.tsx).
+  input?: DialogInput;
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -30,13 +42,18 @@ export default function Dialog({
   title,
   message,
   variant = 'default',
-  confirmText = 'Confirm',
-  cancelText = 'Cancel',
+  confirmText,
+  cancelText,
+  input,
+  confirmDisabled,
   onConfirm,
   onCancel,
 }: DialogProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
+  const confirmLabel = confirmText ?? t('common.confirm', 'Confirm');
+  const cancelLabel = cancelText ?? t('common.cancel', 'Cancel');
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <View style={styles.backdrop}>
@@ -47,15 +64,33 @@ export default function Dialog({
                 <AlertTriangle size={20} color={c.error} />
               </View>
             )}
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.message}>{message}</Text>
+            <Text style={styles.title} accessibilityRole="header">{title}</Text>
+            {message ? <Text style={styles.message}>{message}</Text> : null}
+            {input ? (
+              <TextInput
+                value={input.value}
+                onChangeText={input.onChangeText}
+                placeholder={input.placeholder}
+                placeholderTextColor={c.textMuted}
+                autoFocus
+                onSubmitEditing={confirmDisabled ? undefined : onConfirm}
+                accessibilityLabel={input.placeholder ?? title}
+                style={styles.input}
+                {...input.props}
+              />
+            ) : null}
           </View>
           <View style={styles.footer}>
             <Button variant="outline" size="sm" onPress={onCancel}>
-              {cancelText}
+              {cancelLabel}
             </Button>
-            <Button variant={variant === 'destructive' ? 'destructive' : 'default'} size="sm" onPress={onConfirm}>
-              {confirmText}
+            <Button
+              variant={variant === 'destructive' ? 'destructive' : 'default'}
+              size="sm"
+              onPress={onConfirm}
+              disabled={confirmDisabled}
+            >
+              {confirmLabel}
             </Button>
           </View>
         </View>
@@ -106,6 +141,17 @@ function makeStyles(c: ThemePalette) {
     ...typography.body,             // text-sm
     color: c.mutedForeground,  // text-muted-foreground
     marginTop: spacing.sm,
+  },
+  input: {
+    ...typography.body,
+    color: c.text,
+    backgroundColor: c.surface,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    marginTop: spacing.md,
   },
   footer: {
     flexDirection: 'row',

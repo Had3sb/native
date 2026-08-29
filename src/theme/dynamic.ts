@@ -3,7 +3,8 @@
 // scaled / preference-driven variants so screens can react to settings
 // without a relaunch.
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { AccessibilityInfo } from 'react-native';
 import { useSettingsStore } from '../stores/settings-store';
 import { typography as baseTypography, spacing as baseSpacing } from './tokens';
 
@@ -84,10 +85,40 @@ export function useDensity() {
   );
 }
 
+// OS-level "reduce motion" (Android: Remove animations / iOS: Reduce Motion).
+// Read once and kept fresh via the change event; defaults to false until the
+// first answer arrives.
+let reduceMotionCache: boolean | null = null;
+function useReduceMotion(): boolean {
+  const [reduce, setReduce] = useState<boolean>(reduceMotionCache ?? false);
+  useEffect(() => {
+    let mounted = true;
+    const info = AccessibilityInfo as typeof AccessibilityInfo | undefined;
+    if (!info?.isReduceMotionEnabled) return undefined;
+    void info.isReduceMotionEnabled().then((value) => {
+      reduceMotionCache = value;
+      if (mounted) setReduce(value);
+    }).catch(() => undefined);
+    const sub = info.addEventListener?.('reduceMotionChanged', (value: boolean) => {
+      reduceMotionCache = value;
+      if (mounted) setReduce(value);
+    });
+    return () => {
+      mounted = false;
+      sub?.remove?.();
+    };
+  }, []);
+  return reduce;
+}
+
 // Returns whether the user has opted into in-app animations. When false,
 // callers should pass duration=0 to `Animated.timing` so transitions snap.
+// Honours the OS reduce-motion preference as well (webmail:
+// prefers-reduced-motion).
 export function useShouldAnimate() {
-  return useSettingsStore((s) => s.animationsEnabled);
+  const enabled = useSettingsStore((s) => s.animationsEnabled);
+  const reduceMotion = useReduceMotion();
+  return enabled && !reduceMotion;
 }
 
 // Convenience: returns `requested` when animations are on, otherwise 0.
