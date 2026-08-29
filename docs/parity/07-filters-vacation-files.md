@@ -32,7 +32,7 @@ Filters: RN carries a byte-for-byte port of WEB's Sieve parser/generator/tests a
   - What RN does: the `filtersExpandedView` toggle exists (`src/components/settings/FilterSettings.tsx:350-355`) but only lifts the `numberOfLines` clamp on the same one-line summary (`:268`, `:292`); `if`/`then`/`match_all_conditions` locale keys are unused.
   - Fix hint: add a `VisualRuleSummary` component rendering rows of chips (all conditions, all actions) when `expandedView` is true.
 
-- [ ] **Per-account (shared/group) filters not supported** — `P3` — `missing` (depends on whether RN gets managed shared-account settings at all)
+- [ ] **Per-account (shared/group) filters not supported** — `P3` — `missing` (depends on whether RN gets managed shared-account settings at all) — deferred: RN has no managed/shared-account settings yet
   - What WEB does: `filter-store` tracks `availableAccounts`/`selectedAccountId` and every Sieve call takes an `accountId` (`stores/filter-store.ts:62-134`); `FilterSettings` scopes to `managedAccountId` and fetches that account's mailboxes for the move target list (`components/settings/filter-settings.tsx:188-232`, `248-255`); client `getSieveAccounts()` (`lib/jmap/client.ts:4465-4469`).
   - What RN does: `src/api/sieve.ts:20-23` always uses the primary Sieve account; store has no account selection (`src/stores/filter-store.ts:32`). No `managedAccount` concept exists in RN (`grep -ri managedAccount src` → none).
   - Fix hint: only if the Accounts area adds shared-account management: thread an optional `accountId` through `api/sieve.ts` and the store's `fetchFilters/saveFilters`.
@@ -48,124 +48,124 @@ Filters: RN carries a byte-for-byte port of WEB's Sieve parser/generator/tests a
 
 ### Vacation responder
 
-- [ ] **fromDate/toDate sent without timezone designator (not a JMAP UTCDate)** — `P2` — `rn-only-bug`
+- [x] **fromDate/toDate sent without timezone designator (not a JMAP UTCDate)** — fixed in b538a0e — `P2` — `rn-only-bug` — not verified live against stw-test; RFC 8621 UTCDate semantics implemented
   - What WEB does: `datetime-local` → `new Date(local).toISOString()` (`"...T10:00:00.000Z"`) (`components/settings/vacation-settings.tsx:196`, `:207`) and displays via `utcToLocalDatetime` (`:16-20`).
   - What RN does: `toJmapDate` produces `"YYYY-MM-DDTHH:MM:SS"` with no `Z`/offset (`src/components/settings/VacationSettings.tsx:10-19`) and `fromJmapDate` just slices the server's UTC string, showing UTC as if local (`:21-24`). RFC 8621 `VacationResponse.fromDate` is a `UTCDate`; Stalwart will either reject the set (`invalidProperties`) or interpret the wall time as UTC, shifting the schedule by the user's offset. Not verified live - verify against stw-test (`reference_stalwart_stw_test_container.md`) before fixing.
   - Fix hint: parse the typed local time with `new Date(y, m-1, d, hh, mm).toISOString()` and format for display with the device timezone; better, use a native date-time picker.
 
-- [ ] **HTML vacation body missing** — `P2` — `missing`
+- [x] **HTML vacation body missing** — fixed in b538a0e — `P2` — `missing`
   - What WEB does: "Formatted message (HTML)" toggle + `RichTextEditor`, sanitised on save with a plain-text fallback derived from the HTML, HTML preview (`components/settings/vacation-settings.tsx:47-48`, `81-83`, `109-127`, `242-258`, `279-293`); store carries `htmlBody` (`stores/vacation-store.ts:10`); changelog 1.7.8 "Vacation: HTML body support".
   - What RN does: store/API already carry `htmlBody` (`src/api/vacation.ts:11`, `src/stores/vacation-store.ts:15`) but the screen never reads or writes it (`src/components/settings/VacationSettings.tsx:63-71` saves only `isEnabled/fromDate/toDate/subject/textBody`). Saving from RN leaves any WEB-set `htmlBody` untouched (partial update), so no data loss - just no way to see/edit/clear it.
   - Fix hint: reuse the composer's editor (RN rich editor) behind an "HTML" toggle; when off, send `htmlBody: null`; derive `textBody` from HTML when empty.
 
-- [ ] **No "unsaved changes" gating; Save always enabled** — `P3` — `partial`
+- [x] **No "unsaved changes" gating; Save always enabled** — fixed in b538a0e — `P3` — `partial`
   - What WEB does: `hasChanges` compares local vs. store and disables Save when nothing changed or the end is before the start (`components/settings/vacation-settings.tsx:94-102`, `317`).
   - What RN does: `canSave` only checks warnings (`src/components/settings/VacationSettings.tsx:61`).
   - Fix hint: add a `hasChanges` memo mirroring WEB.
 
-- [ ] **"Start date in the past" warning missing** — `P3` — `partial`
+- [x] **"Start date in the past" warning missing** — fixed in b538a0e — `P3` — `partial`
   - What WEB does: `warnings.start_in_past` (`components/settings/vacation-settings.tsx:75-79`).
   - What RN does: only end-before-start, format, empty-body (`src/components/settings/VacationSettings.tsx:56-59`).
   - Fix hint: add the check; RN `locales/en/common.json` already has `settings.vacation.warnings`.
 
-- [ ] **Vacation screen is hard-coded English despite locale keys existing** — `P3` — `rn-only-bug`
+- [x] **Vacation screen is hard-coded English despite locale keys existing** — fixed in b538a0e — `P3` — `rn-only-bug`
   - What WEB does: all strings via `settings.vacation.*`.
   - What RN does: `VacationSettings.tsx` never calls `useLocaleStore`; "Vacation Responder", "Date Range", "Saved", warnings etc. are literals (`:57-59`, `:72-74`, `:88`, `:101-158`). RN `locales/en/common.json` already contains `settings.vacation.{title,description,status,date_range,message,preview,save,saving,warnings}`.
   - Fix hint: wire `t('settings.vacation.…')` like `FilterSettings.tsx` does.
 
-- [ ] **Vacation fetch/save on a shared account** — `P3` — `missing` (same dependency as the filters item)
+- [ ] **Vacation fetch/save on a shared account** — `P3` — `missing` (same dependency as the filters item) — deferred: same dependency (no managed-account concept in RN)
   - What WEB does: `fetchVacationResponse(client, managedAccountId)` (`components/settings/vacation-settings.tsx:52-56`, `121-128`).
   - What RN does: always `jmapClient.accountId` (`src/api/vacation.ts:27`, `:43`).
 
 ### Files (JMAP FileNode)
 
-- [ ] **Modification date never shown / sort-by-modified is a no-op (reads `updated`, server property is `modified`)** — `P2` — `bugfix-parity` (changelog 1.8.1 "Files: Show the modification date instead of the creation date (#700)", commit 348e032d)
+- [x] **Modification date never shown / sort-by-modified is a no-op (reads `updated`, server property is `modified`)** — fixed in a0ce925 — `P2` — `bugfix-parity` (changelog 1.8.1 "Files: Show the modification date instead of the creation date (#700)", commit 348e032d)
   - What WEB does: requests and reads `modified` (`lib/jmap/client.ts:6478-6486` `FILE_NODE_PROPERTIES`; `lib/jmap/types.ts:891-895` explains that asking for the wrong name silently yields `undefined`; `stores/file-store.ts:177` `lastModified: node.modified || node.created`).
   - What RN does: `src/api/files.ts:18-21` requests `'updated'`; `src/api/types.ts:548` declares `updated?: string`; `FilesScreen.tsx:222-225` sorts on `a.updated` and `:527-529` renders `item.updated` → always undefined, so the list shows no date and "Sort: Modified" does nothing. `FilesSettings` preview promises a Modified column.
   - Fix hint: rename to `modified` in `FILE_NODE_PROPERTIES`, the `FileNode` type, `FilesScreen` sort/render; fall back to `created` like WEB.
 
-- [ ] **Percent-encoded names from WebDAV-created nodes shown raw** — `P2` — `bugfix-parity` (changelog 1.9.0 "Decode percent-encoded FileNode names from WebDAV-created nodes (#869)", commit 5109aa05)
+- [x] **Percent-encoded names from WebDAV-created nodes shown raw** — fixed in a0ce925 — `P2` — `bugfix-parity` (changelog 1.9.0 "Decode percent-encoded FileNode names from WebDAV-created nodes (#869)", commit 5109aa05)
   - What WEB does: `decodeFileNodeName` (`lib/jmap/filenode-name.ts:17-28`) applied at the client boundary in `getFileNodes`/`listAllFileNodes`/`listAllFileNodesAcrossAccounts` (`lib/jmap/client.ts:23-25`, `:6518`, `:6567`, `:6594`); conservative (needs a valid `%XX`, refuses decoded `/` or NUL).
   - What RN does: `getAllFileNodes`/`getAllFileNodesAcrossAccounts` (`src/api/files.ts:61-126`) return `node.name` verbatim; "Spares%20Catalog" shows as such.
   - Fix hint: port `filenode-name.ts` to `src/lib/` and map nodes through it in both list functions (keep the raw name only if a rename must round-trip the original - WEB doesn't).
 
-- [ ] **Files drive not reset on account switch** — `P2` — `bugfix-parity` (changelog 1.9.0 "Reset the account-scoped Files drive on every account switch", commit 5c06ae8b)
+- [x] **Files drive not reset on account switch** — fixed in c0e1d6b — `P2` — `bugfix-parity` (changelog 1.9.0 "Reset the account-scoped Files drive on every account switch", commit 5c06ae8b)
   - What WEB does: `initedAccountRef` tracks the account; on change it `clearClient()`s and re-bootstraps (`components/files/files-app.tsx:110-114`, `160-179`).
   - What RN does: `FilesScreen` keeps `allNodes`/`path` in component state and loads only on mount (`src/screens/FilesScreen.tsx:113-114`, `171-173`); `switchAccount` resets contacts/calendar stores but nothing files-related (`src/stores/auth-store.ts:360-380`). Switching accounts while the Files tab is mounted keeps showing the previous account's tree (and any create/upload goes to the new account under a stale `parentId`) until pull-to-refresh.
   - Fix hint: subscribe to `useAuthStore(s => s.activeAccountId)` in `FilesScreen` and reset `path`/`selection` + call `loadFiles()` on change, or move the node cache into a store that `switchAccount` resets.
 
-- [ ] **Files capability gated on session capabilities, not the account's** — `P3` — `bugfix-parity` (changelog 1.7.5 "Hide Files when the account lacks the filenode capability (#563)")
+- [x] **Files capability gated on session capabilities, not the account's** — fixed in a0ce925 — `P3` — `bugfix-parity` (changelog 1.7.5 "Hide Files when the account lacks the filenode capability (#563)")
   - What WEB does: `supportsFiles(accountId)` checks `account.accountCapabilities` (or non-personal) and `probeFileNodeSupport` refuses to probe when the server advertises filenode but the account doesn't (`lib/jmap/client.ts:6418-6458`).
   - What RN does: `useHasFiles()` checks `session.capabilities` (`src/lib/capabilities.ts:33-35`); `App.tsx:184-193` disables the tab from that. An account whose `jmap-file-node-*` permissions were revoked still gets an enabled Files tab that errors on load.
   - Fix hint: check `session.accounts[filesAccountId].accountCapabilities[CAPABILITIES.FILES]` (or `!isPersonal`) in `useHasFiles`.
 
-- [ ] **No upload size limit from server config** — `P3` — `bugfix-parity` (changelog 1.4.10 "Files: Use dynamic server-configured maximum upload sizes")
+- [x] **No upload size limit from server config** — fixed in c0e1d6b — `P3` — `bugfix-parity` (changelog 1.4.10 "Files: Use dynamic server-configured maximum upload sizes")
   - What WEB does: filters oversized files against `client.getMaxSizeUpload()` and toasts `file_too_large` (`components/files/files-app.tsx:311-329`; `lib/jmap/client.ts:4179-4182`).
   - What RN does: `startUpload` passes the picked asset straight to `uploadFileNode` (`src/screens/FilesScreen.tsx:345-381`); `grep -ri maxSizeUpload src` → nothing. The server returns an opaque 4xx instead.
   - Fix hint: read `session.capabilities['urn:ietf:params:jmap:core'].maxSizeUpload` and compare with `asset.size` before uploading.
 
-- [ ] **Upload buffers whole file in memory, no progress, no cancel** — `P2` — `partial` (changelog 1.4.12 "Stream WebDAV PUT uploads (#162)", 1.7.2 "Report real upload progress (#333)")
+- [x] **Upload buffers whole file in memory, no progress, no cancel** — fixed in a0ce925 — `P2` — `partial` (changelog 1.4.12 "Stream WebDAV PUT uploads (#162)", 1.7.2 "Report real upload progress (#333)")
   - What WEB does: `uploadBlob(file, { signal, onProgress })` with XHR progress and an `AbortController`; progress bar with percent and Cancel (`stores/file-store.ts:591-658`; `components/files/file-browser.tsx:1178-1212`).
   - What RN does: `uploadBlob` reads the entire file with `new File(uri).bytes()` and posts an `ArrayBuffer` (`src/api/blob.ts:22-31`); `FilesScreen` shows only a spinner in the header button (`:460-464`). Large videos/PDFs from the document picker can exhaust memory; the user cannot cancel.
   - Fix hint: use `expo-file-system` `uploadAsync`/`FileSystem.createUploadTask` (supports progress callbacks and cancellation, streams from disk) for the JMAP upload URL, then `FileNode/set`.
 
-- [ ] **Single-file upload only; no duplicate-name handling** — `P3` — `partial`
+- [x] **Single-file upload only; no duplicate-name handling** — fixed in c0e1d6b — `P3` — `partial`
   - What WEB does: multi-select input (`file-browser.tsx:1135-1141`), per-file progress `current/totalFiles`, `getUniqueName` appends " (1)" when a name already exists (`stores/file-store.ts:211-219`, `622-628`).
   - What RN does: `getDocumentAsync({ multiple: false })` (`src/screens/FilesScreen.tsx:357-360`); uploading the same name twice creates two nodes with the same name.
   - Fix hint: `multiple: true` + sequential upload loop; reuse WEB's `getUniqueName` against `visibleFiles`.
 
-- [ ] **No in-app preview (image/text/markdown/PDF/audio/video/eml)** — `P2` — `missing`
+- [ ] **No in-app preview (image/text/markdown/PDF/audio/video/eml)** — `P2` — `missing` — deferred: the OS viewer/share sheet stays the mobile answer for now; no inline viewer ported
   - What WEB does: `ImagePreviewModal` and `FilePreviewModal` (text, markdown, PDF incl. mobile pdf.js viewer, audio, video, EML) chosen via `getFilePreviewKind` (`lib/file-preview.ts:29-68`; `components/files/file-preview-modal.tsx`, `image-preview-modal.tsx`, `pdf-mobile-viewer.tsx`; `files-app.tsx:487-495`, `690-708`).
   - What RN does: tapping a file calls `shareAttachment` which downloads to cache and hands off to the OS share/viewer sheet (`src/screens/FilesScreen.tsx:248-258`; `src/lib/email-export.ts` "preview" variant). Works but there is no inline viewer and no "recent files" tracking.
   - Fix hint: reuse whatever attachment viewer the mail area has (image modal / WebView for text+PDF); N/A if the team decides the OS viewer is the mobile answer - then close this item.
 
-- [ ] **Move (to folder / to parent), cut/copy/paste, duplicate, new text file, undo missing** — `P2` — `missing`
+- [x] **Move (to folder / to parent), cut/copy/paste, duplicate, new text file, undo missing** — fixed in c0e1d6b — `P2` — `missing` — Move to… (folder picker) and Duplicate done; deferred: cut/copy/paste, new text file, undo (lower priority on mobile)
   - What WEB does: `moveToFolder`, `moveToParent`, `cutResources`/`copyResources`/`pasteResources` (copy via `copyFileNode` = new node reusing the blobId), `duplicateResource`, `createTextFile`, `undoLastAction` with toast Undo (`stores/file-store.ts:825-933`, `1006-1015`; `lib/jmap/client.ts:6787-6830` `copyFileNode`; context menu `file-browser.tsx:1674-1801`; drag-drop onto folders and ".." rows).
   - What RN does: actions sheet offers Preview/Share, Save to device, Sharing & access, Rename, Delete only (`src/screens/FilesScreen.tsx:804-858`); `src/api/files.ts` has `updateFileNode(id, { parentId })` (`:149-160`) so move is one call away, but no copy helper.
   - Fix hint: add "Move to…" (folder picker built from `allNodes` folders, then `updateFileNode(id, { parentId })`) and "Duplicate" (`FileNode/set create` with original `blobId/type/size`, mirroring WEB `copyFileNode`). Cut/copy/paste and undo are lower priority on mobile.
 
-- [ ] **Favorites, recent files, search/filter, details pane missing** — `P3` — `missing`
+- [x] **Favorites, recent files, search/filter, details pane missing** — fixed in c0e1d6b — `P3` — `missing` — search field and a type/size/modified line in the actions sheet done; deferred: favorites/recent (optional)
   - What WEB does: favorites and recent (pruned against server nodes on refresh, changelog 1.4.12 #146) persisted in localStorage (`stores/file-store.ts:243-248`, `518-527`, `988-1004`); in-list search (`file-browser.tsx:494-525`, `1106-1132`); details sidebar with type/size/modified/path (`:1929-1969`).
   - What RN does: none of these (`FilesScreen.tsx` has no search state; settings has no favorites store).
   - Fix hint: a header search field filtering `visibleFiles` is cheap; details can be a row in the actions sheet; favorites/recent optional.
 
-- [ ] **Multi-select batch download; batch delete only** — `P3` — `partial`
+- [x] **Multi-select batch download; batch delete only** — fixed in c0e1d6b — `P3` — `partial`
   - What WEB does: multi-select toolbar offers Download (N) and Delete (N) (`file-browser.tsx:979-999`).
   - What RN does: selection header offers Delete only (`src/screens/FilesScreen.tsx:405-427`).
 
-- [ ] **Sort direction/key only changeable in Settings; no in-screen column sort** — `P3` — `partial`
+- [x] **Sort direction/key only changeable in Settings; no in-screen column sort** — fixed in c0e1d6b — `P3` — `partial`
   - What WEB does: clickable Name/Size/Modified headers toggle sort (`file-browser.tsx:814-828`, `1529-1546`).
   - What RN does: sort comes from `filesDefaultSortKey/Dir` settings only (`FilesScreen.tsx:134-135`, `210-231`).
   - Fix hint: a sort chip in the header cycling name/size/modified + direction; fix the `modified` property first.
 
-- [ ] **Settings exposed but ignored: folder layout "Sidebar" and "Show thumbnails"** — `P3` — `rn-only-bug`
+- [x] **Settings exposed but ignored: folder layout "Sidebar" and "Show thumbnails"** — fixed in c0e1d6b — `P3` — `rn-only-bug` — thumbnails implemented (authenticated Image), folder-layout radio removed (sidebar is N/A on a phone)
   - What WEB does: `folderLayout: 'sidebar'` renders `FolderTreeSidebar` and hides folders from the list (`file-browser.tsx:497-500`, `1223-1269`); `showThumbnails` renders image thumbnails (`:272-297`, `:1494-1496`).
   - What RN does: `FilesSettings.tsx:161-171`, `219-224` offer both toggles and preview them, but `FilesScreen` never reads `filesFolderLayout` or `filesShowThumbnails` (only `showIcons/coloredIcons/showHiddenFiles/sort/view`, `:131-136`).
   - Fix hint: either implement thumbnails (`<Image source={{ uri: getFileNodeDownloadUrl(node), headers: { Authorization } }}>` for image extensions) and drop the folder-layout radio (sidebar is N/A on a phone), or hide both settings.
 
-- [ ] **Legacy flat-name migration not run on RN** — `P3` — `missing` (changelog 1.7.3 #379; WEB `stores/file-store.ts:286-479`)
+- [ ] **Legacy flat-name migration not run on RN** — `P3` — `missing` (changelog 1.7.3 #379; WEB `stores/file-store.ts:286-479`) — deferred: WEB runs the one-time migration; not ported to mobile
   - What WEB does: on first listing, reparents nodes named with `/`, `∕`, `⁄`, `／` separators and replaces blob-backed "dir marker" files with real folders, with a progress overlay (`files-app.tsx:245-263`, `710-734`).
   - What RN does: reads only the real hierarchy (`src/api/files.ts:6-14` comment acknowledges WEB migrates). A user who never opens WEB sees legacy files as flat names at the root. Acceptable if WEB is always used at least once; otherwise port `migrateLegacyFlatNodes`.
 
-- [ ] **Deep link `/files/<folder>` and `?preview=` not handled** — `P3` — `missing` (changelog 1.8.1 "Deep links for mail, calendar, contacts, files")
+- [ ] **Deep link `/files/<folder>` and `?preview=` not handled** — `P3` — `missing` (changelog 1.8.1 "Deep links for mail, calendar, contacts, files") — deferred: belongs to the navigation area (RN has no linking config yet)
   - What WEB does: `parseFilesPath`/`buildFilesPath` walk the drive to the folder and open the preview (`components/files/files-app.tsx:190-278`; `lib/deep-links.ts:381`).
   - What RN does: no React Navigation `linking` config anywhere (`grep -rn "linking" src App.tsx` → none); `Files: undefined` in `src/navigation/types.ts:35`.
   - Fix hint: belongs to the navigation area; when linking is added, map `/files/*` to `Files` with a `path` param and walk `allNodes` by names.
 
-- [ ] **Hard-coded English throughout Files screen and ShareSheet** — `P3` — `rn-only-bug`
+- [x] **Hard-coded English throughout Files screen and ShareSheet** — fixed in c0e1d6b — `P3` — `rn-only-bug`
   - What WEB does: everything via `files.*` locale keys (`locales/en/common.json` `files` has ~120 keys incl. `share`, `shared`, `shared_with_me`, `shared_by`).
   - What RN does: `FilesScreen.tsx` ("New folder", "Delete this item?", "Shared by", "Upload unavailable"…, e.g. `:148`, `:310`, `:521`, `:621`, `:722-727`, `:825-849`) and `ShareSheet.tsx` (`:41-45`, `:160-166`, `:175`, `:219-242`) use literals, even though RN `locales/en/common.json` already has a `files` block (`:1513`) with most of these keys.
   - Fix hint: wire `useLocaleStore(s => s.t)` with the existing keys; add `share/shared/shared_with_me/shared_by` from WEB.
 
-- [ ] **Stability warning banner not shown** — `P3` — `partial`
+- [ ] **Stability warning banner not shown** — `P3` — `partial` — deferred: product call, not shown on mobile
   - What WEB does: persistent yellow "stability_warning" above the browser (`files-app.tsx:617-620`; changelog 1.4.10 "Update file feature disabled messages and add stability warnings").
   - What RN does: nothing. Optional; product call.
 
-- [ ] **Storage quota not surfaced in Files** — `P3` — `missing` (partly N/A)
+- [ ] **Storage quota not surfaced in Files** — `P3` — `missing` (partly N/A) — N/A: quota belongs to the Account/Settings area, Files shows none (like WEB's mobile layout)
   - What WEB does: passes `quota` from the email store into the navigation rail beside Files (`files-app.tsx:55`, `:569`); changelog 1.7.5 "Storage quota not shown with Stalwart (#577)".
   - What RN does: `FilesScreen` shows no quota. Whether RN shows quota anywhere is outside this area; if it exists in Settings/Account, this is N/A.
 
-- [ ] **README still says "file storage - UI stubs only"** — `P3` — `rn-only-bug` (docs)
+- [x] **README still says "file storage - UI stubs only"** — fixed in c0e1d6b — `P3` — `rn-only-bug` (docs)
   - `repos/react-native/README.md:30` lists filters, S/MIME, plugins, themes and file storage as stubs; filters, vacation and files are real implementations (`src/api/files.ts`, `src/screens/FilesScreen.tsx`, `src/components/files/ShareSheet.tsx`, `src/api/__tests__/files.test.ts`). Update the README when the items above land.
 
 ## Verified at parity (brief list, so the fixer knows what NOT to redo)
