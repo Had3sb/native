@@ -203,12 +203,12 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
 
 ### i18n and locales
 
-- [ ] **12 of WEB's 27 locales missing in RN** — `P2` — `missing`
+- [x] **12 of WEB's 27 locales missing in RN** — fixed in 990cd84 — `P2` — `missing`
   - What WEB does: `ar ca cs da de en es fa fr he hu it ja ko lv mn nb nl pl pt ro ru sk tr uk zh zh-TW` (`i18n/routing.ts:15`).
   - What RN does: `SUPPORTED_LOCALES` has 15 (`RN: src/i18n/index.ts:21-37`); `scripts/sync-locales.mjs` copies every WEB folder (`:32-42`) but `locales/` only contains the 15 and the index imports them statically. Missing: ar, ca, da, fa, he, hu, mn, nb, ro, sk, tr, zh-TW.
   - Fix hint: run the sync script, add the imports/labels, and handle `zh-TW` (region subtag) in `detectDeviceLocale` which only compares `languageCode` (`:45-52`).
 
-- [ ] **Vendored catalogs are stale and drift from WEB** — `P2` — `partial`
+- [x] **Vendored catalogs are stale and drift from WEB** — fixed in 990cd84 — `P2` — `partial` — RN-only keys live in locales/rn/<lang>.json (merged at runtime); sync-locales.mjs --check reports drift
   - What WEB does: `locales/en/common.json` has 2959 leaf keys (2026-08-29).
   - What RN does: `RN: locales/en/common.json` last synced 2026-07-22 has 2336 keys; 640 WEB keys are absent; RN en carries 17 keys WEB lacks (hand-added `email_composer.*`) which the 14 other RN locales do not have (de/fr/ja each miss the same 16 keys), and 19 keys RN code calls (`email_composer.schedule_*`, `email_list.no_*_folder`) exist in no catalog, so the inline fallback always shows in every language.
   - Fix hint: make `sync-locales.mjs` merge instead of overwrite (keep RN-only keys under a separate `locales/rn/<lang>.json` overlay), add a key-parity test like WEB's translation coverage test, and run it in CI.
@@ -218,7 +218,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: plain nested lookup returning the raw string (`RN: src/i18n/index.ts:54-71`); any WEB string with `{placeholder}` renders literally, and plurals are hand-rolled English (`OfflineBanner.tsx:22`, `AboutDataSettings.tsx:96,176,190`, `LayoutSettings.tsx:148-149`).
   - Fix hint: add `t(key, fallback, params)` with `{name}` substitution and a minimal ICU plural (`intl-messageformat` is small and works on Hermes), then replace the hand-rolled plurals.
 
-- [ ] **No RTL support (ar/he/fa)** — `P2` — `missing`
+- [ ] **No RTL support (ar/he/fa)** — `P2` — `missing` — done in 990cd84: forceRTL/allowRTL on override + restart hint, isLayoutRTL() helper in src/i18n; deferred: SwipeableRow side swap (mail-list agent's file - call isLayoutRTL() there)
   - What WEB does: `getLocaleDirection` sets `dir=rtl`, logical CSS, JS popovers flip, RTL-aware swipe (`i18n/direction.ts`; changelog 1.7.0-1.7.3 RTL entries).
   - What RN does: none of the three RTL locales are shipped; no `I18nManager` usage anywhere; `android:supportsRtl="true"` is set (`RN: AndroidManifest.xml:16`) so the OS would mirror layouts when the device locale is RTL, but the app's own locale override cannot force it, and `SwipeableRow` maps left/right physically.
   - Fix hint: when adding ar/he/fa, call `I18nManager.forceRTL(dir==='rtl')` + `allowRTL` on override change (requires reload), audit `paddingLeft/Right` → `paddingStart/End`, and swap swipe actions when `I18nManager.isRTL`.
@@ -309,7 +309,7 @@ RN toggles that are stored but never read (fix: either wire them or remove the c
   - What RN does: `Dialog.tsx:8-17` takes title/message/confirm/cancel with English defaults `'Confirm'`/`'Cancel'` (`:33-34`); text prompts are ad-hoc `TextInput`s.
   - Fix hint: add an `input` prop and default the labels via `t('common.confirm')`/`t('common.cancel')`.
 
-- [ ] **Offline banner not localized; no "reconnect" retry surface** — `P3` — `partial`
+- [x] **Offline banner not localized; no "reconnect" retry surface** — fixed in 990cd84 — `P3` — `partial`
   - What WEB does: `online` event triggers refetch (`components/mail/mail-app.tsx:269-278`, `lib/jmap/client.ts:7398`); strings come from catalogs.
   - What RN does: `OfflineBanner.tsx:22-29` hard-codes "You are offline" with an English plural; network-store logic itself is sound (`network-store.ts:16-22` treats `isInternetReachable === null` as online) and App.tsx retries the session on reconnect (`:245-252`).
   - Fix hint: `t('common.offline', ...)` and reuse plural helper once interpolation exists.
