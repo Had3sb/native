@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { spacing, radius, typography, componentSizes, type ThemePalette } from '../../theme/tokens';
 import { useColors, useResolvedTheme } from '../../theme/colors';
+import { useLocaleStore } from '../../stores/locale-store';
 
 // The white mark disappears on the light palette, so pick per theme.
 const LOGO_LIGHT = require('../../../assets/logos/Bulwark Logo Dark.png');
@@ -37,15 +38,16 @@ export default function SigningInStep({ phase, serverUrl, email }: SigningInStep
   const c = useColors();
   const theme = useResolvedTheme();
   const styles = React.useMemo(() => makeStyles(c), [c]);
-  const host = hostOf(serverUrl);
+  const t = useLocaleStore((s) => s.t);
+  const host = serverUrl ? hostOf(serverUrl) : t('login.mobile.your_server', 'your server');
 
   const copy: Record<SigningInPhase, { title: string; detail: string }> = {
     browser: {
-      title: `Opening ${host}`,
-      detail: 'Finish signing in on the page that just opened. We’ll take it from there.',
+      title: t('login.mobile.opening', 'Opening {host}', { host }),
+      detail: t('login.mobile.opening_detail', 'Finish signing in on the page that just opened. We’ll take it from there.'),
     },
-    connecting: { title: `Connecting to ${host}`, detail: 'Setting up your mailbox…' },
-    pairing: { title: 'Redeeming your sign-in code', detail: `Pairing this device with ${host}…` },
+    connecting: { title: t('login.mobile.connecting', 'Connecting to {host}', { host }), detail: t('login.mobile.connecting_detail', 'Setting up your mailbox…') },
+    pairing: { title: t('login.mobile.pairing', 'Redeeming your sign-in code'), detail: t('login.mobile.pairing_detail', 'Pairing this device with {host}…', { host }) },
   };
 
   return (

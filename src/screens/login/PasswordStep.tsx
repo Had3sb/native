@@ -5,6 +5,7 @@ import { spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { Button, Input } from '../../components';
 import LoginNotice from './LoginNotice';
+import { useLocaleStore } from '../../stores/locale-store';
 
 interface PasswordStepProps {
   serverUrl: string;
@@ -40,19 +41,20 @@ export default function PasswordStep({
 }: PasswordStepProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
   const [showPassword, setShowPassword] = React.useState(false);
 
   return (
     <View style={styles.root}>
       <View style={styles.heading}>
-        <Text style={styles.title}>Sign in to {hostOf(serverUrl)}</Text>
+        <Text style={styles.title}>{t('login.mobile.password_title', 'Sign in to {host}', { host: hostOf(serverUrl) })}</Text>
         <Text style={styles.subtitle}>
-          Your password is sent to this server only, and stored in the device keychain.
+          {t('login.mobile.password_subtitle', 'Your password is sent to this server only, and stored in the device keychain.')}
         </Text>
       </View>
 
       <Input
-        label="Email or username"
+        label={t('login.mobile.username_label', 'Email or username')}
         placeholder="you@example.com"
         value={email}
         onChangeText={onChangeEmail}
@@ -64,8 +66,8 @@ export default function PasswordStep({
       />
 
       <Input
-        label="Password"
-        placeholder="Enter your password"
+        label={t('login.password_label', 'Password')}
+        placeholder={t('login.password_placeholder', 'Enter your password')}
         value={password}
         onChangeText={onChangePassword}
         autoFocus={Boolean(email)}
@@ -79,7 +81,7 @@ export default function PasswordStep({
             onPress={() => setShowPassword((v) => !v)}
             hitSlop={8}
             accessibilityRole="button"
-            accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+            accessibilityLabel={showPassword ? t('login.hide_password', 'Hide password') : t('login.show_password', 'Show password')}
           >
             {showPassword ? <EyeOff size={20} color={c.textMuted} /> : <Eye size={20} color={c.textMuted} />}
           </Pressable>
@@ -88,7 +90,7 @@ export default function PasswordStep({
 
       {totpRequired ? (
         <Input
-          label="Two-factor code"
+          label={t('login.totp_label', 'Two-factor code')}
           placeholder="123456"
           value={totp}
           onChangeText={(value) => onChangeTotp?.(value)}
@@ -105,7 +107,7 @@ export default function PasswordStep({
       {notice ? <LoginNotice title={notice.title} detail={notice.detail} /> : null}
 
       <Button variant="default" size="md" onPress={onSubmit}>
-        Sign in
+        {t('login.sign_in', 'Sign in')}
       </Button>
     </View>
   );

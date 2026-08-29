@@ -2,6 +2,8 @@ import React from 'react';
 import { BackHandler } from 'react-native';
 import { useAuthStore } from '../stores/auth-store';
 import { useAccountStore } from '../stores/account-store';
+import { useLocaleStore } from '../stores/locale-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { QrScanModal } from '../components/QrScanModal';
 import { parseQrLoginPayload } from '../lib/oauth';
 import {
@@ -27,6 +29,8 @@ interface LoginScreenProps {
 
 type StepName = 'choose' | 'email' | 'server' | 'confirm' | 'password';
 
+const RECENT_EMAILS_KEY = 'login:recentEmails:v1';
+
 /**
  * Sign-in, one question per screen, cheapest question first.
  *
@@ -43,6 +47,7 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
   const clearError = useAuthStore((state) => state.clearError);
   const storeError = useAuthStore((state) => state.error);
 
+  const t = useLocaleStore((state) => state.t);
   const accounts = useAccountStore((state) => state.accounts);
   const activeAccountId = useAccountStore((state) => state.activeAccountId);
 
@@ -64,6 +69,32 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
   const [searching, setSearching] = React.useState(false);
   const [busy, setBusy] = React.useState<SigningInPhase | null>(null);
   const [scannerVisible, setScannerVisible] = React.useState(false);
+
+  // Addresses typed before on this device (last 5) plus the registry's, so a
+  // returning user taps instead of retyping. Never contains passwords.
+  const [recentEmails, setRecentEmails] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    void AsyncStorage.getItem(RECENT_EMAILS_KEY).then((raw) => {
+      try {
+        const list = raw ? (JSON.parse(raw) as unknown) : [];
+        if (Array.isArray(list)) setRecentEmails(list.filter((v): v is string => typeof v === 'string'));
+      } catch {
+        // ignore corrupt entry
+      }
+    }).catch(() => undefined);
+  }, []);
+  const emailSuggestions = React.useMemo(() => {
+    const out: string[] = [];
+    for (const v of [...recentEmails, ...accounts.map((a) => a.email || a.username)]) {
+      if (v && v.includes('@') && !out.includes(v)) out.push(v);
+    }
+    return out;
+  }, [recentEmails, accounts]);
+  const rememberEmail = React.useCallback((address: string) => {
+    const next = [address, ...recentEmails.filter((v) => v !== address)].slice(0, 5);
+    setRecentEmails(next);
+    void AsyncStorage.setItem(RECENT_EMAILS_KEY, JSON.stringify(next)).catch(() => undefined);
+  }, [recentEmails]);
 
   // Servers we already hold credentials for. Discovery trusts these without a
   // probe, which makes "second account on the same host" instant.
@@ -150,31 +181,32 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
           setServerUrl(pending.serverUrl);
           setTotpRequired(true);
           setBusy(null);
-          setNotice(describeLoginError(err, { serverUrl: target }));
+          setNotice(describeLoginError(err, { serverUrl: target, t }));
           setHistory((prev) => [...prev, step]);
           setStep('password');
           return;
         }
-        setNotice(describeLoginError(err, { serverUrl: target }));
+        setNotice(describeLoginError(err, { serverUrl: target, t }));
       } finally {
         setBusy(null);
       }
     },
-    [finishIfSignedIn, isAddMode, loginViaWebmail, step],
+    [finishIfSignedIn, isAddMode, loginViaWebmail, step, t],
   );
 
   const handleEmailContinue = React.useCallback(async () => {
     const value = email.trim();
     if (!isEmailAddress(value)) {
       setNotice({
-        title: 'Enter a full email address',
-        detail: 'Like ada@example.com. If you sign in with a username instead, use “I know my server address”.',
+        title: t('login.mobile.notice_full_email', 'Enter a full email address'),
+        detail: t('login.mobile.notice_full_email_detail', 'Like ada@example.com. If you sign in with a username instead, use “I know my server address”.'),
       });
       return;
     }
 
     setNotice(null);
     setSearching(true);
+    rememberEmail(value);
     try {
       const found = await discoverServerForEmail(value, { knownServerUrls });
       if (found) {
@@ -190,35 +222,35 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
     } finally {
       setSearching(false);
     }
-  }, [email, goTo, knownServerUrls]);
+  }, [email, goTo, knownServerUrls, rememberEmail, t]);
 
   const handleServerContinue = React.useCallback(() => {
     const normalized = normalizeServerUrl(serverInput);
     if (!normalized) {
       setNotice({
-        title: "That doesn't look like a server address",
-        detail: 'Try the address you use for webmail, like mail.example.com.',
+        title: t('login.mobile.notice_bad_server', "That doesn't look like a server address"),
+        detail: t('login.mobile.notice_bad_server_detail', 'Try the address you use for webmail, like mail.example.com.'),
       });
       return;
     }
     setServerUrl(normalized);
     setServerDiscovered(false);
     goTo('confirm');
-  }, [goTo, serverInput]);
+  }, [goTo, serverInput, t]);
 
   const handlePasswordSubmit = React.useCallback(async () => {
     const target = serverUrl || normalizeServerUrl(serverInput);
     if (!target) {
-      setNotice({ title: 'We need a server address first' });
+      setNotice({ title: t('login.mobile.notice_need_server', 'We need a server address first') });
       return;
     }
     if (!email.trim() || !password) {
-      setNotice({ title: 'Enter your email and password' });
+      setNotice({ title: t('login.mobile.notice_need_credentials', 'Enter your email and password') });
       return;
     }
 
     if (totpRequired && !/^\d{6,8}$/.test(totp.trim())) {
-      setNotice({ title: 'Enter the 6-digit code from your authenticator app' });
+      setNotice({ title: t('login.mobile.notice_need_code', 'Enter the 6-digit code from your authenticator app') });
       return;
     }
 
@@ -234,14 +266,14 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
     } catch (err) {
       if (err instanceof Error && err.name === 'TotpRequiredError') {
         setTotpRequired(true);
-        setNotice(describeLoginError(err, { serverUrl: target }));
+        setNotice(describeLoginError(err, { serverUrl: target, t }));
         return;
       }
-      setNotice(describeLoginError(err, { serverUrl: target }));
+      setNotice(describeLoginError(err, { serverUrl: target, t }));
     } finally {
       setBusy(null);
     }
-  }, [email, finishIfSignedIn, isAddMode, login, password, serverInput, serverUrl, totp, totpRequired]);
+  }, [email, finishIfSignedIn, isAddMode, login, password, serverInput, serverUrl, totp, totpRequired, t]);
 
   const handleScanned = React.useCallback(
     async (data: string) => {
@@ -249,8 +281,8 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
       const payload = parseQrLoginPayload(data);
       if (!payload) {
         setNotice({
-          title: "That code isn't a Bulwark sign-in code",
-          detail: 'Open Bulwark on the web, then Settings → Security → Link device to show one.',
+          title: t('login.mobile.notice_bad_qr', "That code isn't a Bulwark sign-in code"),
+          detail: t('login.mobile.notice_bad_qr_detail', 'Open Bulwark on the web, then Settings → Security → Link device to show one.'),
         });
         return;
       }
@@ -272,12 +304,12 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
         await loginViaPairing(payload.webmailUrl, payload.code, { addAccount: isAddMode });
         finishIfSignedIn(wasAuthenticated);
       } catch (err) {
-        setNotice(describeLoginError(err, { serverUrl: payload.webmailUrl }));
+        setNotice(describeLoginError(err, { serverUrl: payload.webmailUrl, t }));
       } finally {
         setBusy(null);
       }
     },
-    [finishIfSignedIn, isAddMode, loginViaPairing, runHandoff],
+    [finishIfSignedIn, isAddMode, loginViaPairing, runHandoff, t],
   );
 
   // ── render ─────────────────────────────────────────────
@@ -352,6 +384,7 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
             }}
             isSearching={searching}
             notice={notice}
+            suggestions={emailSuggestions}
           />
         ) : null}
 

@@ -5,6 +5,7 @@ import { spacing, radius, typography, type ThemePalette } from '../../theme/toke
 import { useColors } from '../../theme/colors';
 import { Button } from '../../components';
 import LoginNotice from './LoginNotice';
+import { useLocaleStore } from '../../stores/locale-store';
 
 interface ConfirmStepProps {
   serverUrl: string;
@@ -35,14 +36,15 @@ export default function ConfirmStep({
 }: ConfirmStepProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
 
   return (
     <View style={styles.root}>
       <View style={styles.heading}>
         <Text style={styles.title}>
-          {discovered ? 'Found your mail server' : 'Check this looks right'}
+          {discovered ? t('login.mobile.confirm_found', 'Found your mail server') : t('login.mobile.confirm_check', 'Check this looks right')}
         </Text>
-        <Text style={styles.subtitle}>Next you&apos;ll sign in on your provider&apos;s own page.</Text>
+        <Text style={styles.subtitle}>{t('login.mobile.confirm_subtitle', "Next you'll sign in on your provider's own page.")}</Text>
       </View>
 
       <View style={styles.card}>
@@ -56,7 +58,7 @@ export default function ConfirmStep({
           {!serverUrl.startsWith('https://') ? (
             <View style={styles.cardMetaRow}>
               <View style={styles.dot} />
-              <Text style={styles.cardMeta}>Unencrypted connection</Text>
+              <Text style={styles.cardMeta}>{t('login.mobile.unencrypted', 'Unencrypted connection')}</Text>
             </View>
           ) : null}
         </View>
@@ -64,22 +66,22 @@ export default function ConfirmStep({
 
       <LoginNotice
         tone="info"
-        title="Your password stays with your provider"
-        detail="You'll type it on their page. Bulwark only stores a sign-in token, which you can revoke at any time."
+        title={t('login.mobile.provider_title', 'Your password stays with your provider')}
+        detail={t('login.mobile.provider_detail', "You'll type it on their page. Bulwark only stores a sign-in token, which you can revoke at any time.")}
       />
 
       {notice ? <LoginNotice title={notice.title} detail={notice.detail} /> : null}
 
       <Button variant="default" size="md" onPress={onContinue}>
-        Continue
+        {t('login.mobile.continue', 'Continue')}
       </Button>
 
       <View style={styles.links}>
         <Pressable onPress={onUsePassword} hitSlop={8}>
-          <Text style={styles.link}>Sign in with a password instead</Text>
+          <Text style={styles.link}>{t('login.mobile.use_password', 'Sign in with a password instead')}</Text>
         </Pressable>
         <Pressable onPress={onChangeServer} hitSlop={8}>
-          <Text style={styles.linkMuted}>Use a different server</Text>
+          <Text style={styles.linkMuted}>{t('login.mobile.different_server', 'Use a different server')}</Text>
         </Pressable>
       </View>
     </View>

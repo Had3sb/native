@@ -2,11 +2,30 @@
   "calendar": {
     "event_modal": {
       "participant_placeholder": "Add participant by email"
+    },
+    "management": {
+      "description_placeholder": "Optional",
+      "edit_calendar": "Edit calendar",
+      "new_calendar": "New calendar"
+    },
+    "share": {
+      "add_people": "Add people",
+      "error": "Failed to update sharing",
+      "no_matches": "No matches",
+      "no_principals": "Sharing is not available on this server.",
+      "role_custom": "Custom",
+      "search_placeholder": "Search by name or email",
+      "shared_with": "Shared with",
+      "title": "Share"
     }
   },
   "common": {
+    "add": "Add",
     "back": "Back",
-    "dismiss": "Dismiss"
+    "create": "Create",
+    "dismiss": "Dismiss",
+    "done": "Done",
+    "remove": "Remove"
   },
   "context_menu": {
     "color_tag": "Tag",
@@ -37,9 +56,14 @@
   },
   "email_list": {
     "error": "Error",
+    "marked_as_spam": "Marked as spam",
+    "marked_not_spam": "Marked as not spam",
+    "move_same_account": "Messages can only be moved within the same account",
+    "moved_to_trash": "Email moved to Trash",
     "no_archive_folder": "Could not find an Archive folder on the server.",
     "no_junk_folder": "Could not find a Spam/Junk folder on the server.",
-    "no_trash_folder": "Could not find a Trash folder on the server. Please check your mailbox configuration."
+    "no_trash_folder": "Could not find a Trash folder on the server. Please check your mailbox configuration.",
+    "undo_failed": "Undo failed"
   },
   "email_viewer": {
     "color_tag": {
@@ -69,6 +93,92 @@
     "share_search_placeholder": "Search by name or email",
     "shared_with": "Shared with"
   },
+  "login": {
+    "mobile": {
+      "add_subtitle": "You're signed in to these already.",
+      "add_title": "Add another account",
+      "camera_allow": "Allow camera access",
+      "camera_disabled": "Camera access is disabled. Enable it in Settings to scan a sign-in QR code.",
+      "camera_needed": "Bulwark Mail needs camera access to scan a sign-in QR code.",
+      "choose_subtitle": "Choose how you'd like to sign in.",
+      "confirm_check": "Check this looks right",
+      "confirm_found": "Found your mail server",
+      "confirm_subtitle": "Next you'll sign in on your provider's own page.",
+      "connecting": "Connecting to {host}",
+      "connecting_detail": "Setting up your mailbox…",
+      "continue": "Continue",
+      "different_server": "Use a different server",
+      "elsewhere_title": "An account somewhere else",
+      "email_desc": "We'll find your mail server",
+      "email_step_hint": "Works with Stalwart and any other JMAP mail server.",
+      "email_step_subtitle": "That's usually all we need to find your mail server.",
+      "email_step_title": "What's your email address?",
+      "email_step_title_add": "What's the other address?",
+      "email_title": "Use my email address",
+      "err_bad_detail": "Check your email and password. If your account uses two-factor sign-in, create an app password in the webmail and use that here.",
+      "err_bad_title": "That didn't work",
+      "err_cert_detail": "The server's security certificate was rejected. If this is your own server, check the certificate is valid and not expired.",
+      "err_cert_title": "Couldn't verify {host}",
+      "err_code_expired_detail": "Sign-in codes are good for a few minutes. Generate a fresh one in the webmail and scan again.",
+      "err_code_expired_title": "That code has expired",
+      "err_generic_detail": "Something went wrong. Try again.",
+      "err_generic_title": "Sign-in failed",
+      "err_interrupted_detail": "The response didn't match the request we started. Try signing in again.",
+      "err_interrupted_title": "Sign-in was interrupted",
+      "err_no_server_detail": "Double-check the address, or scan a sign-in code from the webmail instead.",
+      "err_no_server_title": "No mail server at {host}",
+      "err_no_webmail_detail": "This server has no Bulwark webmail and no OAuth sign-in. Use a password (or an app password) instead.",
+      "err_no_webmail_title": "No sign-in page at {host}",
+      "err_rate_detail": "The server asked us to wait a moment. Try again shortly.",
+      "err_rate_detail_seconds": "The server asked us to wait. Try again in about {seconds} seconds.",
+      "err_rate_title": "Too many attempts",
+      "err_server_detail": "The server answered with an error. Try again in a few minutes.",
+      "err_server_title": "{host} is having trouble",
+      "err_totp_bad_detail": "Check your password and the current code from your authenticator app, then try again.",
+      "err_totp_detail": "This account is protected with two-factor sign-in. Type the 6-digit code from your authenticator app.",
+      "err_totp_title": "Enter your two-factor code",
+      "err_unreachable_detail": "Check your connection and the server address, then try again.",
+      "err_unreachable_title": "Can't reach {host}",
+      "know_server": "I know my server address",
+      "known_server_desc": "We already know this server, so there's no setup",
+      "known_server_title": "Another account on {host}",
+      "looking_up": "Looking up your server…",
+      "manual": "Enter server details manually",
+      "notice_bad_qr": "That code isn't a Bulwark sign-in code",
+      "notice_bad_qr_detail": "Open Bulwark on the web, then Settings → Security → Link device to show one.",
+      "notice_bad_server": "That doesn't look like a server address",
+      "notice_bad_server_detail": "Try the address you use for webmail, like mail.example.com.",
+      "notice_full_email": "Enter a full email address",
+      "notice_full_email_detail": "Like ada@example.com. If you sign in with a username instead, use “I know my server address”.",
+      "notice_need_code": "Enter the 6-digit code from your authenticator app",
+      "notice_need_credentials": "Enter your email and password",
+      "notice_need_server": "We need a server address first",
+      "opening": "Opening {host}",
+      "opening_detail": "Finish signing in on the page that just opened. We’ll take it from there.",
+      "pairing": "Redeeming your sign-in code",
+      "pairing_detail": "Pairing this device with {host}…",
+      "password_subtitle": "Your password is sent to this server only, and stored in the device keychain.",
+      "password_title": "Sign in to {host}",
+      "provider_detail": "You'll type it on their page. Bulwark only stores a sign-in token, which you can revoke at any time.",
+      "provider_title": "Your password stays with your provider",
+      "qr_hint": "Settings → Security → Link device shows a code. Point the camera at it.",
+      "qr_hint_title": "Open Bulwark on your computer",
+      "qr_title": "Sign-in code",
+      "scan_desc": "The fastest way in if you're signed in on the web",
+      "scan_title": "Scan a sign-in code",
+      "server_hint": "Same address you type in the browser. We'll add https:// for you.",
+      "server_label": "Server address",
+      "server_not_found": "We couldn't find a server for {domain}. If you self-host, the address is the one you use for webmail.",
+      "server_scan_hint": "If you're not sure, scan a sign-in code instead. It carries the server address.",
+      "server_subtitle": "Enter the address you use to reach your webmail.",
+      "server_title": "What's your server address?",
+      "the_server": "the server",
+      "unencrypted": "Unencrypted connection",
+      "use_password": "Sign in with a password instead",
+      "username_label": "Email or username",
+      "your_server": "your server"
+    }
+  },
   "offline": {
     "banner": "You are offline",
     "queued_changes": "{count, plural, one {# change} other {# changes}} will sync when you reconnect"
@@ -80,6 +190,16 @@
     "title": "Get notified about new mail"
   },
   "settings": {
+    "account": {
+      "accounts": {
+        "description_mobile": "Reorder how accounts appear in the account switcher, pick the default, or sign one out.",
+        "limit": "Maximum of {count} accounts reached."
+      },
+      "shared_accounts": {
+        "description_mobile": "Group and shared accounts you can read through this account. Their filters and vacation responder are managed from the webmail."
+      },
+      "unknown": "Unknown"
+    },
     "advanced": {
       "about": {
         "deprecated_update": "Update required: {version}",
@@ -163,6 +283,22 @@
       "mobile_description": "Plugins run inside the webmail and extend it in the browser.",
       "mobile_explainer": "The mobile app has no plugin runtime. Install and manage plugins from the webmail under Settings → Plugins; themes and filters they provide are not applied here."
     },
+    "security": {
+      "encryption": {
+        "no_keys": "Add a public key first - encryption at rest needs one."
+      },
+      "not_supported": "Account security management requires a Stalwart server. These features are not available for this account.",
+      "offline": "You are offline. Account security settings need a live connection to the server.",
+      "public_keys": {
+        "add_error": "Failed to add public key",
+        "description": "S/MIME certificates and PGP keys stored on the server. They are used for encryption at rest.",
+        "expires": "expires {date}",
+        "remove_error": "Failed to remove public key",
+        "remove_message": "Encryption at rest that uses this key will stop working.",
+        "remove_title": "Remove public key?",
+        "title": "Public Keys"
+      }
+    },
     "smime": {
       "mobile_description": "Sign and encrypt mail with S/MIME certificates.",
       "mobile_explainer": "S/MIME is not available in the mobile app yet. Manage keys and certificates in the webmail; signed messages are shown without verification here."
@@ -175,6 +311,10 @@
         "date_format": "Dates must be \"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\""
       }
     }
+  },
+  "sidebar": {
+    "remove_account_message": "Sign out of {account} on this device. Your mail stays on the server.",
+    "remove_account_title": "Remove account?"
   },
   "updates": {
     "advisory": "Security advisory",

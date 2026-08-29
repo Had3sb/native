@@ -6,6 +6,7 @@ import { X } from 'lucide-react-native';
 import { spacing, radius, typography, type ThemePalette } from '../theme/tokens';
 import { useColors, useResolvedTheme } from '../theme/colors';
 import Button from './Button';
+import { useLocaleStore } from '../stores/locale-store';
 
 interface QrScanModalProps {
   visible: boolean;
@@ -19,6 +20,7 @@ export function QrScanModal({ visible, onClose, onScanned }: QrScanModalProps) {
   const c = useColors();
   const theme = useResolvedTheme();
   const styles = React.useMemo(() => makeStyles(c, theme), [c, theme]);
+  const t = useLocaleStore((st) => st.t);
   const [permission, requestPermission] = useCameraPermissions();
   // Guards against the camera firing onBarcodeScanned dozens of times for the
   // same code before the modal tears down.
@@ -61,9 +63,9 @@ export function QrScanModal({ visible, onClose, onScanned }: QrScanModalProps) {
             </View>
             <View style={[styles.scrim, styles.scrimBottom]}>
               <View style={styles.hintWrap}>
-                <Text style={styles.hintTitle}>Open Bulwark on your computer</Text>
+                <Text style={styles.hintTitle}>{t('login.mobile.qr_hint_title', 'Open Bulwark on your computer')}</Text>
                 <Text style={styles.hint}>
-                  Settings → Security → Link device shows a code. Point the camera at it.
+                  {t('login.mobile.qr_hint', 'Settings → Security → Link device shows a code. Point the camera at it.')}
                 </Text>
               </View>
             </View>
@@ -75,7 +77,7 @@ export function QrScanModal({ visible, onClose, onScanned }: QrScanModalProps) {
             <Pressable onPress={onClose} hitSlop={10} style={styles.closeButton}>
               <X size={24} color={c.text} />
             </Pressable>
-            <Text style={styles.title}>Sign-in code</Text>
+            <Text style={styles.title}>{t('login.mobile.qr_title', 'Sign-in code')}</Text>
             <View style={styles.closeButton} />
           </View>
 
@@ -83,11 +85,11 @@ export function QrScanModal({ visible, onClose, onScanned }: QrScanModalProps) {
             <View style={styles.permissionWrap}>
               <Text style={styles.permissionText}>
                 {permission && !permission.canAskAgain
-                  ? 'Camera access is disabled. Enable it in Settings to scan a sign-in QR code.'
-                  : 'Bulwark Mail needs camera access to scan a sign-in QR code.'}
+                  ? t('login.mobile.camera_disabled', 'Camera access is disabled. Enable it in Settings to scan a sign-in QR code.')
+                  : t('login.mobile.camera_needed', 'Bulwark Mail needs camera access to scan a sign-in QR code.')}
               </Text>
               <Button variant="default" size="md" onPress={() => void requestPermission()}>
-                Allow camera access
+                {t('login.mobile.camera_allow', 'Allow camera access')}
               </Button>
             </View>
           ) : null}

@@ -6,6 +6,7 @@ import { useColors, useResolvedTheme } from '../../theme/colors';
 import type { AccountEntry } from '../../stores/account-store';
 import OptionTile from './OptionTile';
 import LoginNotice from './LoginNotice';
+import { useLocaleStore } from '../../stores/locale-store';
 
 // The white mark disappears on the light palette, so pick per theme. `require`
 // can't take an expression, hence the pair.
@@ -54,14 +55,15 @@ export default function ChooseStep({
   const c = useColors();
   const theme = useResolvedTheme();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
 
   return (
     <View style={styles.root}>
       {isAddMode ? (
         <View style={styles.addHeading}>
-          <Text style={styles.title}>Add another account</Text>
+          <Text style={styles.title}>{t('login.mobile.add_title', 'Add another account')}</Text>
           {accounts.length > 0 ? (
-            <Text style={styles.subtitle}>You&apos;re signed in to these already.</Text>
+            <Text style={styles.subtitle}>{t('login.mobile.add_subtitle', "You're signed in to these already.")}</Text>
           ) : null}
         </View>
       ) : (
@@ -72,7 +74,7 @@ export default function ChooseStep({
             resizeMode="contain"
           />
           <Text style={styles.title}>Bulwark Mail</Text>
-          <Text style={styles.subtitle}>Choose how you&apos;d like to sign in.</Text>
+          <Text style={styles.subtitle}>{t('login.mobile.choose_subtitle', "Choose how you'd like to sign in.")}</Text>
         </View>
       )}
 
@@ -106,8 +108,8 @@ export default function ChooseStep({
         {isAddMode && knownServerUrl ? (
           <OptionTile
             emphasis="primary"
-            title={`Another account on ${hostOf(knownServerUrl)}`}
-            description="We already know this server, so there's no setup"
+            title={t('login.mobile.known_server_title', 'Another account on {host}', { host: hostOf(knownServerUrl) })}
+            description={t('login.mobile.known_server_desc', "We already know this server, so there's no setup")}
             renderIcon={(color, size) => <Plus size={size} color={color} />}
             onPress={onUseKnownServer}
             disabled={disabled}
@@ -115,8 +117,8 @@ export default function ChooseStep({
         ) : (
           <OptionTile
             emphasis="primary"
-            title="Scan a sign-in code"
-            description="The fastest way in if you're signed in on the web"
+            title={t('login.mobile.scan_title', 'Scan a sign-in code')}
+            description={t('login.mobile.scan_desc', "The fastest way in if you're signed in on the web")}
             renderIcon={(color, size) => <QrCode size={size} color={color} />}
             onPress={onScan}
             disabled={disabled}
@@ -124,8 +126,8 @@ export default function ChooseStep({
         )}
 
         <OptionTile
-          title={isAddMode ? 'An account somewhere else' : 'Use my email address'}
-          description="We'll find your mail server"
+          title={isAddMode ? t('login.mobile.elsewhere_title', 'An account somewhere else') : t('login.mobile.email_title', 'Use my email address')}
+          description={t('login.mobile.email_desc', "We'll find your mail server")}
           renderIcon={(color, size) => <Mail size={size} color={color} />}
           onPress={onUseEmail}
           disabled={disabled}
@@ -133,7 +135,7 @@ export default function ChooseStep({
 
         {isAddMode && knownServerUrl ? (
           <OptionTile
-            title="Scan a sign-in code"
+            title={t('login.mobile.scan_title', 'Scan a sign-in code')}
             renderIcon={(color, size) => <QrCode size={size} color={color} />}
             onPress={onScan}
             disabled={disabled}
@@ -143,7 +145,7 @@ export default function ChooseStep({
 
       <Pressable onPress={onManualSetup} disabled={disabled} hitSlop={8} style={styles.manual}>
         <Server size={14} color={c.textMuted} />
-        <Text style={styles.manualText}>Enter server details manually</Text>
+        <Text style={styles.manualText}>{t('login.mobile.manual', 'Enter server details manually')}</Text>
       </Pressable>
     </View>
   );
