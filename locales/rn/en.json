@@ -131,6 +131,7 @@
     }
   },
   "email_list": {
+    "cross_account_move_offline": "Moving between accounts needs a connection",
     "emails_archived_count": "{count, plural, one {# email} other {# emails}} archived",
     "emails_moved_to": "{count, plural, one {# email} other {# emails}} moved to {mailbox}",
     "error": "Error",
@@ -150,6 +151,8 @@
     "no_trash_folder": "Could not find a Trash folder on the server. Please check your mailbox configuration.",
     "offline_nothing_cached": "No connection. Showing nothing because no mail has been cached yet.",
     "open_draft_failed": "Could not open the draft.",
+    "outbox_discard": "Discard",
+    "outbox_failed": "{count} changes could not be saved to the server.",
     "recent_searches": "Recent searches",
     "scope_all_folders": "All folders",
     "scope_this_folder": "This folder",
@@ -427,6 +430,26 @@
     "experimental": {
       "title": "Experimental Feature"
     },
+    "folders": {
+      "account": "Account",
+      "cannot_delete": "Cannot delete",
+      "description_mobile": "Create, rename, move and delete folders. Long-press a folder in the drawer for quick actions.",
+      "edit_folder": "Edit \"{name}\"",
+      "folder_name": "Folder name",
+      "move_under": "Move under",
+      "name_placeholder": "Receipts",
+      "name_required": "Name required",
+      "new_folder": "New folder",
+      "not_empty_message": "\"{name}\" contains {count} emails. Delete anyway?",
+      "not_empty_title": "Folder not empty",
+      "own_account": "My folders",
+      "role": "Special use",
+      "role_hint": "Assign a special-use role (Archive, Junk, …) to this folder. Each role can be held by one folder.",
+      "save_failed": "Save failed",
+      "system_folder_delete": "System folders cannot be removed.",
+      "system_folder_rename": "System folders cannot be renamed.",
+      "top_level": "Top level"
+    },
     "identities": {
       "cannot_delete": "The primary identity cannot be removed.",
       "cannot_delete_title": "Cannot delete",
@@ -450,6 +473,15 @@
     },
     "keywords": {
       "description_mobile": "Colored tags to organize your mail.",
+      "discover": {
+        "add_all": "Add all",
+        "found": "{count} tags found that are not defined here.",
+        "none": "No unknown tags found in {scanned} messages.",
+        "partial": "(The scan stopped at the newest messages only.)",
+        "progress": "Scanned {scanned} of {total} messages…",
+        "scan": "Find tags in mailbox"
+      },
+      "reset_confirm": "Replace your tag list with the default tags? Tags already set on messages stay on the server.",
       "reset_defaults": "Reset to Defaults"
     },
     "layout": {
@@ -660,8 +692,14 @@
     }
   },
   "sidebar": {
+    "account_error": "Needs attention",
+    "remove_account_hint": "Long-press to remove this account",
     "remove_account_message": "Sign out of {account} on this device. Your mail stays on the server.",
-    "remove_account_title": "Remove account?"
+    "remove_account_title": "Remove account?",
+    "show_unread": "Show unread"
+  },
+  "unified_mailbox": {
+    "accounts_failed": "{count} account(s) could not be loaded"
   },
   "updates": {
     "advisory": "Security advisory",
