@@ -6,7 +6,7 @@ import {
   Palette, User, Shield, UserPen, Palmtree, Calendar,
   Filter, FileText, FolderOpen, Tags, HardDrive,
   BookUser, KeyRound, PanelLeftClose, Bell, Puzzle, RefreshCw,
-  LayoutGrid, BookOpen, PenLine, EyeOff, Languages, Info, Bug, Download,
+  LayoutGrid, BookOpen, PenLine, EyeOff, Languages, Info, Download,
   type LucideIcon,
 } from 'lucide-react-native';
 import { spacing, radius, typography, componentSizes, type ThemePalette } from '../theme/tokens';
@@ -58,6 +58,8 @@ interface TabDef {
   group: TabGroup;
   experimental?: boolean;
   implemented: boolean;
+  // Never listed (still reachable by deep link).
+  hidden?: boolean;
 }
 
 const GROUP_LABELS: Record<TabGroup, string> = {
@@ -94,7 +96,7 @@ const TABS: TabDef[] = [
 
   // Privacy & Security
   { id: 'security',        label: 'Security',           icon: Shield,         group: 'privacy',    implemented: true  },
-  { id: 'encryption',      label: 'S/MIME Encryption',  icon: KeyRound,       group: 'privacy',    implemented: true  },
+  { id: 'encryption',      label: 'S/MIME Encryption',  icon: KeyRound,       group: 'privacy',    implemented: false },
   { id: 'content_senders', label: 'Content & Senders',  icon: EyeOff,         group: 'privacy',    implemented: true  },
 
   // Apps
@@ -106,9 +108,10 @@ const TABS: TabDef[] = [
   // Advanced
   { id: 'about_data',      label: 'About & Data',       icon: Info,           group: 'advanced',   implemented: true  },
   { id: 'themes',          label: 'Themes',             icon: Palette,        group: 'advanced',   experimental: true, implemented: true  },
-  { id: 'plugins',         label: 'Plugins',            icon: Puzzle,         group: 'advanced',   experimental: true, implemented: true  },
+  // Plugins run in the webmail only; the pane is an explainer reachable by
+  // deep link, not from the list. Debug logging lives under About & Data.
+  { id: 'plugins',         label: 'Plugins',            icon: Puzzle,         group: 'advanced',   experimental: true, implemented: true, hidden: true },
   { id: 'updates',         label: 'Updates',            icon: RefreshCw,      group: 'advanced',   implemented: true  },
-  { id: 'debug',           label: 'Debug',              icon: Bug,            group: 'advanced',   implemented: false },
 ];
 
 const TAB_COMPONENTS: Partial<Record<Tab, React.ComponentType<any>>> = {
@@ -143,7 +146,7 @@ const TAB_COMPONENTS: Partial<Record<Tab, React.ComponentType<any>>> = {
 // The "Updates" pane drives the sideload installer, which is Android-only - the
 // current version and build are still shown under "About & Data".
 const AVAILABLE_TABS: TabDef[] = TABS.filter(
-  (t) => t.id !== 'updates' || supportsSideloadUpdates,
+  (t) => !t.hidden && (t.id !== 'updates' || supportsSideloadUpdates),
 );
 
 function groupTabs() {
@@ -220,6 +223,8 @@ export default function SettingsScreen({ onLogout, onBack, onTabSelect }: Settin
         <View style={styles.header}>
           <Pressable
             onPress={() => setSelectedTab(null)}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.back', 'Back')}
             style={({ pressed }) => [styles.headerBackBtn, pressed && styles.headerBackBtnPressed]}
           >
             <ArrowLeft size={20} color={c.text} />
@@ -248,6 +253,8 @@ export default function SettingsScreen({ onLogout, onBack, onTabSelect }: Settin
         {onBack ? (
           <Pressable
             onPress={onBack}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.back', 'Back')}
             style={({ pressed }) => [styles.headerBackBtn, pressed && styles.headerBackBtnPressed]}
           >
             <ArrowLeft size={20} color={c.text} />
@@ -275,9 +282,9 @@ export default function SettingsScreen({ onLogout, onBack, onTabSelect }: Settin
                 const unavailable = unavailableTabs.has(tab.id);
                 const disabled = !tab.implemented || unavailable;
                 const badgeLabel = !tab.implemented
-                  ? 'Not implemented'
+                  ? t('settings.badges.not_implemented', 'Not implemented')
                   : unavailable
-                    ? 'Unavailable'
+                    ? t('settings.badges.unavailable', 'Unavailable')
                     : null;
                 return (
                   <Pressable
@@ -302,7 +309,7 @@ export default function SettingsScreen({ onLogout, onBack, onTabSelect }: Settin
                       </Text>
                       {tab.experimental && !disabled && (
                         <View style={styles.experimentalBadge}>
-                          <Text style={styles.experimentalText}>Experimental</Text>
+                          <Text style={styles.experimentalText}>{t('settings.badges.experimental', 'Experimental')}</Text>
                         </View>
                       )}
                     </View>
@@ -387,7 +394,7 @@ function makeStyles(c: ThemePalette) {
     tabItemLabel: { ...typography.body, color: c.text },
 
     experimentalBadge: {
-      backgroundColor: 'rgba(202, 138, 4, 0.15)',
+      backgroundColor: c.warningBg,
       borderRadius: radius.full,
       paddingHorizontal: 6, paddingVertical: 2,
     },

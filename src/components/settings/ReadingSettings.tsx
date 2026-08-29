@@ -1,74 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, View, Text, StyleSheet, Pressable, TextInput } from 'react-native';
 import { AlertTriangle, FolderSync, X } from 'lucide-react-native';
-import { SettingsSection, SettingItem, Select, RadioGroup, ToggleSwitch } from './settings-section';
+import { SettingsSection, SettingItem, Select, ToggleSwitch } from './settings-section';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import {
   useSettingsStore,
   type ArchiveMode,
   type DeleteAction,
-  type MailLayout,
   type MailAttachmentAction,
   type AttachmentPosition,
 } from '../../stores/settings-store';
 import { useEmailStore } from '../../stores/email-store';
 import { archiveEmails, queryEmails, getEmails } from '../../api/email';
 import { ownMailboxes } from '../../lib/mailbox-tree';
-
-function MailLayoutPreview({ value }: { value: MailLayout }) {
-  const c = useColors();
-  const styles = React.useMemo(() => makeStyles(c), [c]);
-  const isSplit = value === 'split';
-  return (
-    <View style={styles.layoutPreview}>
-      <View>
-        <Text style={styles.layoutTitle}>{isSplit ? 'Split' : 'Focus'}</Text>
-        <Text style={styles.layoutDesc}>
-          {isSplit ? 'List and reader side by side.' : 'Single column for focused reading.'}
-        </Text>
-      </View>
-      <View style={styles.layoutFrame}>
-        <View style={styles.layoutRail} />
-        {isSplit ? (
-          <>
-            <View style={styles.layoutList}>
-              {[1, 2, 3].map((i) => (
-                <View
-                  key={i}
-                  style={[styles.layoutRow, i === 2 && styles.layoutRowSel]}
-                >
-                  <Text style={styles.layoutRowName}>Alice</Text>
-                  <Text style={styles.layoutRowSub}>Subject line</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.layoutReader}>
-              <View style={[styles.layoutBar, { width: 80 }]} />
-              <View style={[styles.layoutBar, { width: '100%', marginTop: 8 }]} />
-              <View style={[styles.layoutBar, { width: '85%', marginTop: 6 }]} />
-              <View style={[styles.layoutBar, { width: '60%', marginTop: 6 }]} />
-            </View>
-          </>
-        ) : (
-          <View style={{ flex: 1, padding: 8 }}>
-            {[1, 2, 3].map((i) => (
-              <View
-                key={i}
-                style={[styles.layoutFocus, i === 2 && styles.layoutFocusSel]}
-              >
-                <Text style={styles.layoutFocusText}>
-                  <Text style={{ fontWeight: '500' }}>Alice </Text>
-                  Subject line preview…
-                </Text>
-              </View>
-            ))}
-          </View>
-        )}
-      </View>
-    </View>
-  );
-}
 
 export function ReadingSettings() {
   const c = useColors();
@@ -82,7 +27,6 @@ export function ReadingSettings() {
   const deleteAction = useSettingsStore((s) => s.deleteAction);
   const permanentlyDeleteJunk = useSettingsStore((s) => s.permanentlyDeleteJunk);
   const showPreview = useSettingsStore((s) => s.showPreview);
-  const mailLayout = useSettingsStore((s) => s.mailLayout);
   const disableThreading = useSettingsStore((s) => s.disableThreading);
   const includeGroupInUnified = useSettingsStore((s) => s.includeGroupInUnified);
   const autoSelectReplyIdentity = useSettingsStore((s) => s.autoSelectReplyIdentity);
@@ -231,20 +175,6 @@ export function ReadingSettings() {
       <SettingItem label="Permanently Delete Junk" description="Skip the trash when deleting spam.">
         <ToggleSwitch checked={permanentlyDeleteJunk} onChange={(v) => update('permanentlyDeleteJunk', v)} />
       </SettingItem>
-
-      <View style={styles.group}>
-        <SettingItem label="Mail Layout" description="Choose between split view and focus view." noBorder />
-        <RadioGroup
-          value={mailLayout}
-          onChange={(v) => update('mailLayout', v as MailLayout)}
-          options={[
-            { value: 'split', label: 'Split' },
-            { value: 'focus', label: 'Focus' },
-          ]}
-        />
-        <MailLayoutPreview value={mailLayout} />
-        <View style={styles.divider} />
-      </View>
 
       <SettingItem label="Show Preview" description="Preview text under each subject.">
         <ToggleSwitch checked={showPreview} onChange={(v) => update('showPreview', v)} />
@@ -467,87 +397,6 @@ function makeStyles(c: ThemePalette) {
   },
   addKeywordText: {
     ...typography.body,
-    color: c.text,
-  },
-  layoutPreview: {
-    marginTop: spacing.md,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: c.border,
-    backgroundColor: c.background,
-    padding: spacing.md,
-  },
-  layoutTitle: {
-    ...typography.bodyMedium,
-    color: c.text,
-  },
-  layoutDesc: {
-    ...typography.caption,
-    color: c.mutedForeground,
-    marginTop: 2,
-  },
-  layoutFrame: {
-    flexDirection: 'row',
-    height: 112,
-    marginTop: spacing.md,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: c.border,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(24,24,27,0.4)',
-  },
-  layoutRail: {
-    width: 32,
-    borderRightWidth: 1,
-    borderRightColor: c.border,
-    backgroundColor: 'rgba(24,24,27,0.6)',
-  },
-  layoutList: {
-    width: 96,
-    borderRightWidth: 1,
-    borderRightColor: c.border,
-    backgroundColor: c.background,
-  },
-  layoutRow: {
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: c.border,
-  },
-  layoutRowSel: {
-    backgroundColor: 'rgba(59,130,246,0.1)',
-  },
-  layoutRowName: {
-    fontSize: 9,
-    fontWeight: '500',
-    color: c.text,
-  },
-  layoutRowSub: {
-    fontSize: 9,
-    color: c.mutedForeground,
-  },
-  layoutReader: {
-    flex: 1,
-    padding: spacing.md,
-    backgroundColor: c.background,
-  },
-  layoutBar: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(250,250,250,0.1)',
-  },
-  layoutFocus: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    backgroundColor: 'rgba(24,24,27,0.4)',
-    borderRadius: radius.xs,
-    marginBottom: 4,
-  },
-  layoutFocusSel: {
-    backgroundColor: 'rgba(59,130,246,0.1)',
-  },
-  layoutFocusText: {
-    fontSize: 9,
     color: c.text,
   },
   trustedList: {
