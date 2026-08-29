@@ -4,7 +4,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import * as Sharing from 'expo-sharing';
 import { jmapClient } from '../api/jmap-client';
 import { getDownloadUrl } from '../api/blob';
-import type { Email } from '../api/types';
+import type { Attachment, Email } from '../api/types';
 import { useSettingsStore } from '../stores/settings-store';
 import {
   attachmentDownloadFilename,
@@ -12,9 +12,18 @@ import {
   type EmailFilenameOptions,
 } from './download-filename';
 import { getClientCertAlias, secureFetch } from './client-cert';
+import { sniffImageMime } from './email-html';
 
 const RFC822 = 'message/rfc822';
 const FLAG_GRANT_READ_URI_PERMISSION = 0x00000001;
+
+// Largest inline image we base64-encode in JS memory. Anything bigger is
+// streamed to a cache file and encoded natively so the JS thread doesn't
+// freeze on megabytes of string concatenation.
+const MAX_IN_MEMORY_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
+
+// Temp files handed to viewers / the share sheet older than this are swept.
+const STALE_EXPORT_MS = 24 * 60 * 60 * 1000;
 
 // Read the user's filename template + transform preferences for exports.
 function emailFileOptions(): EmailFilenameOptions {
@@ -37,15 +46,67 @@ function attachmentFileOptions(): EmailFilenameOptions {
   };
 }
 
-function authHeader(): string {
-  return jmapClient.authHeader;
-}
-
 function safeAttachmentName(name: string | undefined, type: string | undefined): string {
   const fallbackExt = type?.split('/')[1]?.replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'bin';
   const cleaned = (name ?? '').replace(/[\\/:*?"<>|]/g, '_').trim();
   if (cleaned) return cleaned.slice(0, 120);
   return `attachment.${fallbackExt}`;
+}
+
+// ─── Temp-file housekeeping ─────────────────────────────────────────────
+
+// Every temp file we hand to another app lives in one sub-directory of the
+// cache so the sweep below only ever touches our own files.
+function exportsDir(): Directory {
+  return new Directory(Paths.cache, 'bulwark-exports');
+}
+
+function ensureDir(dir: Directory): void {
+  try {
+    if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
+  } catch { /* best effort - the download will surface a real error */ }
+}
+
+function deleteQuietly(file: File): void {
+  try {
+    if (file.exists) file.delete();
+  } catch { /* already gone or still in use - the sweep gets it later */ }
+}
+
+/**
+ * Remove temp files older than a day. Files shared into other apps could not
+ * always be deleted right after the share sheet closed (the receiving app may
+ * still be reading them), so anything that slipped through is collected here.
+ * Runs once per process, lazily before the first export, and is also safe to
+ * call at launch.
+ */
+let sweptThisProcess = false;
+export async function sweepStaleExportFiles(maxAgeMs = STALE_EXPORT_MS): Promise<void> {
+  if (sweptThisProcess) return;
+  sweptThisProcess = true;
+  try {
+    const dir = exportsDir();
+    if (!dir.exists) return;
+    const now = Date.now();
+    for (const entry of dir.list()) {
+      if (!(entry instanceof File)) continue;
+      const modified = (entry as { modificationTime?: number | null }).modificationTime;
+      const age = typeof modified === 'number' ? now - modified : Number.POSITIVE_INFINITY;
+      if (age > maxAgeMs) deleteQuietly(entry);
+    }
+  } catch { /* housekeeping only */ }
+}
+
+// Delete a temp file once the share sheet has resolved. iOS copies the file
+// for the receiving extension, so it can go immediately; Android hands the
+// content URI to the target app, which may still be streaming it, so give it
+// a grace period and leave the rest to the sweep.
+function scheduleTempCleanup(file: File): void {
+  if (Platform.OS === 'android') {
+    setTimeout(() => deleteQuietly(file), 60_000);
+  } else {
+    deleteQuietly(file);
+  }
 }
 
 // expo-sharing only accepts `file://` URLs and rejects `content://` with
@@ -78,38 +139,73 @@ async function openWithViewer(file: File, mimeType: string): Promise<boolean> {
   }
 }
 
+function isUnauthorizedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b401\b|unauthori[sz]ed/i.test(msg);
+}
+
 // Routes the download via the client-cert-aware native module when the user
 // has picked a cert, and via expo-file-system's native streaming downloader
 // otherwise. The streaming path scales to large attachments without buffering
 // in JS, so we keep using it as the default.
+//
+// Both paths bypass the JMAP client's fetch wrapper, so the OAuth token has to
+// be refreshed here: proactively before the header is captured, and once
+// reactively when the server still answers 401 (a token that expired between
+// the check and the request).
 async function downloadInto(
   url: string,
   dest: File,
   parent: Directory,
 ): Promise<File> {
+  await jmapClient.ensureFreshToken();
   const alias = await getClientCertAlias();
-  if (!alias) {
-    // The static returns a separately-typed `FileSystemFile`; we already
-    // have a fully-typed `File` referencing the same uri, so we ignore the
-    // return value and re-use our `dest` reference for downstream code.
-    await File.downloadFileAsync(url, dest, {
-      headers: { Authorization: authHeader() },
-      idempotent: true,
+  ensureDir(parent);
+  const attempt = async (): Promise<File> => {
+    if (!alias) {
+      // The static returns a separately-typed `FileSystemFile`; we already
+      // have a fully-typed `File` referencing the same uri, so we ignore the
+      // return value and re-use our `dest` reference for downstream code.
+      await File.downloadFileAsync(url, dest, {
+        headers: { Authorization: jmapClient.authHeader },
+        idempotent: true,
+      });
+      return dest;
+    }
+    const response = await secureFetch(url, {
+      headers: { Authorization: jmapClient.authHeader },
     });
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status}`);
+    }
+    if (dest.exists) dest.delete();
+    const buffer = await response.arrayBuffer();
+    dest.create();
+    dest.write(new Uint8Array(buffer));
     return dest;
+  };
+  try {
+    return await attempt();
+  } catch (err) {
+    if (isUnauthorizedError(err) && (await jmapClient.forceRefreshToken())) {
+      return attempt();
+    }
+    throw err;
   }
-  const response = await secureFetch(url, {
-    headers: { Authorization: authHeader() },
-  });
-  if (!response.ok) {
-    throw new Error(`Download failed: ${response.status}`);
-  }
-  if (!parent.exists) parent.create({ intermediates: true, idempotent: true });
-  if (dest.exists) dest.delete();
-  const buffer = await response.arrayBuffer();
-  dest.create();
-  dest.write(new Uint8Array(buffer));
-  return dest;
+}
+
+/** Download a blob into the exports cache directory (caller cleans up). */
+export async function cacheBlobFile(
+  blobId: string,
+  filename: string,
+  mimeType: string,
+  accountId?: string,
+): Promise<File> {
+  void sweepStaleExportFiles();
+  const dir = exportsDir();
+  const dest = new File(dir, filename);
+  const url = getDownloadUrl(blobId, filename, mimeType, accountId);
+  return downloadInto(url, dest, dir);
 }
 
 export async function shareAttachment(
@@ -124,20 +220,24 @@ export async function shareAttachment(
     ? attachmentDownloadFilename(email, { name, type }, attachmentFileOptions())
     : safeAttachmentName(name, type);
   const mimeType = type || 'application/octet-stream';
-  const dest = new File(Paths.cache, filename);
-  const url = getDownloadUrl(blobId, filename, mimeType, accountId);
-  const downloaded = await downloadInto(url, dest, Paths.cache);
+  const downloaded = await cacheBlobFile(blobId, filename, mimeType, accountId);
 
   if (Platform.OS === 'android' && (await openWithViewer(downloaded, mimeType))) {
+    // The viewer may keep reading the content URI after the activity result;
+    // the daily sweep removes the file.
     return;
   }
   if (!(await Sharing.isAvailableAsync())) {
     throw new Error('Sharing is not available on this device');
   }
-  await Sharing.shareAsync(downloaded.uri, {
-    mimeType,
-    dialogTitle: filename,
-  });
+  try {
+    await Sharing.shareAsync(downloaded.uri, {
+      mimeType,
+      dialogTitle: filename,
+    });
+  } finally {
+    scheduleTempCleanup(downloaded);
+  }
 }
 
 // Save-to-disk variant. iOS doesn't expose a user-visible "Downloads" folder,
@@ -170,11 +270,111 @@ export async function downloadAttachment(
   });
 }
 
+/** Share an already-materialised local file (zip bundles, extracted parts). */
+export async function shareLocalFile(file: File, mimeType: string, dialogTitle?: string): Promise<void> {
+  if (Platform.OS === 'android' && (await openWithViewer(file, mimeType))) return;
+  if (!(await Sharing.isAvailableAsync())) {
+    throw new Error('Sharing is not available on this device');
+  }
+  try {
+    await Sharing.shareAsync(file.uri, { mimeType, dialogTitle: dialogTitle ?? file.name });
+  } finally {
+    scheduleTempCleanup(file);
+  }
+}
+
+/** Write bytes to the exports cache and hand them to a viewer / the share sheet. */
+export async function shareBytes(bytes: Uint8Array, filename: string, mimeType: string): Promise<void> {
+  void sweepStaleExportFiles();
+  const dir = exportsDir();
+  ensureDir(dir);
+  const file = new File(dir, safeAttachmentName(filename, mimeType));
+  if (file.exists) file.delete();
+  file.create();
+  file.write(bytes);
+  await shareLocalFile(file, mimeType, filename);
+}
+
+async function authedBlobFetch(url: string): Promise<Response> {
+  await jmapClient.ensureFreshToken();
+  let r = await secureFetch(url, { headers: { Authorization: jmapClient.authHeader } });
+  if (r.status === 401 && (await jmapClient.forceRefreshToken())) {
+    r = await secureFetch(url, { headers: { Authorization: jmapClient.authHeader } });
+  }
+  if (!r.ok) throw new Error(`Download failed: ${r.status}`);
+  return r;
+}
+
 export async function fetchRawEmail(blobId: string, accountId?: string): Promise<string> {
   const url = getDownloadUrl(blobId, 'email.eml', RFC822, accountId);
-  const r = await secureFetch(url, { headers: { Authorization: authHeader() } });
-  if (!r.ok) throw new Error(`Download failed: ${r.status}`);
+  const r = await authedBlobFetch(url);
   return r.text();
+}
+
+/** Fetch a blob's bytes with the same auth/refresh handling as the downloads. */
+export async function fetchBlobBytes(
+  blobId: string,
+  name: string | undefined,
+  type: string | undefined,
+  accountId?: string,
+): Promise<Uint8Array> {
+  const url = getDownloadUrl(blobId, name ?? 'blob', type ?? 'application/octet-stream', accountId);
+  const r = await authedBlobFetch(url);
+  return new Uint8Array(await r.arrayBuffer());
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return global.btoa ? global.btoa(binary) : btoa(binary);
+}
+
+function base64PrefixBytes(b64: string, count: number): Uint8Array {
+  const slice = b64.slice(0, Math.ceil(count / 3) * 4);
+  try {
+    const bin = global.atob ? global.atob(slice) : atob(slice);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return new Uint8Array(0);
+  }
+}
+
+/**
+ * Resolve an inline (cid) image part to a `data:` URI for the body WebView.
+ * Small parts are fetched into memory; larger ones are streamed to a cache
+ * file and base64-encoded natively (the JS thread would otherwise stall for
+ * seconds on a multi-megabyte photo). The MIME is sniffed from the bytes so
+ * `application/octet-stream` image parts still render (#543).
+ */
+export async function fetchInlineImageDataUri(
+  att: Pick<Attachment, 'blobId' | 'name' | 'type' | 'size'>,
+  accountId?: string,
+): Promise<string | null> {
+  if (!att.blobId) return null;
+  if (!att.size || att.size <= MAX_IN_MEMORY_INLINE_IMAGE_BYTES) {
+    const buf = await jmapClient.fetchBlobArrayBuffer(att.blobId, att.name, att.type, accountId);
+    const bytes = new Uint8Array(buf);
+    const mime = sniffImageMime(bytes, att.type);
+    return `data:${mime};base64,${bytesToBase64(bytes)}`;
+  }
+  const file = await cacheBlobFile(
+    att.blobId,
+    `inline-${att.blobId.replace(/[^a-z0-9]/gi, '_')}`,
+    att.type || 'application/octet-stream',
+    accountId,
+  );
+  try {
+    const b64 = await file.base64();
+    const mime = sniffImageMime(base64PrefixBytes(b64, 16), att.type);
+    return `data:${mime};base64,${b64}`;
+  } finally {
+    deleteQuietly(file);
+  }
 }
 
 function safeFilename(subject: string | undefined): string {
@@ -192,15 +392,17 @@ export async function shareEmailEml(
   const filename = email
     ? emailExportFilename(email, emailFileOptions())
     : safeFilename(subjectFallback);
-  const dest = new File(Paths.cache, filename);
-  const url = getDownloadUrl(blobId, dest.name, RFC822, accountId);
-  const downloaded = await downloadInto(url, dest, Paths.cache);
+  const downloaded = await cacheBlobFile(blobId, filename, RFC822, accountId);
   if (!(await Sharing.isAvailableAsync())) {
     throw new Error('Sharing is not available on this device');
   }
-  await Sharing.shareAsync(downloaded.uri, {
-    mimeType: RFC822,
-    dialogTitle: 'Share email',
-    UTI: 'public.email-message',
-  });
+  try {
+    await Sharing.shareAsync(downloaded.uri, {
+      mimeType: RFC822,
+      dialogTitle: 'Share email',
+      UTI: 'public.email-message',
+    });
+  } finally {
+    scheduleTempCleanup(downloaded);
+  }
 }

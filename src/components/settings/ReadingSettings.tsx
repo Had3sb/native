@@ -10,6 +10,9 @@ import {
   type DeleteAction,
   type MailAttachmentAction,
   type AttachmentPosition,
+  type PlainTextFont,
+  type MessageSpacing,
+  type ReadReceiptResponse,
 } from '../../stores/settings-store';
 import { useEmailStore } from '../../stores/email-store';
 import { archiveEmails, queryEmails, getEmails } from '../../api/email';
@@ -37,6 +40,9 @@ export function ReadingSettings() {
   const attachmentReminderEnabled = useSettingsStore((s) => s.attachmentReminderEnabled);
   const attachmentReminderKeywords = useSettingsStore((s) => s.attachmentReminderKeywords);
   const hideInlineImageAttachments = useSettingsStore((s) => s.hideInlineImageAttachments);
+  const plainTextFont = useSettingsStore((s) => s.plainTextFont);
+  const messageSpacing = useSettingsStore((s) => s.messageSpacing);
+  const readReceiptResponse = useSettingsStore((s) => s.readReceiptResponse);
 
   const [newKeyword, setNewKeyword] = useState('');
   const [reorganizing, setReorganizing] = useState(false);
@@ -279,6 +285,41 @@ export function ReadingSettings() {
           options={[
             { value: 'beside-sender', label: 'Beside sender' },
             { value: 'below-header', label: 'Below header' },
+          ]}
+        />
+      </SettingItem>
+
+      <SettingItem label="Plain Text Font" description="Font used for plain-text messages.">
+        <Select
+          value={plainTextFont}
+          onChange={(v) => update('plainTextFont', v as PlainTextFont)}
+          options={[
+            { value: 'sans', label: 'App font' },
+            { value: 'mono', label: 'Monospace' },
+          ]}
+        />
+      </SettingItem>
+
+      <SettingItem label="Message Spacing" description="Gutter around the message body.">
+        <Select
+          value={messageSpacing}
+          onChange={(v) => update('messageSpacing', v as MessageSpacing)}
+          options={[
+            { value: 'auto', label: 'Automatic' },
+            { value: 'always', label: 'Always padded' },
+            { value: 'edge', label: 'Edge to edge' },
+          ]}
+        />
+      </SettingItem>
+
+      <SettingItem label="Read Receipts" description="When a sender asks to be notified that you opened a message.">
+        <Select
+          value={readReceiptResponse}
+          onChange={(v) => update('readReceiptResponse', v as ReadReceiptResponse)}
+          options={[
+            { value: 'ask', label: 'Ask me' },
+            { value: 'always', label: 'Always send' },
+            { value: 'never', label: 'Never send' },
           ]}
         />
       </SettingItem>

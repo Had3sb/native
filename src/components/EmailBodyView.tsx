@@ -1,28 +1,25 @@
 import React from 'react';
 import { View, StyleSheet, Linking, Platform, Text, Pressable } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Image as ImageIcon, ShieldCheck } from 'lucide-react-native';
 import type { Email } from '../api/types';
-import { wrapEmailHtml, wrapPlainTextEmail, plainTextToSafeHtml, extractCidRefs, hasRemoteContent, hasMeaningfulHtmlBody, hasNativeDarkMode } from '../lib/email-html';
-import { jmapClient } from '../api/jmap-client';
+import {
+  prepareEmailHtml, wrapPlainTextEmail, plainTextToSafeHtml, extractCidRefs,
+} from '../lib/email-html';
+import { pickEmailBody, selectRenderableHtml } from '../lib/email-body';
+import { buildQuoteCollapseScript, collapsePlainTextQuotes } from '../lib/quote-collapse';
+import { parseMailtoUrl } from '../lib/unsubscribe';
+import { fetchInlineImageDataUri } from '../lib/email-export';
 import { useSettingsStore } from '../stores/settings-store';
 import { useContactsStore } from '../stores/contacts-store';
+import { useLocaleStore } from '../stores/locale-store';
 import { spacing, typography, type ThemePalette } from '../theme/tokens';
 import { useColors, useResolvedTheme } from '../theme/colors';
+import type { RootStackParamList } from '../navigation/types';
 
-// Largest inline image we'll pull inline as a data: URI. Anything bigger gets
-// skipped so we don't freeze the JS thread base64-encoding megabytes.
-const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
-
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
-  }
-  return global.btoa ? global.btoa(binary) : btoa(binary);
-}
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 interface EmailBodyViewProps {
   email: Email;
@@ -38,22 +35,14 @@ interface EmailBodyViewProps {
   // the surrounding vertical scroll / horizontal pager so a zoom gesture can't
   // scroll the pane away or switch mails.
   onZoomChange?: (zoom: { pinching: boolean; zoomed: boolean }) => void;
-}
-
-function extractHtmlBody(email: Email): string | null {
-  for (const part of email.htmlBody ?? []) {
-    const v = part.partId ? email.bodyValues?.[part.partId]?.value : undefined;
-    if (v) return v;
-  }
-  return null;
-}
-
-function extractTextBody(email: Email): string | null {
-  for (const part of email.textBody ?? []) {
-    const v = part.partId ? email.bodyValues?.[part.partId]?.value : undefined;
-    if (v) return v;
-  }
-  return null;
+  /** Per-message override of the light/dark rendering (More sheet toggle). */
+  themeOverride?: 'light' | 'dark' | null;
+  /**
+   * Replace the message's own body - used when the outer message is an empty
+   * envelope around a message/rfc822 attachment or a TNEF winmail.dat and the
+   * real content was extracted client-side.
+   */
+  bodyOverride?: { html?: string | null; text?: string | null } | null;
 }
 
 // Dark-mode re-inversion, mirroring the webmail's handleIframeLoad pass. The
@@ -80,10 +69,13 @@ const DARK_REINVERT_SCRIPT = `
     if (['IMG','VIDEO','SVG','CANVAS','OBJECT','EMBED'].indexOf(tag) !== -1) return;
     var computed = win.getComputedStyle(el);
     if (computed.backgroundImage && computed.backgroundImage !== 'none') {
-      // Only re-invert if this container doesn't have media children.
-      if (!el.querySelector('img, video, svg, canvas, object, embed')) {
-        el.style.filter = 'invert(1) hue-rotate(180deg)';
-      }
+      // Re-invert so the background image returns to its original
+      // appearance. Matches the CSS background-image rules: re-invert even
+      // when media is nested, then cancel the per-image re-invert on that
+      // media so it isn't left double-inverted.
+      el.style.filter = 'invert(1) hue-rotate(180deg)';
+      el.querySelectorAll('img, video, svg, canvas, object, embed, input[type="image"]')
+        .forEach(function (m) { m.style.filter = 'none'; });
     }
   });
 
@@ -152,6 +144,57 @@ const DARK_REINVERT_SCRIPT = `
       frag.appendChild(doc.createTextNode(text.slice(lastIndex)));
     }
     parent.replaceChild(frag, textNode);
+  });
+})();
+`;
+
+// Image fix-ups, mirroring the webmail's post-render passes:
+//  - collapse empty <td>/<div> wrappers left behind by blocked images so a
+//    blocked newsletter doesn't show rows of empty cells;
+//  - hide images that fail to load (dead/unreachable URLs) rather than leave
+//    the engine's broken-image glyph and alt text as stray labels.
+const IMG_FIXUP_SCRIPT = `
+(function () {
+  if (document.__rnImgFixupDone) return;
+  var doc = document;
+  if (!doc.body) return;
+  document.__rnImgFixupDone = true;
+
+  doc.querySelectorAll('img[data-blocked-src]').forEach(function (img) {
+    var el = img.parentElement;
+    while (el && el !== doc.body) {
+      if (el.tagName === 'TD' || el.tagName === 'TH' ||
+          (el.tagName === 'DIV' && el.parentElement && el.parentElement.tagName === 'TD')) {
+        var hasText = (el.textContent || '').replace(/[\\s\\u00A0]+/g, '').trim();
+        var hasMedia = el.querySelector('img:not([data-blocked-src]), video, canvas');
+        var hasLinks = el.querySelector('a[href]');
+        if (!hasText && !hasMedia && !hasLinks) {
+          el.setAttribute('data-blocked-collapsed-style', el.style.cssText);
+          el.style.display = 'none';
+          el.style.height = '0';
+          el.style.padding = '0';
+          el.style.overflow = 'hidden';
+        }
+        break;
+      }
+      if (el.tagName === 'TABLE' || el.tagName === 'TR') break;
+      el = el.parentElement;
+    }
+  });
+
+  function hideIfBroken(img) {
+    if (img.complete && img.naturalWidth === 0 && img.getAttribute('src')) {
+      img.style.display = 'none';
+    }
+  }
+  doc.querySelectorAll('img').forEach(function (img) {
+    if (img.hasAttribute('data-blocked-src')) return;
+    if (img.complete) {
+      hideIfBroken(img);
+    } else {
+      img.addEventListener('error', function () { img.style.display = 'none'; }, { once: true });
+      img.addEventListener('load', function () { hideIfBroken(img); }, { once: true });
+    }
   });
 })();
 `;
@@ -460,16 +503,19 @@ const PINCH_ZOOM = `
 `;
 
 export default function EmailBodyView({
-  email, senderEmail, jmapAccountId, onSwipe, onZoomChange,
+  email, senderEmail, jmapAccountId, onSwipe, onZoomChange, themeOverride, bodyOverride,
 }: EmailBodyViewProps) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
+  const t = useLocaleStore((s) => s.t);
+  const navigation = useNavigation<Nav>();
   const externalContentPolicy = useSettingsStore((s) => s.externalContentPolicy);
   const isSenderTrusted = useSettingsStore((s) => s.isSenderTrusted);
   const addTrustedSender = useSettingsStore((s) => s.addTrustedSender);
   const trustedSendersAddressBook = useSettingsStore((s) => s.trustedSendersAddressBook);
   const emailAlwaysLightMode = useSettingsStore((s) => s.emailAlwaysLightMode);
-  const hideInlineImageAttachments = useSettingsStore((s) => s.hideInlineImageAttachments);
+  const plainTextFont = useSettingsStore((s) => s.plainTextFont);
+  const messageSpacing = useSettingsStore((s) => s.messageSpacing);
   const contacts = useContactsStore((s) => s.contacts);
   const trustedSenderEmails = useContactsStore((s) => s.trustedSenderEmails);
   const trustedSendersLoaded = useContactsStore((s) => s.trustedSendersLoaded);
@@ -488,9 +534,9 @@ export default function EmailBodyView({
   const addressBookEmails = React.useMemo(() => {
     if (!trustedSendersAddressBook) return null;
     const out = new Set<string>();
-    for (const c of contacts) {
-      if (!c.emails) continue;
-      for (const e of Object.values(c.emails)) {
+    for (const card of contacts) {
+      if (!card.emails) continue;
+      for (const e of Object.values(card.emails)) {
         if (e?.address) out.add(e.address.toLowerCase());
       }
     }
@@ -498,18 +544,21 @@ export default function EmailBodyView({
   }, [contacts, trustedSendersAddressBook]);
   // Most marketing email is authored against a white background, so dark-mode
   // inversion can wreck logos/banners. With this flag the user opts to render
-  // emails on a light surface even while the rest of the app is dark.
-  const renderAsDark = !emailAlwaysLightMode && resolvedTheme === 'dark';
+  // emails on a light surface even while the rest of the app is dark; the
+  // per-message toggle in the More sheet overrides both.
+  const renderAsDark = themeOverride
+    ? themeOverride === 'dark'
+    : !emailAlwaysLightMode && resolvedTheme === 'dark';
 
-  const html = React.useMemo(() => extractHtmlBody(email), [email]);
-  const text = React.useMemo(() => extractTextBody(email), [email]);
-  // Prefer textBody when the HTML is a minimal auto-generated wrapper that would
-  // collapse newlines (mirrors webmail's hasMeaningfulHtmlBody fallback).
-  const rawHtml = React.useMemo(
-    () => (html && (!text || hasMeaningfulHtmlBody(html)) ? html : null),
-    [html, text],
-  );
-  const hasRemote = rawHtml ? hasRemoteContent(rawHtml) : false;
+  // RFC 8621 §4.1.4: an HTML-only message exposes the same part in textBody
+  // and htmlBody, so the text part is only an alternative when its partId
+  // differs (native #46). `pickEmailBody` routes by part type and id.
+  const picked = React.useMemo(() => {
+    if (bodyOverride) return { html: bodyOverride.html ?? null, text: bodyOverride.text ?? null };
+    return pickEmailBody(email);
+  }, [email, bodyOverride]);
+  const rawHtml = React.useMemo(() => selectRenderableHtml(picked), [picked]);
+  const text = picked.text;
   const trusted = senderEmail
     ? isSenderTrusted(senderEmail)
       || trustedSenderEmails.includes(senderEmail.toLowerCase())
@@ -522,14 +571,12 @@ export default function EmailBodyView({
     setAllowOnce(false);
   }, [email.id]);
 
+  // Policy-driven gate (like the webmail's `externalBlocked`): the strict CSP
+  // is in effect whenever the policy is not "allow" and the sender is not
+  // trusted, regardless of what the detection pass finds - the pass only
+  // drives the banner and the placeholder swap.
   const shouldBlock =
-    hasRemote &&
-    !trusted &&
-    !allowOnce &&
-    externalContentPolicy !== 'allow';
-
-  const showBanner =
-    hasRemote &&
+    !!rawHtml &&
     !trusted &&
     !allowOnce &&
     externalContentPolicy !== 'allow';
@@ -555,8 +602,7 @@ export default function EmailBodyView({
     }
     const toFetch = refs
       .map((ref) => ({ ref, att: byCid.get(ref) }))
-      .filter((x): x is { ref: string; att: NonNullable<ReturnType<typeof byCid.get>> } => !!x.att)
-      .filter(({ att }) => !att.size || att.size <= MAX_INLINE_IMAGE_BYTES);
+      .filter((x): x is { ref: string; att: NonNullable<ReturnType<typeof byCid.get>> } => !!x.att);
     if (toFetch.length === 0) return;
 
     let cancelled = false;
@@ -565,12 +611,9 @@ export default function EmailBodyView({
       await Promise.all(
         toFetch.map(async ({ ref, att }) => {
           try {
-            const buf = await jmapClient.fetchBlobArrayBuffer(
-              att.blobId, att.name, att.type, jmapAccountId,
-            );
-            if (cancelled) return;
-            const b64 = arrayBufferToBase64(buf);
-            next[ref] = `data:${att.type || 'application/octet-stream'};base64,${b64}`;
+            const uri = await fetchInlineImageDataUri(att, jmapAccountId);
+            if (cancelled || !uri) return;
+            next[ref] = uri;
           } catch (err) {
             console.warn('[EmailBodyView] cid fetch failed', ref, err);
           }
@@ -583,39 +626,52 @@ export default function EmailBodyView({
     return () => { cancelled = true; };
   }, [rawHtml, email.attachments, jmapAccountId]);
 
-  const source = React.useMemo(() => {
+  const quoteLabels = React.useMemo(() => ({
+    show: t('email_viewer.show_quoted_text', 'Show quoted text'),
+    hide: t('email_viewer.hide_quoted_text', 'Hide quoted text'),
+  }), [t]);
+
+  const prepared = React.useMemo(() => {
     if (rawHtml) {
-      return {
-        html: wrapEmailHtml(rawHtml, {
-          blockRemoteImages: shouldBlock,
-          cidMap,
-          isDark: renderAsDark,
-        }),
-      };
+      const res = prepareEmailHtml(rawHtml, {
+        blockRemoteImages: shouldBlock,
+        cidMap,
+        isDark: renderAsDark,
+        messageSpacing,
+      });
+      return { ...res, isHtml: true };
     }
     const fallbackText = text ?? email.preview ?? '';
     if (!fallbackText) {
-      return {
-        html: wrapEmailHtml('<em style="color:#71717a">(empty message)</em>', {
-          isDark: renderAsDark,
-        }),
-      };
+      const res = prepareEmailHtml(
+        `<em style="color:#71717a">${t('email_viewer.no_body_content', '(No body content available)')}</em>`,
+        { isDark: renderAsDark },
+      );
+      return { ...res, isHtml: true };
     }
+    const safe = collapsePlainTextQuotes(plainTextToSafeHtml(fallbackText), quoteLabels);
     return {
-      html: wrapPlainTextEmail(plainTextToSafeHtml(fallbackText), { isDark: renderAsDark }),
+      html: wrapPlainTextEmail(safe, { isDark: renderAsDark, font: plainTextFont }),
+      applyInversion: false,
+      hasNativeDark: false,
+      blockedExternal: false,
+      isHtml: false,
     };
-  }, [rawHtml, text, email.preview, shouldBlock, cidMap, renderAsDark]);
+  }, [rawHtml, text, email.preview, shouldBlock, cidMap, renderAsDark, messageSpacing, plainTextFont, quoteLabels, t]);
 
-  // Inversion is applied for HTML bodies in dark mode unless the email ships its
-  // own dark-mode CSS. When it's on, prepend the DOM re-inversion pass (emoji +
-  // stylesheet backgrounds) so it runs before the height reporter measures.
-  const applyInversion =
-    !!rawHtml && renderAsDark && !hasNativeDarkMode(rawHtml);
+  const source = React.useMemo(() => ({ html: prepared.html }), [prepared.html]);
+  const showBanner = shouldBlock && prepared.blockedExternal;
+
+  // Inversion is applied for HTML bodies in dark mode unless the email ships
+  // its own dark-mode CSS - decided once by prepareEmailHtml on the same
+  // input the CSS was built from, so the DOM pass and the stylesheet agree.
   const injectedJs = React.useMemo(
     () =>
-      (applyInversion ? DARK_REINVERT_SCRIPT + HEIGHT_REPORTER : HEIGHT_REPORTER)
-      + SWIPE_DETECTOR + PINCH_ZOOM,
-    [applyInversion],
+      (prepared.isHtml ? buildQuoteCollapseScript(quoteLabels) : '')
+      + (prepared.applyInversion ? DARK_REINVERT_SCRIPT : '')
+      + (prepared.isHtml ? IMG_FIXUP_SCRIPT : '')
+      + HEIGHT_REPORTER + SWIPE_DETECTOR + PINCH_ZOOM,
+    [prepared.isHtml, prepared.applyInversion, quoteLabels],
   );
 
   const onMessage = (e: WebViewMessageEvent) => {
@@ -643,31 +699,52 @@ export default function EmailBodyView({
   const onLoadImages = () => setAllowOnce(true);
   const onTrustSender = () => {
     if (senderEmail) {
-      // Keep the local allow-list for instant effect, and persist to the
-      // dedicated "Trusted Senders" address book so the trust syncs across
-      // devices (matches the webmail behavior).
+      // Keep the local allow-list for instant effect. The server-side "Trusted
+      // Senders" address book (synced across devices) is only written when
+      // the user opted into it - otherwise a book would silently appear in
+      // their contacts (matches the webmail).
       addTrustedSender(senderEmail);
-      void addToTrustedSendersBook(senderEmail).catch(() => {});
+      if (trustedSendersAddressBook) {
+        void addToTrustedSendersBook(senderEmail).catch(() => {});
+      }
       setAllowOnce(true);
     }
+  };
+
+  // mailto: links inside the body open the app's own composer with the parsed
+  // recipients/subject/body rather than the OS mail handler (webmail 1.8.1).
+  const openMailto = (url: string) => {
+    const fields = parseMailtoUrl(url);
+    if (!fields) return;
+    navigation.navigate('Compose', {
+      prefillTo: fields.to.map((address) => ({ email: address })),
+      prefillCc: fields.cc?.map((address) => ({ email: address })),
+      prefillSubject: fields.subject,
+      prefillBody: fields.body,
+    });
   };
 
   return (
     <View style={styles.wrapper}>
       {showBanner && (
         <View style={styles.banner}>
-          {externalContentPolicy === 'ask' && (
-            <Pressable style={styles.bannerButton} onPress={onLoadImages} hitSlop={8}>
-              <ImageIcon size={14} color={c.textSecondary} />
-              <Text style={styles.bannerButtonText}>Load external content</Text>
-            </Pressable>
-          )}
-          {senderEmail ? (
-            <Pressable style={styles.bannerButton} onPress={onTrustSender} hitSlop={8}>
-              <ShieldCheck size={14} color={c.textSecondary} />
-              <Text style={styles.bannerButtonText}>Trust sender</Text>
-            </Pressable>
-          ) : null}
+          <Text style={styles.bannerText}>
+            {t('email_viewer.external_content_warning', 'Images and external content have been blocked')}
+          </Text>
+          <View style={styles.bannerActions}>
+            {externalContentPolicy === 'ask' && (
+              <Pressable style={styles.bannerButton} onPress={onLoadImages} hitSlop={8}>
+                <ImageIcon size={14} color={c.textSecondary} />
+                <Text style={styles.bannerButtonText}>{t('email_viewer.load_external_content', 'Load images')}</Text>
+              </Pressable>
+            )}
+            {senderEmail ? (
+              <Pressable style={styles.bannerButton} onPress={onTrustSender} hitSlop={8}>
+                <ShieldCheck size={14} color={c.textSecondary} />
+                <Text style={styles.bannerButtonText}>{t('email_viewer.trust_sender', 'Always trust this sender')}</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       )}
 
@@ -685,9 +762,9 @@ export default function EmailBodyView({
             // reload the source mid-zoom).
             onZoomChange?.({ pinching: false, zoomed: false });
             // Re-inject after load to cover Android cases where
-            // `injectedJavaScript` runs too early to see the final layout. The
-            // re-inversion pass guards itself (__rnDarkInvertDone) so running it
-            // again here is a no-op once the body has been processed.
+            // `injectedJavaScript` runs too early to see the final layout. Every
+            // pass guards itself so running it again here is a no-op once the
+            // body has been processed.
             setTimeout(() => {
               webviewRef.current?.injectJavaScript(injectedJs);
             }, 50);
@@ -714,10 +791,15 @@ export default function EmailBodyView({
           containerStyle={styles.webviewContainer}
           onShouldStartLoadWithRequest={(request) => {
             const url = request.url;
-            if (!url || url === 'about:blank' || url.startsWith('data:')) {
-              return true;
+            // Only the initial about:blank document may load. A `data:` (or
+            // any other) navigation would replace the email body with no way
+            // back, so it is refused; images are reachable via the chips.
+            if (!url || url === 'about:blank') return true;
+            if (/^mailto:/i.test(url)) {
+              openMailto(url);
+              return false;
             }
-            if (/^(https?|mailto|tel|sms):/i.test(url)) {
+            if (/^(https?|tel|sms):/i.test(url)) {
               void Linking.openURL(url).catch(() => undefined);
             }
             return false;
@@ -732,15 +814,22 @@ function makeStyles(c: ThemePalette) {
   return StyleSheet.create({
   wrapper: { width: '100%' },
   banner: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: spacing.md,
+    gap: spacing.xs,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     backgroundColor: c.surfaceHover,
     borderBottomWidth: 1,
     borderBottomColor: c.border,
+  },
+  bannerText: {
+    ...typography.caption,
+    color: c.textMuted,
+  },
+  bannerActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.md,
   },
   bannerButton: {
     flexDirection: 'row',

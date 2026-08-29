@@ -10,6 +10,10 @@ export type Density = 'extra-compact' | 'compact' | 'regular' | 'comfortable';
 export type DeleteAction = 'trash' | 'trash-and-read' | 'permanent';
 export type MailAttachmentAction = 'preview' | 'download';
 export type AttachmentPosition = 'beside-sender' | 'below-header';
+export type PlainTextFont = 'sans' | 'mono';
+export type MessageSpacing = 'auto' | 'always' | 'edge';
+export type ReadReceiptResponse = 'ask' | 'always' | 'never';
+export type PostExportAction = 'keep' | 'archive' | 'trash';
 export type SwipeAction =
   | 'none'
   | 'archive'
@@ -20,6 +24,7 @@ export type SwipeAction =
   | 'pin'
   | 'move';
 export type SwipeMode = 'instant' | 'reveal';
+export type SignaturePosition = 'above_quote' | 'below_quote';
 // Actions that can be placed in the email reader's bottom quick-action bar.
 // The first three are the reply family (the default bar); any reply-family
 // action the user removes from the bar is relocated to the top toolbar so it
@@ -150,6 +155,19 @@ interface PersistedSettings {
   // Undo-send window: every send is deferred by this many seconds (via the
   // server's FUTURERELEASE support) so it can be cancelled. 0 = send instantly.
   sendDelaySeconds: number;
+  // Signature placement in replies/forwards and the RFC 3676 "-- " separator.
+  signaturePosition: SignaturePosition;
+  signatureSeparatorEnabled: boolean;
+  // Pre-check "request read receipt" in the composer.
+  requestReadReceiptDefault: boolean;
+  // Confirm before sending a message without a subject (#684).
+  emptySubjectWarningEnabled: boolean;
+  // Draft autosave debounce, milliseconds.
+  autoSaveDraftInterval: number;
+  // Character separating user from tag (e.g. "user+tag@"), RFC 5233.
+  subAddressDelimiter: string;
+  // Default sender identity per JMAP account id (#507).
+  preferredIdentityIds: Record<string, string>;
 
   // Reading
   markAsReadDelay: number;
@@ -163,6 +181,13 @@ interface PersistedSettings {
   disableThreading: boolean;
   mailAttachmentAction: MailAttachmentAction;
   attachmentPosition: AttachmentPosition;
+  // Reader body: font for text/plain bodies (#830), gutter around the body,
+  // how to answer read-receipt requests (RFC 8098) and what to do with a
+  // message after it was exported as .eml.
+  plainTextFont: PlainTextFont;
+  messageSpacing: MessageSpacing;
+  readReceiptResponse: ReadReceiptResponse;
+  postExportAction: PostExportAction;
 
   // Layout / list interactions
   swipeLeftAction: SwipeAction;
@@ -296,6 +321,13 @@ const DEFAULT_PERSISTED: PersistedSettings = {
   ],
   plainTextMode: false,
   sendDelaySeconds: 0,
+  signaturePosition: 'below_quote',
+  signatureSeparatorEnabled: true,
+  requestReadReceiptDefault: false,
+  emptySubjectWarningEnabled: true,
+  autoSaveDraftInterval: 60000,
+  subAddressDelimiter: '+',
+  preferredIdentityIds: {},
 
   markAsReadDelay: 0,
   deleteAction: 'trash',
@@ -306,6 +338,10 @@ const DEFAULT_PERSISTED: PersistedSettings = {
   disableThreading: false,
   mailAttachmentAction: 'preview',
   attachmentPosition: 'beside-sender',
+  plainTextFont: 'sans',
+  messageSpacing: 'auto',
+  readReceiptResponse: 'ask',
+  postExportAction: 'keep',
 
   swipeLeftAction: 'archive',
   swipeRightAction: 'read',
@@ -467,11 +503,21 @@ const VALIDATORS: Partial<Record<keyof PersistedSettings, (v: unknown) => boolea
   attachmentReminderKeywords: stringArray,
   // Same set the webmail accepts (stores/settings-store.ts importSettings).
   sendDelaySeconds: oneOf([0, 10, 30, 60]),
+  signaturePosition: oneOf(['above_quote', 'below_quote']),
+  autoSaveDraftInterval: intBetween(1000, 3600000),
+  // RFC 5321 atext specials minus alphanumerics and "@" (lib/sub-addressing).
+  subAddressDelimiter: (v) => typeof v === 'string' && /^[!#$%&'*+\-./=?^_`{|}~]$/.test(v),
+  preferredIdentityIds: (v) => !!v && typeof v === 'object' && !Array.isArray(v)
+    && Object.values(v as Record<string, unknown>).every((x) => typeof x === 'string'),
   markAsReadDelay: (v) => typeof v === 'number' && Number.isFinite(v) && v >= -1,
   deleteAction: oneOf(['trash', 'trash-and-read', 'permanent']),
   emailsPerPage: intBetween(1, 500),
   mailAttachmentAction: oneOf(['preview', 'download']),
   attachmentPosition: oneOf(['beside-sender', 'below-header']),
+  plainTextFont: oneOf(['sans', 'mono']),
+  messageSpacing: oneOf(['auto', 'always', 'edge']),
+  readReceiptResponse: oneOf(['ask', 'always', 'never']),
+  postExportAction: oneOf(['keep', 'archive', 'trash']),
   swipeLeftAction: oneOf(SWIPE_ACTIONS),
   swipeRightAction: oneOf(SWIPE_ACTIONS),
   swipeMode: oneOf(['instant', 'reveal']),

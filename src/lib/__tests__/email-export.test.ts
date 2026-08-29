@@ -33,9 +33,18 @@ vi.mock('expo-file-system', () => {
     write() {}
     static downloadFileAsync = vi.fn(async () => undefined);
   }
+  class Directory {
+    uri: string;
+    exists = true;
+    constructor(parent: { uri: string }, name: string) {
+      this.uri = `${parent.uri}${name}/`;
+    }
+    create() {}
+    list() { return []; }
+  }
   return {
     File,
-    Directory: class {},
+    Directory,
     Paths: { cache: { uri: 'file:///cache/' }, document: { uri: 'file:///documents/' } },
   };
 });
@@ -54,8 +63,16 @@ vi.mock('../client-cert', () => ({
   secureFetch: vi.fn(),
 }));
 
+const { jmapClientMock } = vi.hoisted(() => ({
+  jmapClientMock: {
+    authHeader: 'Bearer token',
+    ensureFreshToken: vi.fn(async () => undefined),
+    forceRefreshToken: vi.fn(async () => false),
+  },
+}));
+
 vi.mock('../../api/jmap-client', () => ({
-  jmapClient: { authHeader: 'Bearer token' },
+  jmapClient: jmapClientMock,
 }));
 
 vi.mock('../../api/blob', () => ({
@@ -96,7 +113,7 @@ describe('shareAttachment (preview)', () => {
     await shareAttachment('blob-2', 'weird.xyz', 'application/x-weird');
 
     // file:// — expo-sharing rejects content:// URLs outright.
-    expect(Sharing.shareAsync).toHaveBeenCalledWith('file:///cache/weird.xyz', {
+    expect(Sharing.shareAsync).toHaveBeenCalledWith('file:///cache/bulwark-exports/weird.xyz', {
       mimeType: 'application/x-weird',
       dialogTitle: 'weird.xyz',
     });
@@ -112,13 +129,37 @@ describe('shareAttachment (preview)', () => {
     expect(IntentLauncher.startActivityAsync).not.toHaveBeenCalled();
   });
 
+  it('refreshes the token before downloading and retries once after a 401', async () => {
+    const { File } = await import('expo-file-system');
+    jmapClientMock.ensureFreshToken.mockClear();
+    jmapClientMock.forceRefreshToken.mockClear().mockResolvedValueOnce(true);
+    vi.mocked(File.downloadFileAsync).mockClear()
+      .mockRejectedValueOnce(new Error('Download failed: 401'))
+      .mockResolvedValueOnce(undefined as never);
+
+    await shareAttachment('blob-6', 'report.pdf', 'application/pdf');
+
+    expect(jmapClientMock.ensureFreshToken).toHaveBeenCalledTimes(1);
+    expect(jmapClientMock.forceRefreshToken).toHaveBeenCalledTimes(1);
+    expect(File.downloadFileAsync).toHaveBeenCalledTimes(2);
+    expect(IntentLauncher.startActivityAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up when the 401 persists after a refresh', async () => {
+    const { File } = await import('expo-file-system');
+    jmapClientMock.forceRefreshToken.mockClear().mockResolvedValueOnce(false);
+    vi.mocked(File.downloadFileAsync).mockRejectedValueOnce(new Error('Download failed: 401'));
+
+    await expect(shareAttachment('blob-7', 'x.pdf', 'application/pdf')).rejects.toThrow('401');
+  });
+
   it('uses the share sheet on iOS', async () => {
     platform.OS = 'ios';
 
     await shareAttachment('blob-4', 'photo.jpg', 'image/jpeg');
 
     expect(IntentLauncher.startActivityAsync).not.toHaveBeenCalled();
-    expect(Sharing.shareAsync).toHaveBeenCalledWith('file:///cache/photo.jpg', {
+    expect(Sharing.shareAsync).toHaveBeenCalledWith('file:///cache/bulwark-exports/photo.jpg', {
       mimeType: 'image/jpeg',
       dialogTitle: 'photo.jpg',
     });

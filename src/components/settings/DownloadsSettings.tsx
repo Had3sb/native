@@ -5,7 +5,7 @@ import { SettingsSection, SettingItem, RadioGroup, ToggleSwitch } from './settin
 import Input from '../Input';
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
-import { useSettingsStore, type SpaceReplacement } from '../../stores/settings-store';
+import { useSettingsStore, type SpaceReplacement, type PostExportAction } from '../../stores/settings-store';
 import {
   emailExportFilename,
   attachmentDownloadFilename,
@@ -32,6 +32,7 @@ export function DownloadsSettings() {
   const spaceReplacement = useSettingsStore((s) => s.exportSpaceReplacement);
   const lowercase = useSettingsStore((s) => s.exportLowercase);
   const stripDiacritics = useSettingsStore((s) => s.exportStripDiacritics);
+  const postExportAction = useSettingsStore((s) => s.postExportAction);
 
   useEffect(() => { if (!hydrated) void hydrate(); }, [hydrated, hydrate]);
 
@@ -119,6 +120,23 @@ export function DownloadsSettings() {
         >
           <ToggleSwitch checked={stripDiacritics} onChange={(v) => update('exportStripDiacritics', v)} />
         </SettingItem>
+      </SettingsSection>
+
+      <SettingsSection
+        title="After Export"
+        description="What happens to a message after it was exported as .eml."
+      >
+        <View style={styles.group}>
+          <RadioGroup
+            value={postExportAction}
+            onChange={(v) => update('postExportAction', v as PostExportAction)}
+            options={[
+              { value: 'keep', label: 'Keep in folder' },
+              { value: 'archive', label: 'Archive' },
+              { value: 'trash', label: 'Move to Trash' },
+            ]}
+          />
+        </View>
       </SettingsSection>
     </View>
   );
