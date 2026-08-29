@@ -8,19 +8,25 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import {
   ArrowLeft, Mail, Phone, Building, MapPin, Cake, Tag, FileText, User, Check, Calendar,
-  Camera, X as XIcon, Globe, Heart, UserCircle, Plus, ChevronDown, ChevronRight, Book,
+  Camera, X as XIcon, Globe, Heart, UserCircle, Plus, ChevronDown, ChevronRight, Book, Users,
 } from 'lucide-react-native';
 import type { RootStackParamList } from '../navigation/types';
 import type {
   ContactCard, ContactEmail, ContactPhone, ContactAddress, ContactOrganization,
-  ContactAnniversary, ContactNote, ContactMedia, PartialDate, ContactOnlineService,
+  ContactAnniversary, ContactNote, ContactMedia, ContactOnlineService,
   ContactPersonalInfo, ContactNickname,
 } from '../api/types';
-import { useContactsStore } from '../stores/contacts-store';
-import { getContactKeywords, getContactDisplayName } from '../lib/contact-utils';
+import { useContactsStore, selectGroupMembers } from '../stores/contacts-store';
+import {
+  getContactKeywords, getContactDisplayName, getContactPrimaryEmail,
+  normalizeContactPhotoUri, partialDateToString, stringToPartialDate,
+} from '../lib/contact-utils';
+import { splitMailbox } from '../lib/rfc5322-mailbox';
 import Dialog from '../components/Dialog';
+import ContactPickerSheet from '../components/contacts/ContactPickerSheet';
 import { spacing, radius, typography, componentSizes, type ThemePalette } from '../theme/tokens';
 import { useColors } from '../theme/colors';
 
@@ -39,18 +45,19 @@ interface AddressDraft {
 }
 interface OrgDraft { name: string; department: string; jobTitle: string; role: string }
 interface AnniversaryDraft { kind: string; date: string }
-interface OnlineDraft { uri: string; service: string }
+interface OnlineDraft { uri: string; service: string; label: string }
 interface PersonalInfoDraft { kind: string; level: string; value: string }
 interface NoteDraft { note: string }
 
 interface FormState {
+  isOrg: boolean;
   prefix: string;
   given: string;
   middle: string;
   surname: string;
   suffix: string;
   full: string;
-  nickname: string;
+  nicknames: string[];
   emails: EmailDraft[];
   phones: PhoneDraft[];
   addresses: AddressDraft[];
@@ -68,17 +75,20 @@ interface FormState {
   addressBookId: string;
   photoUri: string;
   photoMediaType: string;
+  /** Group members (contact ids from the store), only used when editing a group. */
+  members: string[];
 }
 
 function blankForm(): FormState {
   return {
+    isOrg: false,
     prefix: '',
     given: '',
     middle: '',
     surname: '',
     suffix: '',
     full: '',
-    nickname: '',
+    nicknames: [''],
     emails: [{ address: '', context: '' }],
     phones: [],
     addresses: [],
@@ -96,35 +106,8 @@ function blankForm(): FormState {
     addressBookId: '',
     photoUri: '',
     photoMediaType: '',
+    members: [],
   };
-}
-
-function partialDateToString(d: ContactAnniversary['date']): string {
-  if (typeof d === 'string') return d;
-  if (typeof d === 'object' && d) {
-    if ('@type' in d && d['@type'] === 'Timestamp') return d.utc.split('T')[0];
-    const pd = d as PartialDate;
-    const yr = pd.year ? String(pd.year).padStart(4, '0') : '';
-    const mo = pd.month ? String(pd.month).padStart(2, '0') : '';
-    const da = pd.day ? String(pd.day).padStart(2, '0') : '';
-    if (yr) return `${yr}-${mo || '01'}-${da || '01'}`;
-    if (mo || da) return `--${mo}-${da}`;
-  }
-  return '';
-}
-
-function stringToAnniversaryDate(s: string): string | PartialDate | null {
-  const trimmed = s.trim();
-  if (!trimmed) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    const [y, m, d] = trimmed.split('-').map((n) => parseInt(n, 10));
-    return { year: y, month: m, day: d };
-  }
-  if (/^--\d{2}-\d{2}$/.test(trimmed)) {
-    const [, , mo, da] = trimmed.split('-');
-    return { month: parseInt(mo, 10), day: parseInt(da, 10) };
-  }
-  return trimmed;
 }
 
 function findNameComponent(contact: ContactCard | undefined, ...kinds: string[]): string {
@@ -157,7 +140,7 @@ function addressToFlat(a: ContactAddress): AddressDraft {
   };
 }
 
-function contactToForm(contact: ContactCard): FormState {
+function contactToForm(contact: ContactCard, memberIds: string[]): FormState {
   const prefix = findNameComponent(contact, 'title', 'prefix');
   const given = findNameComponent(contact, 'given');
   const middle = findNameComponent(contact, 'given2', 'additional', 'middle');
@@ -165,9 +148,9 @@ function contactToForm(contact: ContactCard): FormState {
   const suffix = findNameComponent(contact, 'generation', 'suffix');
   const full = contact.name?.full || '';
 
-  const nickname = contact.nicknames
-    ? Object.values(contact.nicknames)[0]?.name || ''
-    : '';
+  const nicknames = contact.nicknames
+    ? Object.values(contact.nicknames).map((n) => n.name || '').filter(Boolean)
+    : [];
 
   const emails = contact.emails ? Object.values(contact.emails).map((e) => ({
     address: e.address,
@@ -179,12 +162,12 @@ function contactToForm(contact: ContactCard): FormState {
     context: p.contexts?.work ? 'work' : p.contexts?.private ? 'private' : '',
     feature:
       p.features?.cell ? 'cell'
-      : p.features?.fax ? 'fax'
-      : p.features?.pager ? 'pager'
-      : p.features?.video ? 'video'
-      : p.features?.text ? 'text'
-      : p.features?.voice ? 'voice'
-      : '',
+        : p.features?.fax ? 'fax'
+          : p.features?.pager ? 'pager'
+            : p.features?.video ? 'video'
+              : p.features?.text ? 'text'
+                : p.features?.voice ? 'voice'
+                  : '',
   })) : [];
 
   const addresses = contact.addresses ? Object.values(contact.addresses).map(addressToFlat) : [];
@@ -213,6 +196,7 @@ function contactToForm(contact: ContactCard): FormState {
   const online = contact.onlineServices ? Object.values(contact.onlineServices).map((s) => ({
     uri: s.uri || '',
     service: s.service || '',
+    label: s.label || '',
   })) : [];
 
   const personalInfo = contact.personalInfo ? Object.values(contact.personalInfo).map((pi) => ({
@@ -233,16 +217,25 @@ function contactToForm(contact: ContactCard): FormState {
   const photoEntry = contact.media
     ? Object.values(contact.media).find((m) => m.kind === 'photo')
     : undefined;
-  const photoUri = photoEntry?.uri || '';
-  const photoMediaType = photoEntry?.mediaType || '';
+  // Stalwart may hand back `data:base64,…` without a media type (#307).
+  const photoUri = photoEntry?.uri ? normalizeContactPhotoUri(photoEntry.uri, photoEntry.mediaType) : '';
+  const photoMediaType = photoEntry?.mediaType || (photoUri.startsWith('data:image/jpeg') ? 'image/jpeg' : '');
 
   const grammaticalGender = contact.speakToAs?.grammaticalGender || '';
   const pronouns = contact.speakToAs?.pronouns
     ? Object.values(contact.speakToAs.pronouns)[0]?.pronouns || ''
     : '';
 
+  // A card may describe an organization instead of a person (RFC 9553 kind
+  // "org"). Older cards predate the explicit kind, so fall back to "has an org
+  // name but no personal name".
+  const isOrg = contact.kind
+    ? contact.kind === 'org'
+    : !(given || surname) && !!rawOrgs[0]?.name;
+
   return {
-    prefix, given, middle, surname, suffix, full, nickname,
+    isOrg, prefix, given, middle, surname, suffix, full,
+    nicknames: nicknames.length > 0 ? nicknames : [''],
     emails: emails.length > 0 ? emails : [{ address: '', context: '' }],
     phones, addresses, orgs, anniversaries, online,
     personalInfo, notes, keywords, addressBookId, photoUri, photoMediaType,
@@ -250,24 +243,60 @@ function contactToForm(contact: ContactCard): FormState {
     calendarUri: contact.calendarUri || '',
     schedulingUri: contact.schedulingUri || '',
     freeBusyUri: contact.freeBusyUri || '',
+    members: memberIds,
   };
 }
 
-function formToPatch(form: FormState): Partial<ContactCard> {
-  const components: Array<{ kind: string; value: string }> = [];
-  if (form.prefix) components.push({ kind: 'title', value: form.prefix });
-  if (form.given) components.push({ kind: 'given', value: form.given });
-  if (form.middle) components.push({ kind: 'given2', value: form.middle });
-  if (form.surname) components.push({ kind: 'surname', value: form.surname });
-  if (form.suffix) components.push({ kind: 'generation', value: form.suffix });
+/** Group-membership key for a card (RFC 9553 members are keyed by UID). */
+function memberKey(contact: ContactCard): string {
+  return contact.uid || contact.originalId || contact.id;
+}
 
+function memberKeyMatches(key: string, contact: ContactCard): boolean {
+  const bare = key.startsWith('urn:uuid:') ? key.slice(9) : key;
+  const bareUid = contact.uid?.startsWith('urn:uuid:') ? contact.uid.slice(9) : contact.uid;
+  return key === contact.id || bare === contact.id
+    || (!!contact.originalId && (key === contact.originalId || bare === contact.originalId))
+    || (!!contact.uid && (key === contact.uid || bare === bareUid));
+}
+
+/**
+ * Build the JMAP patch. In edit mode every collection the form owns that ended
+ * up empty is sent as `null` so the server clears it - omitting the key would
+ * mean "unchanged" and the removed phone/address/note would come right back.
+ */
+function formToPatch(
+  form: FormState,
+  existing: ContactCard | undefined,
+  asGroup: boolean,
+  allContacts: ContactCard[],
+): Partial<ContactCard> {
+  const isEdit = !!existing;
+  const orgName = form.orgs[0]?.name.trim() || '';
+
+  // Organization cards carry no personal name components; the org name goes
+  // into `name.full` below. A group name lives in `given`.
+  const components: Array<{ kind: string; value: string }> = [];
+  if (!form.isOrg) {
+    if (form.prefix.trim()) components.push({ kind: 'title', value: form.prefix.trim() });
+    if (form.given.trim()) components.push({ kind: 'given', value: form.given.trim() });
+    if (form.middle.trim()) components.push({ kind: 'given2', value: form.middle.trim() });
+    if (form.surname.trim()) components.push({ kind: 'surname', value: form.surname.trim() });
+    if (form.suffix.trim()) components.push({ kind: 'generation', value: form.suffix.trim() });
+  }
+
+  // Without personal name components, carry the organization name in
+  // `name.full` so servers and other clients have something to display.
+  const full = form.full.trim() || (form.isOrg ? orgName : '');
   const name: ContactCard['name'] | undefined =
-    components.length > 0 || form.full
-      ? { ...(components.length > 0 ? { components, isOrdered: true } : {}), ...(form.full ? { full: form.full } : {}) }
+    components.length > 0 || full
+      ? { ...(components.length > 0 ? { components, isOrdered: true } : {}), ...(full ? { full } : {}) }
       : undefined;
 
-  const nicknames: Record<string, ContactNickname> | undefined =
-    form.nickname.trim() ? { n0: { name: form.nickname.trim() } } : undefined;
+  const nicknames: Record<string, ContactNickname> = {};
+  form.nicknames.map((n) => n.trim()).filter(Boolean).forEach((n, i) => {
+    nicknames[`n${i}`] = { name: n };
+  });
 
   const emails: Record<string, ContactEmail> = {};
   form.emails.filter((e) => e.address.trim()).forEach((e, i) => {
@@ -324,7 +353,7 @@ function formToPatch(form: FormState): Partial<ContactCard> {
 
   const anniversaries: Record<string, ContactAnniversary> = {};
   form.anniversaries.forEach((a, i) => {
-    const date = stringToAnniversaryDate(a.date);
+    const date = stringToPartialDate(a.date);
     if (!date) return;
     anniversaries[`an${i + 1}`] = { kind: a.kind as ContactAnniversary['kind'], date };
   });
@@ -334,6 +363,7 @@ function formToPatch(form: FormState): Partial<ContactCard> {
     onlineServices[`os${i + 1}`] = {
       uri: s.uri.trim(),
       ...(s.service.trim() ? { service: s.service.trim() } : {}),
+      ...(s.label.trim() ? { label: s.label.trim() } : {}),
     };
   });
 
@@ -356,9 +386,18 @@ function formToPatch(form: FormState): Partial<ContactCard> {
     if (k.trim()) keywords[k.trim()] = true;
   });
 
+  // Media: keep every non-photo entry (logo, sound) the card already has and
+  // write the photo back under its original key.
   const media: Record<string, ContactMedia> = {};
+  let photoKey = 'photo';
+  if (existing?.media) {
+    for (const [key, m] of Object.entries(existing.media)) {
+      if (m.kind === 'photo') photoKey = key;
+      else media[key] = m;
+    }
+  }
   if (form.photoUri.trim()) {
-    media.photo = {
+    media[photoKey] = {
       kind: 'photo',
       uri: form.photoUri.trim(),
       ...(form.photoMediaType ? { mediaType: form.photoMediaType } : {}),
@@ -368,32 +407,75 @@ function formToPatch(form: FormState): Partial<ContactCard> {
   const speakToAs =
     form.grammaticalGender || form.pronouns.trim()
       ? {
-          ...(form.grammaticalGender ? { grammaticalGender: form.grammaticalGender } : {}),
-          ...(form.pronouns.trim()
-            ? { pronouns: { p0: { pronouns: form.pronouns.trim() } } }
-            : {}),
-        }
+        ...(form.grammaticalGender ? { grammaticalGender: form.grammaticalGender } : {}),
+        ...(form.pronouns.trim()
+          ? { pronouns: { p0: { pronouns: form.pronouns.trim() } } }
+          : {}),
+      }
       : undefined;
 
-  return {
-    ...(name ? { name } : {}),
-    ...(nicknames ? { nicknames } : {}),
-    ...(Object.keys(emails).length ? { emails } : {}),
-    ...(Object.keys(phones).length ? { phones } : {}),
-    ...(Object.keys(addresses).length ? { addresses } : {}),
-    ...(Object.keys(organizations).length ? { organizations } : {}),
-    ...(Object.keys(titles).length ? { titles } : {}),
-    ...(Object.keys(anniversaries).length ? { anniversaries } : {}),
-    ...(Object.keys(onlineServices).length ? { onlineServices } : {}),
-    ...(Object.keys(personalInfo).length ? { personalInfo } : {}),
-    ...(Object.keys(notes).length ? { notes } : {}),
-    ...(Object.keys(keywords).length ? { keywords } : {}),
-    ...(speakToAs ? { speakToAs } : {}),
-    ...(form.calendarUri.trim() ? { calendarUri: form.calendarUri.trim() } : {}),
-    ...(form.schedulingUri.trim() ? { schedulingUri: form.schedulingUri.trim() } : {}),
-    ...(form.freeBusyUri.trim() ? { freeBusyUri: form.freeBusyUri.trim() } : {}),
-    media,
+  // Collections: value when non-empty; `null` on edit when the card had one
+  // before (clears it server-side); omitted otherwise.
+  const collection = (key: keyof ContactCard, value: Record<string, unknown>): Record<string, unknown> => {
+    if (Object.keys(value).length > 0) return { [key]: value };
+    if (isEdit && existing?.[key] !== undefined) return { [key]: null };
+    return {};
   };
+  const scalar = (key: keyof ContactCard, value: string): Record<string, unknown> => {
+    if (value) return { [key]: value };
+    if (isEdit && existing?.[key] !== undefined) return { [key]: null };
+    return {};
+  };
+
+  // Only send `kind` when this form owns the answer: switching a card between
+  // person and organization. Leave other kinds (group, location, ...) untouched.
+  const kind: Partial<ContactCard> = asGroup
+    ? { kind: 'group' }
+    : form.isOrg
+      ? { kind: 'org' }
+      : existing?.kind === 'org' ? { kind: 'individual' } : {};
+
+  const patch: Record<string, unknown> = {
+    ...kind,
+    ...(name ? { name } : isEdit && existing?.name ? { name: null } : {}),
+    ...collection('nicknames', nicknames),
+    ...collection('emails', emails),
+    ...collection('phones', phones),
+    ...collection('addresses', addresses),
+    ...collection('organizations', organizations),
+    ...collection('titles', titles),
+    ...collection('anniversaries', anniversaries),
+    ...collection('onlineServices', onlineServices),
+    ...collection('personalInfo', personalInfo),
+    ...collection('notes', notes),
+    ...collection('keywords', keywords),
+    ...(speakToAs ? { speakToAs } : isEdit && existing?.speakToAs ? { speakToAs: null } : {}),
+    ...scalar('calendarUri', form.calendarUri.trim()),
+    ...scalar('schedulingUri', form.schedulingUri.trim()),
+    ...scalar('freeBusyUri', form.freeBusyUri.trim()),
+    ...collection('media', media),
+  };
+
+  if (asGroup) {
+    // Start from the stored map so members we cannot resolve locally survive;
+    // drop the resolved ones that were deselected and add the new picks.
+    const members: Record<string, boolean> = { ...(existing?.members || {}) };
+    const selected = form.members
+      .map((id) => allContacts.find((c) => c.id === id))
+      .filter((c): c is ContactCard => !!c);
+    for (const key of Object.keys(members)) {
+      const owner = allContacts.find((c) => memberKeyMatches(key, c));
+      if (owner && !selected.some((s) => s.id === owner.id)) delete members[key];
+    }
+    for (const contact of selected) {
+      if (!Object.keys(members).some((key) => memberKeyMatches(key, contact))) {
+        members[memberKey(contact)] = true;
+      }
+    }
+    patch.members = members;
+  }
+
+  return patch as Partial<ContactCard>;
 }
 
 const EMAIL_CONTEXTS: Array<{ value: string; label: string }> = [
@@ -434,15 +516,55 @@ const PERSONAL_INFO_LEVELS: Array<{ value: string; label: string }> = [
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
 ];
+// Same vocabulary as the webmail form and the vCard SEX mapping
+// (M/F/O/N/U), so a card renders the same value in both apps.
 const GENDER_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: 'Unspecified' },
   { value: 'masculine', label: 'Masculine' },
   { value: 'feminine', label: 'Feminine' },
-  { value: 'common', label: 'Common' },
-  { value: 'neuter', label: 'Neuter' },
-  { value: 'animate', label: 'Animate' },
-  { value: 'inanimate', label: 'Inanimate' },
+  { value: 'other', label: 'Other' },
+  { value: 'none', label: 'None' },
+  { value: 'unknown', label: 'Unknown' },
 ];
+const KIND_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'person', label: 'Person' },
+  { value: 'org', label: 'Organization' },
+];
+
+const MAX_PHOTO_DIM = 512;
+const PHOTO_QUALITY = 0.85;
+
+/**
+ * Downscale a picked image to at most 512px and embed it as a JPEG data URI
+ * (the webmail's processImageFile). Falls back to the picker's own base64
+ * when the manipulator is unavailable.
+ */
+async function processPickedImage(asset: ImagePicker.ImagePickerAsset): Promise<{ uri: string; mediaType: string }> {
+  try {
+    const width = asset.width || 0;
+    const height = asset.height || 0;
+    const longest = Math.max(width, height);
+    const actions: ImageManipulator.Action[] = [];
+    if (longest > MAX_PHOTO_DIM) {
+      actions.push({ resize: width >= height ? { width: MAX_PHOTO_DIM } : { height: MAX_PHOTO_DIM } });
+    } else if (!longest) {
+      actions.push({ resize: { width: MAX_PHOTO_DIM } });
+    }
+    const result = await ImageManipulator.manipulateAsync(asset.uri, actions, {
+      compress: PHOTO_QUALITY,
+      format: ImageManipulator.SaveFormat.JPEG,
+      base64: true,
+    });
+    if (result.base64) {
+      return { uri: `data:image/jpeg;base64,${result.base64}`, mediaType: 'image/jpeg' };
+    }
+  } catch (err) {
+    console.warn('[contact-form] photo downscale failed, using original', err);
+  }
+  const mime = asset.mimeType || 'image/jpeg';
+  if (asset.base64) return { uri: `data:${mime};base64,${asset.base64}`, mediaType: mime };
+  return { uri: asset.uri, mediaType: mime };
+}
 
 function Pills({
   value, options, onChange,
@@ -551,13 +673,14 @@ export default function ContactFormScreen() {
   const styles = React.useMemo(() => makeStyles(c), [c]);
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const { contactId, addressBookId: initialBook, asGroup } = route.params || {};
+  const { contactId, addressBookId: initialBook, asGroup, prefill, memberIds: initialMemberIds } = route.params || {};
   const isEdit = !!contactId;
 
   const addressBooks = useContactsStore((s) => s.addressBooks);
   const allContacts = useContactsStore((s) => s.contacts);
   const createContact = useContactsStore((s) => s.createContact);
   const updateContact = useContactsStore((s) => s.updateContact);
+  const getDefaultAddressBookId = useContactsStore((s) => s.getDefaultAddressBookId);
   const existing = React.useMemo(
     () => (contactId ? allContacts.find((c) => c.id === contactId) : undefined),
     [allContacts, contactId],
@@ -575,23 +698,42 @@ export default function ContactFormScreen() {
   }, [allContacts]);
 
   const [form, setForm] = React.useState<FormState>(() => {
-    if (existing) return contactToForm(existing);
+    if (existing) {
+      const members = asGroup
+        ? selectGroupMembers({ contacts: allContacts }, existing.id).map((m) => m.id)
+        : [];
+      return contactToForm(existing, members);
+    }
     const init = blankForm();
-    if (initialBook) init.addressBookId = initialBook;
-    else if (addressBooks[0]) init.addressBookId = addressBooks[0].id;
+    init.addressBookId = initialBook || getDefaultAddressBookId() || '';
+    if (initialMemberIds?.length) init.members = initialMemberIds;
+    if (prefill?.email) {
+      // "Add sender to contacts": split the display name like the webmail
+      // (first word → given, rest → surname) and never let a mailbox-shaped
+      // name through (#672).
+      const mailbox = splitMailbox(prefill.name ? `${prefill.name} <${prefill.email}>` : prefill.email);
+      init.emails = [{ address: mailbox.email, context: '' }];
+      const parts = (mailbox.name || '').split(/\s+/).filter(Boolean);
+      if (parts.length > 0) {
+        init.given = parts[0];
+        init.surname = parts.slice(1).join(' ');
+      }
+    }
     return init;
   });
   const [keywordInput, setKeywordInput] = React.useState('');
   const [saving, setSaving] = React.useState(false);
-  const [dirty, setDirty] = React.useState(false);
+  const [dirty, setDirty] = React.useState(!!prefill || !!initialMemberIds?.length);
   const [confirmDiscard, setConfirmDiscard] = React.useState(false);
   const [datePickerIndex, setDatePickerIndex] = React.useState<number | null>(null);
+  const [memberPickerOpen, setMemberPickerOpen] = React.useState(false);
 
   React.useEffect(() => {
-    if (!form.addressBookId && addressBooks[0]) {
-      setForm((f) => ({ ...f, addressBookId: addressBooks[0].id }));
+    if (!form.addressBookId) {
+      const fallback = getDefaultAddressBookId();
+      if (fallback) setForm((f) => ({ ...f, addressBookId: fallback }));
     }
-  }, [addressBooks, form.addressBookId]);
+  }, [addressBooks, form.addressBookId, getDefaultAddressBookId]);
 
   const updateForm = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setDirty(true);
@@ -604,11 +746,25 @@ export default function ContactFormScreen() {
   };
 
   const handleSave = async () => {
-    const hasName = form.given || form.surname || form.full;
-    const hasEmail = form.emails.some((e) => e.address.trim());
-    if (!hasName && !hasEmail) {
-      Alert.alert('Missing info', 'Add a name or at least one email.');
-      return;
+    const orgName = form.orgs[0]?.name.trim() || '';
+    if (asGroup) {
+      if (!form.given.trim()) {
+        Alert.alert('Missing info', 'Give the group a name.');
+        return;
+      }
+    } else if (form.isOrg) {
+      if (!orgName) {
+        Alert.alert('Missing info', 'Add the organization name.');
+        return;
+      }
+    } else {
+      const hasName = form.given.trim() || form.surname.trim() || form.full.trim();
+      const hasEmail = form.emails.some((e) => e.address.trim());
+      // An organization name identifies the card just as well as a personal name.
+      if (!hasName && !hasEmail && !orgName) {
+        Alert.alert('Missing info', 'Add a name or at least one email.');
+        return;
+      }
     }
     if (!form.addressBookId) {
       Alert.alert('Missing address book', 'Select an address book to save this contact.');
@@ -621,16 +777,25 @@ export default function ContactFormScreen() {
         return;
       }
     }
+    // Dates must be structured (RFC 9553 PartialDate) - the server rejects
+    // free text, and a rejected date used to take the whole card with it.
+    for (const a of form.anniversaries) {
+      if (a.date.trim() && !stringToPartialDate(a.date)) {
+        Alert.alert('Invalid date', `"${a.date}" is not a date. Use YYYY-MM-DD, YYYY-MM, YYYY or --MM-DD.`);
+        return;
+      }
+    }
     setSaving(true);
     try {
-      const patch = formToPatch(form);
-      if (asGroup) patch.kind = 'group';
+      const patch = formToPatch(form, existing, !!asGroup || existing?.kind === 'group', allContacts);
       if (isEdit && existing) {
         await updateContact(existing.id, patch);
+        navigation.goBack();
       } else {
-        await createContact(patch, form.addressBookId);
+        const created = await createContact(patch, form.addressBookId);
+        if (asGroup) navigation.replace('GroupDetail', { groupId: created.id });
+        else navigation.replace('ContactDetail', { contactId: created.id });
       }
-      navigation.goBack();
     } catch (err) {
       Alert.alert('Save failed', err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -639,29 +804,245 @@ export default function ContactFormScreen() {
   };
 
   const headerTitle = isEdit
-    ? `Edit ${existing ? getContactDisplayName(existing) : 'Contact'}`
+    ? `Edit ${existing ? getContactDisplayName(existing) : asGroup ? 'Group' : 'Contact'}`
     : asGroup ? 'New Group' : 'New Contact';
 
-  const previewName = [form.given, form.surname].filter(Boolean).join(' ').trim();
+  const previewName = form.isOrg
+    ? (form.orgs[0]?.name || '').trim()
+    : [form.given, form.surname].filter(Boolean).join(' ').trim() || form.full.trim();
+
+  const pickPhoto = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Photo access needed', 'Grant photo library permission to pick a contact photo.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.9,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const { uri, mediaType } = await processPickedImage(result.assets[0]);
+    setDirty(true);
+    setForm((f) => ({ ...f, photoUri: uri, photoMediaType: mediaType }));
+  };
+
+  const memberContacts = React.useMemo(
+    () => form.members
+      .map((id) => allContacts.find((c) => c.id === id))
+      .filter((m): m is ContactCard => !!m),
+    [form.members, allContacts],
+  );
+  const memberIdSet = React.useMemo(() => new Set(form.members), [form.members]);
+
+  const addressBookSection = addressBooks.length > 1 && (
+    <Section icon={<Book size={16} color={c.textMuted} />} label="Address Book">
+      <View style={styles.pillRow}>
+        {addressBooks.filter((b) => b.myRights?.mayWrite !== false || b.id === form.addressBookId).map((book) => (
+          <Pressable
+            key={book.id}
+            onPress={() => updateForm('addressBookId', book.id)}
+            style={[styles.pill, form.addressBookId === book.id && styles.pillActive]}
+          >
+            <Text style={[styles.pillText, form.addressBookId === book.id && styles.pillTextActive]}>
+              {book.isShared && book.accountName ? `${book.name} (${book.accountName})` : book.name}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+    </Section>
+  );
+
+  const notesSection = (
+    <Section
+      icon={<FileText size={16} color={c.textMuted} />}
+      label="Notes"
+      collapsible
+      defaultOpen={form.notes.length > 0}
+    >
+      {form.notes.map((n, i) => (
+        <RemovableRow
+          key={i}
+          onRemove={() => updateForm('notes', form.notes.filter((_, idx) => idx !== i))}
+        >
+          <TextInput
+            style={[styles.input, styles.multiline]}
+            placeholder="Notes"
+            placeholderTextColor={c.textMuted}
+            multiline
+            value={n.note}
+            onChangeText={(v) => {
+              const next = [...form.notes];
+              next[i] = { note: v };
+              updateForm('notes', next);
+            }}
+          />
+        </RemovableRow>
+      ))}
+      <AddButton
+        label="Add note"
+        onPress={() => updateForm('notes', [...form.notes, { note: '' }])}
+      />
+    </Section>
+  );
+
+  const categoriesSection = (
+    <Section
+      icon={<Tag size={16} color={c.textMuted} />}
+      label="Categories"
+      collapsible
+      defaultOpen={form.keywords.length > 0}
+    >
+      {form.keywords.length > 0 && (
+        <View style={styles.chipRow}>
+          {form.keywords.map((kw) => (
+            <Pressable
+              key={kw}
+              onPress={() => updateForm('keywords', form.keywords.filter((k) => k !== kw))}
+              style={styles.keywordChip}
+            >
+              <Text style={styles.keywordChipText}>{kw}</Text>
+              <XIcon size={11} color={c.primary} />
+            </Pressable>
+          ))}
+        </View>
+      )}
+      <TextInput
+        style={styles.input}
+        placeholder="Add tag and press Enter"
+        placeholderTextColor={c.textMuted}
+        value={keywordInput}
+        onChangeText={setKeywordInput}
+        onSubmitEditing={() => {
+          const k = keywordInput.trim();
+          if (k && !form.keywords.includes(k)) {
+            updateForm('keywords', [...form.keywords, k]);
+          }
+          setKeywordInput('');
+        }}
+        returnKeyType="done"
+      />
+      {existingKeywords.length > 0 && (
+        <View style={styles.chipRow}>
+          {existingKeywords
+            .filter((k) => !form.keywords.includes(k.keyword))
+            .slice(0, 8)
+            .map((k) => (
+              <Pressable
+                key={k.keyword}
+                onPress={() => updateForm('keywords', [...form.keywords, k.keyword])}
+                style={styles.suggestedChip}
+              >
+                <Text style={styles.suggestedChipText}>+ {k.keyword}</Text>
+              </Pressable>
+            ))}
+        </View>
+      )}
+    </Section>
+  );
+
+  const header = (
+    <View style={styles.header}>
+      <Pressable onPress={handleBack} style={styles.headerBtn} hitSlop={8}>
+        <ArrowLeft size={22} color={c.text} />
+      </Pressable>
+      <Text style={styles.headerTitle} numberOfLines={1}>{headerTitle}</Text>
+      <Pressable onPress={handleSave} disabled={saving} style={styles.saveBtn} hitSlop={8}>
+        {saving ? (
+          <Text style={styles.saveLabel}>Saving…</Text>
+        ) : (
+          <>
+            <Check size={16} color={c.primaryForeground} />
+            <Text style={styles.saveLabel}>Save</Text>
+          </>
+        )}
+      </Pressable>
+    </View>
+  );
+
+  const discardDialog = (
+    <Dialog
+      visible={confirmDiscard}
+      title="Discard changes?"
+      message="You have unsaved changes. Discard them?"
+      variant="destructive"
+      confirmText="Discard"
+      onConfirm={() => {
+        setConfirmDiscard(false);
+        navigation.goBack();
+      }}
+      onCancel={() => setConfirmDiscard(false)}
+    />
+  );
+
+  if (asGroup) {
+    // Groups are a name plus a member list - none of the person fields apply.
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        {header}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1 }}
+        >
+          <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+            {addressBookSection}
+
+            <Section icon={<Users size={16} color={c.textMuted} />} label="Group">
+              <Field label="Group name">
+                <TextInput
+                  style={styles.input}
+                  placeholder="Sales team"
+                  placeholderTextColor={c.textMuted}
+                  value={form.given}
+                  onChangeText={(v) => updateForm('given', v)}
+                  autoFocus={!isEdit}
+                />
+              </Field>
+            </Section>
+
+            <Section icon={<User size={16} color={c.textMuted} />} label={`Members (${memberContacts.length})`}>
+              {memberContacts.map((m) => {
+                const email = getContactPrimaryEmail(m);
+                return (
+                  <RemovableRow
+                    key={m.id}
+                    onRemove={() => updateForm('members', form.members.filter((id) => id !== m.id))}
+                  >
+                    <Text style={styles.memberName} numberOfLines={1}>{getContactDisplayName(m) || 'Unnamed'}</Text>
+                    {!!email && <Text style={styles.memberEmail} numberOfLines={1}>{email}</Text>}
+                  </RemovableRow>
+                );
+              })}
+              <AddButton label="Add members" onPress={() => setMemberPickerOpen(true)} />
+            </Section>
+
+            {categoriesSection}
+            {notesSection}
+          </ScrollView>
+        </KeyboardAvoidingView>
+
+        <ContactPickerSheet
+          visible={memberPickerOpen}
+          onClose={() => setMemberPickerOpen(false)}
+          title="Add members"
+          excludedIds={memberIdSet}
+          onSelect={(ids) => {
+            setMemberPickerOpen(false);
+            const merged = [...form.members];
+            for (const id of ids) if (!merged.includes(id)) merged.push(id);
+            updateForm('members', merged);
+          }}
+        />
+        {discardDialog}
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <Pressable onPress={handleBack} style={styles.headerBtn} hitSlop={8}>
-          <ArrowLeft size={22} color={c.text} />
-        </Pressable>
-        <Text style={styles.headerTitle} numberOfLines={1}>{headerTitle}</Text>
-        <Pressable onPress={handleSave} disabled={saving} style={styles.saveBtn} hitSlop={8}>
-          {saving ? (
-            <Text style={styles.saveLabel}>Saving…</Text>
-          ) : (
-            <>
-              <Check size={16} color={c.primaryForeground} />
-              <Text style={styles.saveLabel}>Save</Text>
-            </>
-          )}
-        </Pressable>
-      </View>
+      {header}
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -670,32 +1051,7 @@ export default function ContactFormScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           {/* Photo + Name preview */}
           <View style={styles.photoPanel}>
-            <Pressable
-              onPress={async () => {
-                const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                if (!perm.granted) {
-                  Alert.alert('Photo access needed', 'Grant photo library permission to pick a contact photo.');
-                  return;
-                }
-                const result = await ImagePicker.launchImageLibraryAsync({
-                  mediaTypes: ['images'],
-                  allowsEditing: true,
-                  aspect: [1, 1],
-                  quality: 0.8,
-                  base64: true,
-                });
-                if (result.canceled || !result.assets[0]) return;
-                const asset = result.assets[0];
-                const mime = asset.mimeType || 'image/jpeg';
-                if (asset.base64) {
-                  updateForm('photoUri', `data:${mime};base64,${asset.base64}`);
-                } else {
-                  updateForm('photoUri', asset.uri);
-                }
-                updateForm('photoMediaType', mime);
-              }}
-              style={styles.photoBtn}
-            >
+            <Pressable onPress={() => { void pickPhoto(); }} style={styles.photoBtn}>
               {form.photoUri ? (
                 <Image source={{ uri: form.photoUri }} style={styles.photoThumb} />
               ) : (
@@ -706,7 +1062,7 @@ export default function ContactFormScreen() {
             </Pressable>
             <View style={{ flex: 1 }}>
               <Text style={styles.previewName} numberOfLines={1}>
-                {previewName || (asGroup ? 'New group' : 'New contact')}
+                {previewName || (form.isOrg ? 'New organization' : 'New contact')}
               </Text>
               <Text style={styles.previewHint}>Tap photo to choose an image</Text>
               {form.photoUri ? (
@@ -724,83 +1080,120 @@ export default function ContactFormScreen() {
             </View>
           </View>
 
-          {/* Address book */}
-          {addressBooks.length > 1 && (
-            <Section icon={<Book size={16} color={c.textMuted} />} label="Address Book">
-              <View style={styles.pillRow}>
-                {addressBooks.map((book) => (
-                  <Pressable
-                    key={book.id}
-                    onPress={() => updateForm('addressBookId', book.id)}
-                    style={[styles.pill, form.addressBookId === book.id && styles.pillActive]}
-                  >
-                    <Text style={[styles.pillText, form.addressBookId === book.id && styles.pillTextActive]}>
-                      {book.name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </Section>
-          )}
+          {addressBookSection}
 
           {/* Identity */}
           <Section icon={<User size={16} color={c.textMuted} />} label="Identity">
-            <View style={styles.row2}>
-              <Field label="Prefix">
+            <Pills
+              value={form.isOrg ? 'org' : 'person'}
+              options={KIND_OPTIONS}
+              onChange={(v) => {
+                const isOrg = v === 'org';
+                setDirty(true);
+                setForm((f) => ({
+                  ...f,
+                  isOrg,
+                  // An organization card needs a place to type its name.
+                  orgs: isOrg && f.orgs.length === 0
+                    ? [{ name: '', department: '', jobTitle: '', role: '' }]
+                    : f.orgs,
+                }));
+              }}
+            />
+            {form.isOrg ? (
+              <Field label="Organization name">
                 <TextInput
                   style={styles.input}
-                  placeholder="Mr."
+                  placeholder="Company"
                   placeholderTextColor={c.textMuted}
-                  value={form.prefix}
-                  onChangeText={(v) => updateForm('prefix', v)}
+                  value={form.orgs[0]?.name || ''}
+                  onChangeText={(v) => {
+                    const next = form.orgs.length > 0 ? [...form.orgs] : [{ name: '', department: '', jobTitle: '', role: '' }];
+                    next[0] = { ...next[0], name: v };
+                    updateForm('orgs', next);
+                  }}
                 />
               </Field>
-              <Field label="Suffix">
-                <TextInput
-                  style={styles.input}
-                  placeholder="Jr."
-                  placeholderTextColor={c.textMuted}
-                  value={form.suffix}
-                  onChangeText={(v) => updateForm('suffix', v)}
-                />
-              </Field>
-            </View>
-            <Field label="First name">
-              <TextInput
-                style={styles.input}
-                placeholder="First name"
-                placeholderTextColor={c.textMuted}
-                value={form.given}
-                onChangeText={(v) => updateForm('given', v)}
-              />
-            </Field>
-            <Field label="Middle name">
-              <TextInput
-                style={styles.input}
-                placeholder="Middle"
-                placeholderTextColor={c.textMuted}
-                value={form.middle}
-                onChangeText={(v) => updateForm('middle', v)}
-              />
-            </Field>
-            <Field label="Last name">
-              <TextInput
-                style={styles.input}
-                placeholder="Last name"
-                placeholderTextColor={c.textMuted}
-                value={form.surname}
-                onChangeText={(v) => updateForm('surname', v)}
-              />
-            </Field>
-            <Field label="Nickname">
-              <TextInput
-                style={styles.input}
-                placeholder="Nickname"
-                placeholderTextColor={c.textMuted}
-                value={form.nickname}
-                onChangeText={(v) => updateForm('nickname', v)}
-              />
-            </Field>
+            ) : (
+              <>
+                <View style={styles.row2}>
+                  <Field label="Prefix">
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Mr."
+                      placeholderTextColor={c.textMuted}
+                      value={form.prefix}
+                      onChangeText={(v) => updateForm('prefix', v)}
+                    />
+                  </Field>
+                  <Field label="Suffix">
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Jr."
+                      placeholderTextColor={c.textMuted}
+                      value={form.suffix}
+                      onChangeText={(v) => updateForm('suffix', v)}
+                    />
+                  </Field>
+                </View>
+                <Field label="First name">
+                  <TextInput
+                    style={styles.input}
+                    placeholder="First name"
+                    placeholderTextColor={c.textMuted}
+                    value={form.given}
+                    onChangeText={(v) => updateForm('given', v)}
+                  />
+                </Field>
+                <Field label="Middle name">
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Middle"
+                    placeholderTextColor={c.textMuted}
+                    value={form.middle}
+                    onChangeText={(v) => updateForm('middle', v)}
+                  />
+                </Field>
+                <Field label="Last name">
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Last name"
+                    placeholderTextColor={c.textMuted}
+                    value={form.surname}
+                    onChangeText={(v) => updateForm('surname', v)}
+                  />
+                </Field>
+                {form.nicknames.map((nick, i) => (
+                  <Field key={i} label={i === 0 ? 'Nickname' : undefined}>
+                    <View style={styles.dateInputRow}>
+                      <TextInput
+                        style={[styles.input, { flex: 1 }]}
+                        placeholder="Nickname"
+                        placeholderTextColor={c.textMuted}
+                        value={nick}
+                        onChangeText={(v) => {
+                          const next = [...form.nicknames];
+                          next[i] = v;
+                          updateForm('nicknames', next);
+                        }}
+                      />
+                      {form.nicknames.length > 1 && (
+                        <Pressable
+                          onPress={() => updateForm('nicknames', form.nicknames.filter((_, idx) => idx !== i))}
+                          hitSlop={8}
+                          style={styles.removeBtn}
+                        >
+                          <XIcon size={14} color={c.textMuted} />
+                        </Pressable>
+                      )}
+                    </View>
+                  </Field>
+                ))}
+                {form.nicknames.every((n) => n.trim()) && (
+                  <AddButton label="Add nickname" onPress={() => updateForm('nicknames', [...form.nicknames, ''])} />
+                )}
+              </>
+            )}
             <Field label="Display name (optional)">
               <TextInput
                 style={styles.input}
@@ -906,19 +1299,21 @@ export default function ContactFormScreen() {
                 key={i}
                 onRemove={() => updateForm('orgs', form.orgs.filter((_, idx) => idx !== i))}
               >
-                <Field label="Organization">
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Company"
-                    placeholderTextColor={c.textMuted}
-                    value={o.name}
-                    onChangeText={(v) => {
-                      const next = [...form.orgs];
-                      next[i] = { ...o, name: v };
-                      updateForm('orgs', next);
-                    }}
-                  />
-                </Field>
+                {!(form.isOrg && i === 0) && (
+                  <Field label="Organization">
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Company"
+                      placeholderTextColor={c.textMuted}
+                      value={o.name}
+                      onChangeText={(v) => {
+                        const next = [...form.orgs];
+                        next[i] = { ...o, name: v };
+                        updateForm('orgs', next);
+                      }}
+                    />
+                  </Field>
+                )}
                 <Field label="Department">
                   <TextInput
                     style={styles.input}
@@ -1092,24 +1487,39 @@ export default function ContactFormScreen() {
                     }}
                   />
                 </Field>
-                <Field label="Service">
-                  <TextInput
-                    style={styles.input}
-                    placeholder="LinkedIn, Mastodon, …"
-                    placeholderTextColor={c.textMuted}
-                    value={s.service}
-                    onChangeText={(v) => {
-                      const next = [...form.online];
-                      next[i] = { ...s, service: v };
-                      updateForm('online', next);
-                    }}
-                  />
-                </Field>
+                <View style={styles.row2}>
+                  <Field label="Service">
+                    <TextInput
+                      style={styles.input}
+                      placeholder="LinkedIn, Mastodon, …"
+                      placeholderTextColor={c.textMuted}
+                      value={s.service}
+                      onChangeText={(v) => {
+                        const next = [...form.online];
+                        next[i] = { ...s, service: v };
+                        updateForm('online', next);
+                      }}
+                    />
+                  </Field>
+                  <Field label="Label">
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Work, Personal, …"
+                      placeholderTextColor={c.textMuted}
+                      value={s.label}
+                      onChangeText={(v) => {
+                        const next = [...form.online];
+                        next[i] = { ...s, label: v };
+                        updateForm('online', next);
+                      }}
+                    />
+                  </Field>
+                </View>
               </RemovableRow>
             ))}
             <AddButton
               label="Add link"
-              onPress={() => updateForm('online', [...form.online, { uri: '', service: '' }])}
+              onPress={() => updateForm('online', [...form.online, { uri: '', service: '', label: '' }])}
             />
           </Section>
 
@@ -1127,8 +1537,12 @@ export default function ContactFormScreen() {
               >
                 <View style={styles.dateInputRow}>
                   <TextInput
-                    style={[styles.input, { flex: 1 }]}
-                    placeholder="YYYY-MM-DD or --MM-DD"
+                    style={[
+                      styles.input,
+                      { flex: 1 },
+                      a.date.trim() && !stringToPartialDate(a.date) ? styles.inputInvalid : null,
+                    ]}
+                    placeholder="YYYY-MM-DD, YYYY-MM, YYYY or --MM-DD"
                     placeholderTextColor={c.textMuted}
                     value={a.date}
                     onChangeText={(v) => {
@@ -1212,29 +1626,38 @@ export default function ContactFormScreen() {
           </Section>
 
           {/* Gender */}
-          <Section
-            icon={<UserCircle size={16} color={c.textMuted} />}
-            label="Gender"
-            collapsible
-            defaultOpen={!!(form.grammaticalGender || form.pronouns)}
-          >
-            <Field label="Grammatical gender">
-              <Pills
-                value={form.grammaticalGender}
-                options={GENDER_OPTIONS}
-                onChange={(v) => updateForm('grammaticalGender', v)}
-              />
-            </Field>
-            <Field label="Pronouns">
-              <TextInput
-                style={styles.input}
-                placeholder="they/them"
-                placeholderTextColor={c.textMuted}
-                value={form.pronouns}
-                onChangeText={(v) => updateForm('pronouns', v)}
-              />
-            </Field>
-          </Section>
+          {!form.isOrg && (
+            <Section
+              icon={<UserCircle size={16} color={c.textMuted} />}
+              label="Gender"
+              collapsible
+              defaultOpen={!!(form.grammaticalGender || form.pronouns)}
+            >
+              <Field label="Grammatical gender">
+                <Pills
+                  value={form.grammaticalGender}
+                  options={
+                    // Values from other clients (RFC 9554 GRAMGENDER: common,
+                    // neuter, animate, inanimate) stay selectable so a save
+                    // never silently drops them.
+                    form.grammaticalGender && !GENDER_OPTIONS.some((o) => o.value === form.grammaticalGender)
+                      ? [...GENDER_OPTIONS, { value: form.grammaticalGender, label: form.grammaticalGender }]
+                      : GENDER_OPTIONS
+                  }
+                  onChange={(v) => updateForm('grammaticalGender', v)}
+                />
+              </Field>
+              <Field label="Pronouns">
+                <TextInput
+                  style={styles.input}
+                  placeholder="they/them"
+                  placeholderTextColor={c.textMuted}
+                  value={form.pronouns}
+                  onChangeText={(v) => updateForm('pronouns', v)}
+                />
+              </Field>
+            </Section>
+          )}
 
           {/* Calendar */}
           <Section
@@ -1275,106 +1698,12 @@ export default function ContactFormScreen() {
             </Field>
           </Section>
 
-          {/* Categories */}
-          <Section
-            icon={<Tag size={16} color={c.textMuted} />}
-            label="Categories"
-            collapsible
-            defaultOpen={form.keywords.length > 0}
-          >
-            {form.keywords.length > 0 && (
-              <View style={styles.chipRow}>
-                {form.keywords.map((kw) => (
-                  <Pressable
-                    key={kw}
-                    onPress={() => updateForm('keywords', form.keywords.filter((k) => k !== kw))}
-                    style={styles.keywordChip}
-                  >
-                    <Text style={styles.keywordChipText}>{kw}</Text>
-                    <XIcon size={11} color={c.primary} />
-                  </Pressable>
-                ))}
-              </View>
-            )}
-            <TextInput
-              style={styles.input}
-              placeholder="Add tag and press Enter"
-              placeholderTextColor={c.textMuted}
-              value={keywordInput}
-              onChangeText={setKeywordInput}
-              onSubmitEditing={() => {
-                const k = keywordInput.trim();
-                if (k && !form.keywords.includes(k)) {
-                  updateForm('keywords', [...form.keywords, k]);
-                }
-                setKeywordInput('');
-              }}
-              returnKeyType="done"
-            />
-            {existingKeywords.length > 0 && (
-              <View style={styles.chipRow}>
-                {existingKeywords
-                  .filter((k) => !form.keywords.includes(k.keyword))
-                  .slice(0, 8)
-                  .map((k) => (
-                    <Pressable
-                      key={k.keyword}
-                      onPress={() => updateForm('keywords', [...form.keywords, k.keyword])}
-                      style={styles.suggestedChip}
-                    >
-                      <Text style={styles.suggestedChipText}>+ {k.keyword}</Text>
-                    </Pressable>
-                  ))}
-              </View>
-            )}
-          </Section>
-
-          {/* Notes */}
-          <Section
-            icon={<FileText size={16} color={c.textMuted} />}
-            label="Notes"
-            collapsible
-            defaultOpen={form.notes.length > 0}
-          >
-            {form.notes.map((n, i) => (
-              <RemovableRow
-                key={i}
-                onRemove={() => updateForm('notes', form.notes.filter((_, idx) => idx !== i))}
-              >
-                <TextInput
-                  style={[styles.input, styles.multiline]}
-                  placeholder="Notes"
-                  placeholderTextColor={c.textMuted}
-                  multiline
-                  value={n.note}
-                  onChangeText={(v) => {
-                    const next = [...form.notes];
-                    next[i] = { note: v };
-                    updateForm('notes', next);
-                  }}
-                />
-              </RemovableRow>
-            ))}
-            <AddButton
-              label="Add note"
-              onPress={() => updateForm('notes', [...form.notes, { note: '' }])}
-            />
-          </Section>
+          {categoriesSection}
+          {notesSection}
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <Dialog
-        visible={confirmDiscard}
-        title="Discard changes?"
-        message="You have unsaved changes. Discard them?"
-        variant="destructive"
-        confirmText="Discard"
-        onConfirm={() => {
-          setConfirmDiscard(false);
-          navigation.goBack();
-        }}
-        onCancel={() => setConfirmDiscard(false)}
-      />
+      {discardDialog}
 
       {datePickerIndex !== null && (() => {
         const draft = form.anniversaries[datePickerIndex];
@@ -1425,22 +1754,10 @@ export default function ContactFormScreen() {
 }
 
 function parseDateDraft(s: string): Date {
-  const trimmed = s.trim();
-  const fullMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
-  if (fullMatch) {
-    const y = parseInt(fullMatch[1], 10);
-    const m = parseInt(fullMatch[2], 10) - 1;
-    const d = parseInt(fullMatch[3], 10);
-    return new Date(y, m, d);
-  }
-  const partial = /^--(\d{2})-?(\d{2})?$/.exec(trimmed);
-  if (partial) {
-    const now = new Date();
-    const m = parseInt(partial[1], 10) - 1;
-    const d = partial[2] ? parseInt(partial[2], 10) : 1;
-    return new Date(now.getFullYear(), m, d);
-  }
-  return new Date();
+  const pd = stringToPartialDate(s);
+  const now = new Date();
+  if (!pd) return now;
+  return new Date(pd.year ?? now.getFullYear(), (pd.month ?? 1) - 1, pd.day ?? 1);
 }
 
 function formatDateAsISO(d: Date): string {
@@ -1539,6 +1856,7 @@ function makeStyles(c: ThemePalette) {
       ...typography.body,
       color: c.text,
     },
+    inputInvalid: { borderColor: c.error },
     multiline: {
       minHeight: 80,
       paddingVertical: spacing.sm,
@@ -1574,6 +1892,9 @@ function makeStyles(c: ThemePalette) {
       backgroundColor: c.surface,
       marginTop: 6,
     },
+
+    memberName: { ...typography.body, color: c.text, marginTop: 6 },
+    memberEmail: { ...typography.caption, color: c.textMuted },
 
     addBtn: {
       flexDirection: 'row',
