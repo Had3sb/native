@@ -1,5 +1,7 @@
 import { CAPABILITIES } from '../api/types';
+import type { JMAPSession } from '../api/types';
 import { useAuthStore } from '../stores/auth-store';
+import { accountSupportsFiles } from '../api/files';
 
 // When the session is null (cold start, offline restore) we assume features
 // are available so they don't flicker off mid-restore. Once the live session
@@ -18,8 +20,21 @@ export function hasContactsCapability(): boolean {
   return sessionHasCapability(CAPABILITIES.CONTACTS);
 }
 
+// Files is gated on the ACCOUNT capability (or a non-personal account), not
+// just the server-wide session capability: an account whose filenode
+// permissions were revoked still sees the capability in the session but
+// every FileNode call fails (#563).
+function sessionSupportsFiles(session: JMAPSession | null): boolean {
+  if (!session) return true;
+  const filesAccountId = session.primaryAccounts?.[CAPABILITIES.FILES];
+  const accountId = filesAccountId ?? useAuthStore.getState().activeAccountId ?? '';
+  const account = session.accounts?.[accountId]
+    ?? (filesAccountId ? undefined : Object.values(session.accounts ?? {}).find((a) => a.isPersonal));
+  return accountSupportsFiles(account, session.capabilities);
+}
+
 export function hasFilesCapability(): boolean {
-  return sessionHasCapability(CAPABILITIES.FILES);
+  return sessionSupportsFiles(useAuthStore.getState().session);
 }
 
 export function useHasCalendar(): boolean {
@@ -31,7 +46,7 @@ export function useHasContacts(): boolean {
 }
 
 export function useHasFiles(): boolean {
-  return useAuthStore((s) => (s.session ? CAPABILITIES.FILES in s.session.capabilities : true));
+  return useAuthStore((s) => sessionSupportsFiles(s.session));
 }
 
 // Settings tabs for Sieve filters and the vacation responder are gated on the

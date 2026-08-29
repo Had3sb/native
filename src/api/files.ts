@@ -1,7 +1,8 @@
 import { jmapClient } from './jmap-client';
 import { CAPABILITIES } from './types';
-import type { FileNode, FileNodeRights, Principal } from './types';
-import { getDownloadUrl, uploadBlob } from './blob';
+import type { FileNode, FileNodeRights, JMAPAccountInfo, Principal } from './types';
+import { getDownloadUrl, uploadBlob, type UploadBlobOptions } from './blob';
+import { decodeFileNodeName } from '../lib/filenode-name';
 
 // A FileNode is a folder (container) only when it has no blob content — the
 // server stores it with `file == null`. Sending a blobId/type/size on create
@@ -15,20 +16,56 @@ export function isFolder(node: Pick<FileNode, 'blobId'>): boolean {
 
 // Stalwart omits shareWith/myRights from FileNode/get unless they are
 // requested explicitly, so the share sheet and indicators must name them here.
+// The modification timestamp is `modified` (RFC draft-ietf-jmap-filenode);
+// asking for a property the server doesn't know silently yields undefined,
+// which is how "updated" left every date blank (#700).
 const FILE_NODE_PROPERTIES = [
-  'id', 'parentId', 'name', 'type', 'blobId', 'size', 'created', 'updated',
+  'id', 'parentId', 'name', 'type', 'blobId', 'size', 'created', 'modified',
   'shareWith', 'myRights',
 ];
 
+// RFC 9670 sharing is only usable when the server advertises the exact
+// `principals:owner` capability, either in the session or on the account
+// (Stalwart places it in accountCapabilities).
 export function supportsSharing(): boolean {
-  return jmapClient.hasCapability(CAPABILITIES.PRINCIPALS);
+  return (
+    jmapClient.hasCapability(CAPABILITIES.PRINCIPALS_OWNER) ||
+    jmapClient.hasAccountCapability(CAPABILITIES.PRINCIPALS_OWNER, filesAccountId())
+  );
 }
 
-function filesAccountId(): string {
+export function filesAccountId(): string {
   return (
     jmapClient.currentSession?.primaryAccounts?.[CAPABILITIES.FILES] ??
     jmapClient.accountId
   );
+}
+
+// Gate on the ACCOUNT capability, not only the server-wide session
+// capability. A server can advertise urn:ietf:params:jmap:filenode while a
+// specific account has its jmap-file-node-* permissions revoked, in which case
+// the capability is absent from that account's accountCapabilities and every
+// FileNode action fails with an authorization error (#563). Non-personal
+// (shared/group) accounts don't always advertise per-account, so treat those
+// as capable. Mirrors the webmail's `supportsFiles`.
+export function accountSupportsFiles(
+  account: JMAPAccountInfo | undefined,
+  sessionCapabilities: Record<string, unknown> | undefined,
+): boolean {
+  if (!sessionCapabilities || !(CAPABILITIES.FILES in sessionCapabilities)) return false;
+  if (!account) return false;
+  return account.accountCapabilities?.[CAPABILITIES.FILES] != null || !account.isPersonal;
+}
+
+export function supportsFiles(): boolean {
+  const session = jmapClient.currentSession;
+  if (!session) return false;
+  return accountSupportsFiles(session.accounts?.[filesAccountId()], session.capabilities);
+}
+
+/** Server-advertised upload ceiling in bytes (0 = unknown / unlimited). */
+export function getMaxSizeUpload(): number {
+  return jmapClient.getMaxSizeUpload();
 }
 
 function fileUsing(): string[] {
@@ -68,7 +105,10 @@ export async function getAllFileNodes(): Promise<FileNode[]> {
   if (!result || result[0] === 'error') {
     throw new Error(result?.[1]?.description || 'FileNode list failed');
   }
-  return (result[1].list ?? []) as FileNode[];
+  return ((result[1].list ?? []) as FileNode[]).map((node) => ({
+    ...node,
+    name: decodeFileNodeName(node.name),
+  }));
 }
 
 // Accounts (primary + shared/group) that can hold FileNodes: any non-primary
@@ -107,6 +147,7 @@ export async function getAllFileNodesAcrossAccounts(): Promise<FileNode[]> {
       for (const node of (result[1].list ?? []) as FileNode[]) {
         all.push({
           ...node,
+          name: decodeFileNodeName(node.name),
           id: isPrimary ? node.id : `${accountId}:${node.id}`,
           parentId: node.parentId == null
             ? null
@@ -163,6 +204,12 @@ export async function renameFileNode(id: string, newName: string): Promise<void>
   await updateFileNode(id, { name: newName });
 }
 
+// Re-parent a node. `null` moves it to the drive root (the property must be
+// sent explicitly as null, omitting it would leave the node where it is).
+export async function moveFileNode(id: string, parentId: string | null): Promise<void> {
+  await updateFileNode(id, { parentId });
+}
+
 export async function deleteFileNodes(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const accountId = filesAccountId();
@@ -191,35 +238,73 @@ export function getFileNodeDownloadUrl(node: FileNode): string {
   return getDownloadUrl(node.blobId, node.name, node.type, node.accountId);
 }
 
-export async function uploadFileNode(
-  uri: string,
+// Stalwart caps the stored MIME type; very long types fail the create.
+function safeMimeType(type: string | undefined, fallback: string): string {
+  const t = type || fallback || 'application/octet-stream';
+  return t.length > 30 ? 'application/octet-stream' : t;
+}
+
+async function createFileNodeFromBlob(
   name: string,
-  mimeType: string,
+  blobId: string,
+  type: string,
+  size: number | undefined,
   parentId: string | null,
 ): Promise<FileNode> {
   const accountId = filesAccountId();
-  const blob = await uploadBlob(uri, mimeType);
-  const type = blob.type || mimeType || 'application/octet-stream';
-  const props: Record<string, unknown> = {
-    name,
-    // Stalwart caps the stored MIME type; very long types fail the create.
-    type: type.length > 30 ? 'application/octet-stream' : type,
-    blobId: blob.blobId,
-    size: blob.size,
-  };
+  const props: Record<string, unknown> = { name, type, blobId };
+  if (size != null) props.size = size;
   if (parentId !== null) props.parentId = parentId;
 
   const res = await jmapClient.request(
     [['FileNode/set', { accountId, create: { 'new-file': props } }, '0']],
     fileUsing(),
   );
-  const result = res.methodResponses[0][1];
-  const created = result.created?.['new-file'];
+  const result = res.methodResponses[0];
+  if (!result || result[0] === 'error') {
+    throw new Error(result?.[1]?.description || 'FileNode/set create failed');
+  }
+  const created = result[1].created?.['new-file'];
   if (!created) {
-    const err = result.notCreated?.['new-file'];
+    const err = result[1].notCreated?.['new-file'];
     throw new Error(err?.description || 'Upload failed');
   }
   return { ...props, ...created } as FileNode;
+}
+
+export async function uploadFileNode(
+  uri: string,
+  name: string,
+  mimeType: string,
+  parentId: string | null,
+  options: UploadBlobOptions = {},
+): Promise<FileNode> {
+  const blob = await uploadBlob(uri, mimeType, options);
+  return createFileNodeFromBlob(
+    name,
+    blob.blobId,
+    safeMimeType(blob.type, mimeType),
+    blob.size,
+    parentId,
+  );
+}
+
+// Copy a file by creating a new node that references the same blob — no
+// bytes are re-uploaded (webmail `copyFileNode`). Folders have no blob and
+// cannot be duplicated this way.
+export async function copyFileNode(
+  node: FileNode,
+  parentId: string | null,
+  newName: string = node.name,
+): Promise<FileNode> {
+  if (!node.blobId) throw new Error('Folders cannot be duplicated');
+  return createFileNodeFromBlob(
+    newName,
+    node.blobId,
+    safeMimeType(node.type, 'application/octet-stream'),
+    node.size,
+    parentId,
+  );
 }
 
 // ── Sharing (RFC 9670) ────────────────────────────────────

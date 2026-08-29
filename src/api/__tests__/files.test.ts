@@ -5,6 +5,8 @@ vi.mock('../jmap-client', () => ({
     accountId: 'acc-1',
     request: vi.fn(),
     hasCapability: vi.fn(),
+    hasAccountCapability: vi.fn(() => false),
+    getMaxSizeUpload: vi.fn(() => 0),
     currentSession: null as unknown,
   },
 }));
@@ -21,14 +23,19 @@ vi.mock('../blob', () => ({
 import { jmapClient } from '../jmap-client';
 import { CAPABILITIES } from '../types';
 import {
+  accountSupportsFiles,
+  copyFileNode,
   createFolder,
   deleteFileNodes,
+  getAllFileNodes,
   getAllFileNodesAcrossAccounts,
   getFileNodeDownloadUrl,
   getPrincipals,
   isCrossAccountId,
   isFolder,
+  moveFileNode,
   setFileNodeShare,
+  supportsSharing,
 } from '../files';
 
 const mockRequest = jmapClient.request as ReturnType<typeof vi.fn>;
@@ -41,7 +48,10 @@ function setSession(session: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockHasCapability.mockImplementation(
-    (urn: string) => urn === CAPABILITIES.FILES || urn === CAPABILITIES.PRINCIPALS,
+    (urn: string) =>
+      urn === CAPABILITIES.FILES ||
+      urn === CAPABILITIES.PRINCIPALS ||
+      urn === CAPABILITIES.PRINCIPALS_OWNER,
   );
   setSession({
     primaryAccounts: { [CAPABILITIES.FILES]: 'acc-1' },
@@ -248,5 +258,102 @@ describe('getPrincipals', () => {
     mockHasCapability.mockReturnValue(false);
     expect(await getPrincipals()).toEqual([]);
     expect(mockRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('decodeFileNodeName at the API boundary (#869)', () => {
+  it('decodes percent-encoded names from getAllFileNodes and the cross-account list', async () => {
+    mockRequest.mockResolvedValue({
+      methodResponses: [['FileNode/get', {
+        list: [
+          { id: 'n1', name: 'Spares%20Catalog', blobId: null },
+          { id: 'n2', name: '100% done.txt', blobId: 'b2' },
+        ],
+      }, '0']],
+    });
+
+    const own = await getAllFileNodes();
+    expect(own.map((n) => n.name)).toEqual(['Spares Catalog', '100% done.txt']);
+
+    const all = await getAllFileNodesAcrossAccounts();
+    expect(all.map((n) => n.name)).toEqual(['Spares Catalog', '100% done.txt']);
+  });
+
+  it('requests the real "modified" property, not "updated" (#700)', async () => {
+    mockRequest.mockResolvedValue({ methodResponses: [['FileNode/get', { list: [] }, '0']] });
+    await getAllFileNodes();
+    const [, args] = mockRequest.mock.calls[0][0][0];
+    expect(args.properties).toContain('modified');
+    expect(args.properties).not.toContain('updated');
+  });
+});
+
+describe('copyFileNode', () => {
+  it('creates a new node that reuses the blob instead of re-uploading', async () => {
+    mockRequest.mockResolvedValue({
+      methodResponses: [['FileNode/set', { created: { 'new-file': { id: 'copy-1' } } }, '0']],
+    });
+
+    const copy = await copyFileNode(
+      { id: 'f1', name: 'report.pdf', type: 'application/pdf', blobId: 'blob-1', size: 10, parentId: 'dir-1' },
+      'dir-1',
+      'report (1).pdf',
+    );
+
+    const [method, args] = mockRequest.mock.calls[0][0][0];
+    expect(method).toBe('FileNode/set');
+    expect(args.create['new-file']).toEqual({
+      name: 'report (1).pdf', type: 'application/pdf', blobId: 'blob-1', size: 10, parentId: 'dir-1',
+    });
+    expect(copy.id).toBe('copy-1');
+  });
+
+  it('refuses to duplicate folders', async () => {
+    await expect(copyFileNode({ id: 'd', name: 'Docs', type: '', blobId: null }, null)).rejects.toThrow();
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('moveFileNode', () => {
+  it('sends an explicit null parentId when moving to the root', async () => {
+    mockRequest.mockResolvedValue({ methodResponses: [['FileNode/set', { updated: { f1: null } }, '0']] });
+    await moveFileNode('f1', null);
+    const [, args] = mockRequest.mock.calls[0][0][0];
+    expect(args.update.f1).toEqual({ parentId: null });
+  });
+});
+
+describe('accountSupportsFiles (#563)', () => {
+  const caps = { [CAPABILITIES.FILES]: {} };
+  it('requires the account capability on personal accounts', () => {
+    expect(accountSupportsFiles({ name: 'me', isPersonal: true, isReadOnly: false }, caps)).toBe(false);
+    expect(accountSupportsFiles(
+      { name: 'me', isPersonal: true, isReadOnly: false, accountCapabilities: { [CAPABILITIES.FILES]: {} } },
+      caps,
+    )).toBe(true);
+  });
+
+  it('treats non-personal accounts as capable and needs the session capability', () => {
+    expect(accountSupportsFiles({ name: 'grp', isPersonal: false, isReadOnly: false }, caps)).toBe(true);
+    expect(accountSupportsFiles({ name: 'grp', isPersonal: false, isReadOnly: false }, {})).toBe(false);
+    expect(accountSupportsFiles(undefined, caps)).toBe(false);
+  });
+});
+
+describe('supportsSharing', () => {
+  it('accepts principals:owner from the session or the account capabilities', () => {
+    const mockHasAccountCapability = jmapClient.hasAccountCapability as ReturnType<typeof vi.fn>;
+    mockHasCapability.mockImplementation((urn: string) => urn === CAPABILITIES.FILES);
+    mockHasAccountCapability.mockReturnValue(false);
+    expect(supportsSharing()).toBe(false);
+
+    mockHasAccountCapability.mockImplementation((urn: string) => urn === CAPABILITIES.PRINCIPALS_OWNER);
+    expect(supportsSharing()).toBe(true);
+
+    mockHasAccountCapability.mockReturnValue(false);
+    mockHasCapability.mockImplementation(
+      (urn: string) => urn === CAPABILITIES.FILES || urn === CAPABILITIES.PRINCIPALS_OWNER,
+    );
+    expect(supportsSharing()).toBe(true);
   });
 });
