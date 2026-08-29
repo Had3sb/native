@@ -44,6 +44,7 @@ import { useLocaleStore } from './src/stores/locale-store';
 import { useNetworkStore } from './src/stores/network-store';
 import { useUpdatesStore } from './src/stores/updates-store';
 import { UpdateBanner } from './src/components/UpdateBanner';
+import { PushOnboardingPrompt } from './src/components/PushOnboardingPrompt';
 import { OfflineCacheBanner } from './src/components/OfflineCacheBanner';
 import { useOfflineCacheStore } from './src/stores/offline-cache-store';
 import { useOutboxStore } from './src/stores/outbox-store';
@@ -101,6 +102,7 @@ function MainTabsNavigator({ navigation }: NativeStackScreenProps<RootStackParam
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <UpdateBanner />
       <OfflineCacheBanner />
+      <PushOnboardingPrompt />
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
@@ -294,12 +296,21 @@ export default function App() {
     });
   }, [haveLiveSession]);
 
-  // Listen for FCM messages so the app can refresh state even when woken
-  // from the background - the FirebaseMessagingService also posts the system
-  // notification so the user sees it regardless of RN runtime state.
+  // Foreground FCM messages: the Kotlin service skips the headless task while
+  // the app is visible, so feed the relay's StateChange straight into the
+  // stores. SSE normally beats it, but this covers the window where the SSE
+  // socket is down and the poll fallback has not fired yet.
   React.useEffect(() => {
     const unsubscribe = addMessageListener((payload) => {
-      console.log('[push] fcm message', payload.title);
+      const raw = payload?.data?.changed;
+      if (!raw) return;
+      try {
+        const changed = JSON.parse(raw) as Record<string, Record<string, string>>;
+        if (!changed || typeof changed !== 'object') return;
+        void useEmailStore.getState().handleStateChange({ '@type': 'StateChange', changed });
+      } catch {
+        // malformed payload - ignore
+      }
     });
     return unsubscribe;
   }, []);

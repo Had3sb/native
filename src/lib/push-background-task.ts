@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules } from 'react-native';
 import { jmapClient } from '../api/jmap-client';
 import { getEmails, getMailboxes, queryEmails } from '../api/email';
+import type { Email } from '../api/types';
 import {
   generateEmailAvatarColor,
   getEmailInitials,
@@ -9,10 +10,11 @@ import {
   getFaviconUrl,
 } from './avatar-utils';
 import {
-  deviceClientIdKey,
   lastNotifiedKey,
   migrateLegacyPushKeys,
+  notifiedIdsKey,
   readPushAccountIds,
+  readPushJmapAccountIds,
 } from './push-notifications';
 
 // Mirrors STORAGE_KEY in `stores/settings-store.ts`. The headless task can't
@@ -22,8 +24,16 @@ const SETTINGS_STORAGE_KEY = 'webmail:settings:v1';
 // Mirrors the persist name in `stores/account-store.ts`. We use it to find
 // the user's active account at the end of the headless task so we can leave
 // the jmapClient singleton in a state consistent with what the UI expects
-// when the app resumes.
+// when the app resumes, and to map the relay's `accountLabel` (= username)
+// back to a local account when the JMAP account id is not known yet.
 const ACCOUNT_REGISTRY_KEY = 'account-registry';
+
+// How many recently-notified ids to remember per account. Enough to cover a
+// burst of deliveries without growing the AsyncStorage record unbounded.
+const NOTIFIED_IDS_LIMIT = 200;
+// Legacy state-change payloads carry no ids; look at this many newest unread
+// inbox messages and notify the ones we have not shown yet.
+const LEGACY_QUERY_LIMIT = 5;
 
 interface PushPersistedSettings {
   emailNotificationsEnabled?: boolean;
@@ -51,52 +61,143 @@ interface ShowNotificationOptions {
   threadId: string;
   subject?: string;
   accountId: string;
+  // Android notification group: one per account so the tray bundles
+  // several deliveries under a "+N more" summary instead of stacking them.
+  groupKey: string;
+  groupTitle: string;
 }
 
 interface BulwarkFcmNative {
   showNotification(opts: ShowNotificationOptions): Promise<void>;
 }
 
-// The relay forwards each JMAP push to FCM tagged with the deviceClientId it
-// received the push on (the URL slot from createPushSubscription). The exact
-// key the relay uses isn't part of any client-controlled contract, so rather
-// than guessing a field name we scan all string values in the data payload
-// and look for one that matches a deviceClientId we've registered locally.
-// Returns null if nothing matches (e.g. legacy relay payload format) so the
-// caller falls back to iterating every known account.
-async function identifyAccountFromFcmData(
-  data: unknown,
-  accountIds: string[],
-): Promise<string | null> {
-  if (!data || typeof data !== 'object') return null;
-
-  const reverseMap = new Map<string, string>();
-  for (const accountId of accountIds) {
-    const dcid = await AsyncStorage.getItem(deviceClientIdKey(accountId));
-    if (dcid) reverseMap.set(dcid, accountId);
-  }
-  if (reverseMap.size === 0) return null;
-
-  for (const value of Object.values(data as Record<string, unknown>)) {
-    if (typeof value === 'string') {
-      const match = reverseMap.get(value);
-      if (match) return match;
-    }
-  }
-  return null;
+/**
+ * What the relay puts in the FCM data payload (repos/relay/src/fcm.ts). All
+ * values are strings; `emailIds` and `changed` are JSON-encoded.
+ */
+export interface RelayPushData {
+  kind: 'jmap-email-push' | 'jmap-state-change' | null;
+  accountLabel: string | null;
+  // JMAP primary account id the push was generated for.
+  jmapAccountId: string | null;
+  emailIds: string[];
+  changed: Record<string, Record<string, string>> | null;
 }
 
-// Read the persisted active account directly from AsyncStorage (Zustand's
-// persist middleware stores the JSON-serialised state under its `name`).
-async function readActiveAccountId(): Promise<string | null> {
+export function parseRelayPushData(data: unknown): RelayPushData {
+  const out: RelayPushData = {
+    kind: null,
+    accountLabel: null,
+    jmapAccountId: null,
+    emailIds: [],
+    changed: null,
+  };
+  if (!data || typeof data !== 'object') return out;
+  const d = data as Record<string, unknown>;
+  if (d.kind === 'jmap-email-push' || d.kind === 'jmap-state-change') out.kind = d.kind;
+  if (typeof d.accountLabel === 'string' && d.accountLabel) out.accountLabel = d.accountLabel;
+  if (typeof d.accountId === 'string' && d.accountId) out.jmapAccountId = d.accountId;
+  if (typeof d.emailIds === 'string') {
+    try {
+      const parsed = JSON.parse(d.emailIds) as unknown;
+      if (Array.isArray(parsed)) {
+        out.emailIds = parsed.filter((id): id is string => typeof id === 'string' && id.length > 0);
+      }
+    } catch {
+      // malformed - treat as no ids
+    }
+  } else if (Array.isArray(d.emailIds)) {
+    out.emailIds = d.emailIds.filter((id): id is string => typeof id === 'string' && id.length > 0);
+  }
+  if (typeof d.changed === 'string') {
+    try {
+      const parsed = JSON.parse(d.changed) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        out.changed = parsed as Record<string, Record<string, string>>;
+      }
+    } catch {
+      // ignore
+    }
+  } else if (d.changed && typeof d.changed === 'object') {
+    out.changed = d.changed as Record<string, Record<string, string>>;
+  }
+  // Older relays only sent `changed`; the account id is its first key.
+  if (!out.jmapAccountId && out.changed) {
+    out.jmapAccountId = Object.keys(out.changed)[0] ?? null;
+  }
+  return out;
+}
+
+interface RegistryAccount {
+  id: string;
+  username?: string;
+}
+
+async function readAccountRegistry(): Promise<{ accounts: RegistryAccount[]; activeAccountId: string | null }> {
   try {
     const raw = await AsyncStorage.getItem(ACCOUNT_REGISTRY_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { state?: { activeAccountId?: string | null } };
-    return parsed.state?.activeAccountId ?? null;
+    if (!raw) return { accounts: [], activeAccountId: null };
+    const parsed = JSON.parse(raw) as {
+      state?: { accounts?: RegistryAccount[]; activeAccountId?: string | null };
+    };
+    return {
+      accounts: Array.isArray(parsed.state?.accounts) ? parsed.state!.accounts! : [],
+      activeAccountId: parsed.state?.activeAccountId ?? null,
+    };
   } catch {
-    return null;
+    return { accounts: [], activeAccountId: null };
   }
+}
+
+/**
+ * Pick the local account(s) a relay payload belongs to. Primary key is the
+ * JMAP account id recorded at setup; the relay's `accountLabel` (= username)
+ * is a weaker fallback. When neither matches - a payload from a build that
+ * predates the id map - every registered account is checked.
+ */
+export function matchAccountsForPush(
+  payload: RelayPushData,
+  pushAccountIds: string[],
+  jmapAccountIds: Record<string, string>,
+  registry: RegistryAccount[],
+): string[] {
+  if (payload.jmapAccountId) {
+    const byJmapId = pushAccountIds.filter((id) => jmapAccountIds[id] === payload.jmapAccountId);
+    if (byJmapId.length > 0) return byJmapId;
+  }
+  if (payload.accountLabel) {
+    const label = payload.accountLabel.toLowerCase();
+    const byLabel = pushAccountIds.filter((id) => {
+      const entry = registry.find((a) => a.id === id);
+      const username = entry?.username?.toLowerCase();
+      return username === label || id.toLowerCase().startsWith(`${label}@`);
+    });
+    if (byLabel.length > 0) return byLabel;
+  }
+  return pushAccountIds;
+}
+
+async function readNotifiedIds(accountId: string): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(notifiedIdsKey(accountId));
+    if (raw) {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) return parsed.filter((s): s is string => typeof s === 'string');
+    }
+  } catch {
+    // fall through
+  }
+  // Pre-ring builds stored a single id; honour it so the upgrade does not
+  // re-notify the newest message.
+  const legacy = await AsyncStorage.getItem(lastNotifiedKey(accountId));
+  return legacy ? [legacy] : [];
+}
+
+async function rememberNotifiedIds(accountId: string, ids: string[]): Promise<void> {
+  const current = await readNotifiedIds(accountId);
+  const next = [...ids, ...current.filter((id) => !ids.includes(id))].slice(0, NOTIFIED_IDS_LIMIT);
+  await AsyncStorage.setItem(notifiedIdsKey(accountId), JSON.stringify(next));
+  if (ids.length > 0) await AsyncStorage.setItem(lastNotifiedKey(accountId), ids[0]);
 }
 
 // Fired by BulwarkPushTaskService when a data FCM message arrives. Runs in a
@@ -112,14 +213,16 @@ export async function pushBackgroundTask(data: unknown): Promise<void> {
     const accountIds = await readPushAccountIds();
     if (accountIds.length === 0) return;
 
-    activeAccountId = await readActiveAccountId();
+    const registry = await readAccountRegistry();
+    activeAccountId = registry.activeAccountId;
 
-    const matched = await identifyAccountFromFcmData(data, accountIds);
-    const accountsToCheck = matched ? [matched] : accountIds;
+    const payload = parseRelayPushData(data);
+    const jmapAccountIds = await readPushJmapAccountIds();
+    const accountsToCheck = matchAccountsForPush(payload, accountIds, jmapAccountIds, registry.accounts);
 
     for (const accountId of accountsToCheck) {
       try {
-        await processAccountForPush(accountId);
+        await processAccountForPush(accountId, payload);
       } catch (err) {
         console.warn(
           '[push] background check failed for account',
@@ -144,55 +247,97 @@ export async function pushBackgroundTask(data: unknown): Promise<void> {
   }
 }
 
-async function processAccountForPush(accountId: string): Promise<void> {
+/** Messages worth a notification: unread, not junk, not shown before. */
+export function selectNotifiableEmails(emails: Email[], alreadyNotified: readonly string[]): Email[] {
+  const seen = new Set(alreadyNotified);
+  return emails.filter((email) => {
+    if (!email?.id || seen.has(email.id)) return false;
+    const keywords = email.keywords ?? {};
+    if (keywords.$seen || keywords.$junk) return false;
+    return true;
+  });
+}
+
+async function processAccountForPush(accountId: string, payload: RelayPushData): Promise<void> {
   const loaded = await jmapClient.loadAccount(accountId);
   if (!loaded) return;
 
-  const mailboxes = await getMailboxes();
-  const inbox = mailboxes.find((m) => m.role === 'inbox');
-  if (!inbox) return;
+  const alreadyNotified = await readNotifiedIds(accountId);
+  let candidates: Email[];
 
-  const { ids } = await queryEmails(inbox.id, {
-    filter: { notKeyword: '$seen' },
-    limit: 1,
-  });
-  if (ids.length === 0) return;
+  if (payload.emailIds.length > 0) {
+    // EmailPush (or a relay that forwards ids): fetch exactly the delivered
+    // messages. The push may concern a shared account the user has access
+    // to, in which case the ids live under that JMAP account.
+    const fresh = payload.emailIds.filter((id) => !alreadyNotified.includes(id));
+    if (fresh.length === 0) return;
+    let accountOverride: string | undefined;
+    try {
+      if (payload.jmapAccountId && payload.jmapAccountId !== jmapClient.accountId) {
+        accountOverride = payload.jmapAccountId;
+      }
+    } catch {
+      accountOverride = undefined;
+    }
+    candidates = await getEmails(fresh, accountOverride);
+  } else {
+    // Legacy `jmap-state-change` payload without ids: look at the newest
+    // unread inbox messages and notify the ones not shown before. The ring
+    // of notified ids (rather than a single "last" id) is what keeps a
+    // message read elsewhere from surfacing the next older one.
+    const mailboxes = await getMailboxes();
+    const inbox = mailboxes.find((m) => m.role === 'inbox');
+    if (!inbox) return;
+    const { ids } = await queryEmails(inbox.id, {
+      filter: { notKeyword: '$seen' },
+      limit: LEGACY_QUERY_LIMIT,
+    });
+    const fresh = ids.filter((id) => !alreadyNotified.includes(id));
+    if (fresh.length === 0) return;
+    candidates = await getEmails(fresh);
+  }
 
-  const emailId = ids[0];
-  const lastKey = lastNotifiedKey(accountId);
-  const previouslyNotified = await AsyncStorage.getItem(lastKey);
-  if (previouslyNotified === emailId) return;
-
-  const [email] = await getEmails([emailId]);
-  if (!email) return;
-
-  const from = email.from?.[0];
-  const name = from?.name ?? '';
-  const address = from?.email ?? '';
-  const title = name || address || 'New mail';
-  const body = email.subject || '(no subject)';
-  const initials = getEmailInitials(name, address);
-  const bgColorHex = hslToHex(generateEmailAvatarColor(name, address));
-  const faviconDomain = getFaviconDomain(address);
-  const iconUrl = faviconDomain ? getFaviconUrl(faviconDomain) : undefined;
+  const toNotify = selectNotifiableEmails(candidates, alreadyNotified);
+  if (toNotify.length === 0) return;
 
   const native = NativeModules.BulwarkFcm as BulwarkFcmNative | undefined;
   if (!native?.showNotification) return;
 
-  await native.showNotification({
-    notificationId: `mail:${emailId}`,
-    title,
-    body,
-    initials,
-    bgColorHex,
-    iconUrl,
-    emailId,
-    threadId: email.threadId,
-    subject: email.subject ?? undefined,
-    accountId,
-  });
+  const groupKey = `bulwark-mail:${accountId}`;
+  const groupTitle = payload.accountLabel ?? accountId.split('@')[0] ?? accountId;
 
-  await AsyncStorage.setItem(lastKey, emailId);
+  // Oldest first so the newest ends up on top of the tray.
+  const ordered = [...toNotify].sort(
+    (a, b) => new Date(a.receivedAt ?? 0).getTime() - new Date(b.receivedAt ?? 0).getTime(),
+  );
+  for (const email of ordered) {
+    const from = email.from?.[0];
+    const name = from?.name ?? '';
+    const address = from?.email ?? '';
+    const title = name || address || 'New mail';
+    const body = email.subject || '(no subject)';
+    const initials = getEmailInitials(name, address);
+    const bgColorHex = hslToHex(generateEmailAvatarColor(name, address));
+    const faviconDomain = getFaviconDomain(address);
+    const iconUrl = faviconDomain ? getFaviconUrl(faviconDomain) : undefined;
+
+    await native.showNotification({
+      notificationId: `mail:${email.id}`,
+      title,
+      body,
+      initials,
+      bgColorHex,
+      iconUrl,
+      emailId: email.id,
+      threadId: email.threadId,
+      subject: email.subject ?? undefined,
+      accountId,
+      groupKey,
+      groupTitle,
+    });
+  }
+
+  await rememberNotifiedIds(accountId, ordered.map((e) => e.id).reverse());
 }
 
 function hslToHex(hsl: string): string {

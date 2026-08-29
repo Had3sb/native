@@ -1,6 +1,6 @@
 import { jmapClient } from './jmap-client';
 import { CAPABILITIES } from './types';
-import type { PushSubscription, StateChange } from './types';
+import type { EmailPushConfig, PushSubscription, StateChange } from './types';
 
 export type StateChangeHandler = (change: StateChange) => void;
 
@@ -27,6 +27,9 @@ export async function createPushSubscription(params: {
   // ISO date. Servers may clamp to their own ceiling - we send the maximum we
   // want and accept whatever Stalwart returns.
   expires?: string;
+  // draft-ietf-jmap-emailpush delivery filter, only when the server advertises
+  // urn:ietf:params:jmap:emailpush (see serverSupportsEmailPush).
+  emailPush?: Record<string, EmailPushConfig>;
 }): Promise<string> {
   const created: Record<string, unknown> = {
     deviceClientId: params.deviceClientId,
@@ -34,6 +37,7 @@ export async function createPushSubscription(params: {
     types: params.types,
   };
   if (params.expires) created.expires = params.expires;
+  if (params.emailPush) created.emailPush = params.emailPush;
 
   const res = await jmapClient.request(
     [
@@ -63,7 +67,7 @@ export async function createPushSubscription(params: {
  */
 export async function updatePushSubscription(
   id: string,
-  patch: { expires?: string; types?: string[] },
+  patch: { expires?: string; types?: string[]; emailPush?: Record<string, EmailPushConfig> },
 ): Promise<boolean> {
   const res = await jmapClient.request(
     [

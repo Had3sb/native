@@ -7,7 +7,9 @@ import {
   updatePushSubscription,
   verifyPushSubscription,
 } from '../api/push';
+import { getMailboxes, getSharedMailboxes } from '../api/email';
 import { jmapClient } from '../api/jmap-client';
+import type { EmailPushConfig, Mailbox } from '../api/types';
 import { generateAccountId } from './account-utils';
 
 // Persist identifiers across launches so we reuse the same JMAP subscription
@@ -15,9 +17,17 @@ import { generateAccountId } from './account-utils';
 // relay can distinguish per-account pushes via the URL slot it forwards.
 const RELAY_BASE_URL_KEY = 'push:relayBaseUrl:v1';
 const PUSH_ACCOUNT_IDS_KEY = 'push:accountIds:v1';
+// Local account id (username@host) → JMAP primary account id. The relay tags
+// every forwarded push with the JMAP account id it came from, which is the
+// only reliable key for routing a payload to the right local account.
+const PUSH_JMAP_ACCOUNT_IDS_KEY = 'push:jmapAccountIds:v1';
 const DEVICE_CLIENT_ID_PREFIX = 'push:deviceClientId:v2:';
 const SUBSCRIPTION_ID_PREFIX = 'push:subscriptionId:v2:';
 export const LAST_NOTIFIED_EMAIL_ID_PREFIX = 'push:lastNotifiedEmailId:v2:';
+// Ring of recently notified message ids per account (replaces the single
+// lastNotified id, which could not tell "already shown" from "older mail").
+const NOTIFIED_IDS_PREFIX = 'push:notifiedIds:v1:';
+const PROMPT_DISMISSED_PREFIX = 'push:promptDismissed:v1:';
 
 // Legacy single-account keys (pre-multi-account). Migrated lazily on the next
 // setupPushNotifications / pushBackgroundTask call, then deleted.
@@ -38,6 +48,14 @@ export function lastNotifiedKey(accountId: string): string {
   return LAST_NOTIFIED_EMAIL_ID_PREFIX + accountId;
 }
 
+export function notifiedIdsKey(accountId: string): string {
+  return NOTIFIED_IDS_PREFIX + accountId;
+}
+
+function promptDismissedKey(accountId: string): string {
+  return PROMPT_DISMISSED_PREFIX + accountId;
+}
+
 export async function readPushAccountIds(): Promise<string[]> {
   const raw = await AsyncStorage.getItem(PUSH_ACCOUNT_IDS_KEY);
   if (!raw) return [];
@@ -56,6 +74,34 @@ async function writePushAccountIds(ids: string[]): Promise<void> {
     await AsyncStorage.removeItem(PUSH_ACCOUNT_IDS_KEY);
   } else {
     await AsyncStorage.setItem(PUSH_ACCOUNT_IDS_KEY, JSON.stringify(deduped));
+  }
+}
+
+/** Local account id → JMAP primary account id, for every account with push. */
+export async function readPushJmapAccountIds(): Promise<Record<string, string>> {
+  const raw = await AsyncStorage.getItem(PUSH_JMAP_ACCOUNT_IDS_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function writePushJmapAccountId(accountId: string, jmapAccountId: string | null): Promise<void> {
+  const map = await readPushJmapAccountIds();
+  if (jmapAccountId) map[accountId] = jmapAccountId;
+  else delete map[accountId];
+  if (Object.keys(map).length === 0) {
+    await AsyncStorage.removeItem(PUSH_JMAP_ACCOUNT_IDS_KEY);
+  } else {
+    await AsyncStorage.setItem(PUSH_JMAP_ACCOUNT_IDS_KEY, JSON.stringify(map));
   }
 }
 
@@ -99,9 +145,39 @@ export async function migrateLegacyPushKeys(): Promise<void> {
 // Power users can override this from the settings screen.
 export const DEFAULT_RELAY_BASE_URL = 'https://notifications.relay.bulwarkmail.org';
 
-// Types the mobile app wants StateChange pings for. Submission is excluded -
-// outgoing mail state changes don't belong in a user-visible push.
-const PUSH_TYPES = ['Email', 'EmailDelivery', 'Mailbox'] as const;
+/**
+ * A relay must be reachable over TLS: the registration carries the FCM token
+ * and the JMAP server posts push bodies to it. Plain http is only allowed for
+ * loopback / the Android emulator host so a local relay can be developed
+ * against.
+ */
+export function isValidRelayUrl(value: string): boolean {
+  const trimmed = value.trim();
+  const m = /^(https?):\/\/([^/?#:]+)(?::\d{1,5})?(?:[/?#].*)?$/i.exec(trimmed);
+  if (!m) return false;
+  if (m[1].toLowerCase() === 'https') return true;
+  const host = m[2].toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '10.0.2.2';
+}
+
+// Only `EmailDelivery` state-changes when new mail is actually delivered.
+// `Email` fires for any mutation (sending, drafting, moving, marking read,
+// deleting) and `Mailbox` fires for mailbox edits - both produced spurious
+// system notifications, so we keep them out of the push subscription.
+// In-app sync uses the separate SSE channel and is unaffected.
+export const PUSH_TYPES = ['EmailDelivery'] as const;
+
+// draft-ietf-jmap-emailpush (Stalwart >= 0.16.16). `EmailDelivery` alone
+// still fires for every ingested message - including spam the server files
+// straight into Junk - because the server can't know which folders a client
+// cares about. With `emailPush` the server evaluates a per-account filter
+// against each new message before pushing and stays silent on a miss, so
+// junk-filed mail never wakes the device. Older servers don't advertise the
+// capability and get the plain EmailDelivery subscription as before.
+export const EMAIL_PUSH_CAPABILITY = 'urn:ietf:params:jmap:emailpush';
+
+// Only ids: the relay stays content-blind and the headless task dedupes on them.
+const EMAIL_PUSH_PROPERTIES = ['id', 'threadId'];
 
 // Maximum expires we ask the server for. Stalwart (and other JMAP servers)
 // may clamp this down; whatever they return is what we get. Without this,
@@ -117,6 +193,79 @@ function expiresFromNow(days: number): string {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 }
 
+export function sameTypes(a: readonly string[] | null | undefined, b: readonly string[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((t, i) => t === sortedB[i]);
+}
+
+export function serverSupportsEmailPush(): boolean {
+  try {
+    return EMAIL_PUSH_CAPABILITY in (jmapClient.currentSession?.capabilities ?? {});
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The delivery filter we want on every account the subscription fans out to:
+ * skip anything the spam filter tagged `$junk` and anything that lives only in
+ * a Junk-role mailbox (Sieve `fileinto` doesn't set the keyword). The two are
+ * ANDed so a stale mailbox id - the user deleted and recreated Junk - degrades
+ * to keyword-only filtering rather than letting everything through.
+ */
+export async function buildEmailPushConfig(): Promise<Record<string, EmailPushConfig>> {
+  const primary = jmapClient.accountId;
+  const junkByAccount = new Map<string, string[]>([[primary, []]]);
+  const own = await getMailboxes().catch(() => [] as Mailbox[]);
+  const shared = await getSharedMailboxes().catch(() => [] as Mailbox[]);
+  for (const m of [...own, ...shared]) {
+    const accountId = m.accountId || primary;
+    const junk = junkByAccount.get(accountId) ?? [];
+    // Shared-account mailboxes carry a client-side "<account>:<id>" id;
+    // the server only knows the original.
+    if (m.role === 'junk') junk.push(m.originalId ?? m.id);
+    junkByAccount.set(accountId, junk);
+  }
+
+  const config: Record<string, EmailPushConfig> = {};
+  for (const [accountId, junkIds] of junkByAccount) {
+    const conditions: Record<string, unknown>[] = [{ notKeyword: '$junk' }];
+    if (junkIds.length > 0) conditions.push({ inMailboxOtherThan: [...junkIds].sort() });
+    config[accountId] = {
+      // Always the operator form: that's how the server echoes it back, so a
+      // stored config compares equal to a freshly built one.
+      filter: { operator: 'AND', conditions },
+      properties: [...EMAIL_PUSH_PROPERTIES],
+      urgency: 'high',
+    };
+  }
+  return config;
+}
+
+function normalizeEmailPush(value: unknown): string {
+  const sortKeys = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sortKeys);
+    if (v && typeof v === 'object') {
+      return Object.keys(v as Record<string, unknown>).sort().reduce<Record<string, unknown>>((acc, k) => {
+        acc[k] = sortKeys((v as Record<string, unknown>)[k]);
+        return acc;
+      }, {});
+    }
+    return v;
+  };
+  return JSON.stringify(sortKeys(value ?? null));
+}
+
+export function sameEmailPush(
+  a: Record<string, EmailPushConfig> | null | undefined,
+  b: Record<string, EmailPushConfig>,
+): boolean {
+  if (!a) return false;
+  return normalizeEmailPush(a) === normalizeEmailPush(b);
+}
+
 type BulwarkFcmNative = {
   getToken(): Promise<string>;
   deleteToken(): Promise<void>;
@@ -127,15 +276,46 @@ function getNative(): BulwarkFcmNative | null {
   return (NativeModules as Record<string, unknown>).BulwarkFcm as BulwarkFcmNative | undefined ?? null;
 }
 
+/** True on platforms that have a push transport wired up (Android/FCM only). */
+export function isPushSupported(): boolean {
+  return getNative() !== null;
+}
+
 export interface PushSetupParams {
   // Optional - falls back to the hosted relay if omitted.
   relayBaseUrl?: string;
   accountLabel?: string;
+  // Destroy the recorded server-side subscription and create a brand-new one
+  // instead of refreshing the existing record's expiry. Stalwart binds the set
+  // of accounts a subscription fans out to at creation time, so a subscription
+  // that outlives a permission change keeps pushing for mailboxes the user can
+  // no longer read - recreating is the only client-side remedy (#841).
+  forceRecreate?: boolean;
 }
 
 export interface PushSetupResult {
   subscriptionId: string;
   verified: boolean;
+}
+
+/** Which step of the enable flow failed - lets the UI say what went wrong. */
+export type PushSetupPhase =
+  | 'platform'
+  | 'permission'
+  | 'token'
+  | 'account'
+  | 'relay'
+  | 'jmap'
+  | 'verify';
+
+export class PushSetupError extends Error {
+  readonly phase: PushSetupPhase;
+
+  constructor(phase: PushSetupPhase, message: string) {
+    super(message);
+    this.name = 'PushSetupError';
+    this.phase = phase;
+  }
 }
 
 function randomClientId(): string {
@@ -174,6 +354,20 @@ export async function setStoredRelayBaseUrl(url: string | null): Promise<void> {
   }
 }
 
+/** Whether this account has a JMAP subscription recorded on this device. */
+export async function isPushEnabledForAccount(accountId: string): Promise<boolean> {
+  await migrateLegacyPushKeys();
+  return (await AsyncStorage.getItem(subscriptionIdKey(accountId))) !== null;
+}
+
+export async function wasPushPromptDismissed(accountId: string): Promise<boolean> {
+  return (await AsyncStorage.getItem(promptDismissedKey(accountId))) !== null;
+}
+
+export async function dismissPushPrompt(accountId: string): Promise<void> {
+  await AsyncStorage.setItem(promptDismissedKey(accountId), String(Date.now()));
+}
+
 export async function requestNotificationPermission(): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
   if (Platform.Version < 33) return true;
@@ -193,8 +387,45 @@ export async function getFcmToken(): Promise<string | null> {
   }
 }
 
+// Firebase rejects getToken() on devices without Google Play services (or
+// with a broken Firebase configuration), and briefly right after a
+// deleteToken(). Turn the raw native rejection into a phase-tagged error the
+// settings pane can explain.
+async function getFcmTokenOrThrow(native: BulwarkFcmNative): Promise<string> {
+  let token: string | null = null;
+  try {
+    token = await native.getToken();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new PushSetupError(
+      'token',
+      `Firebase could not issue a device token (${detail}). Push needs Google Play services on this device.`,
+    );
+  }
+  if (!token) {
+    throw new PushSetupError('token', 'Firebase returned an empty device token.');
+  }
+  return token;
+}
+
 function buildRelayUrl(base: string, suffix: string): string {
   return base.replace(/\/+$/, '') + suffix;
+}
+
+async function readRelayError(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    if (!text) return `HTTP ${res.status}`;
+    try {
+      const body = JSON.parse(text) as { error?: unknown };
+      if (typeof body.error === 'string') return `${body.error} (HTTP ${res.status})`;
+    } catch {
+      // not JSON
+    }
+    return `HTTP ${res.status}: ${text.slice(0, 200)}`;
+  } catch {
+    return `HTTP ${res.status}`;
+  }
 }
 
 async function registerWithRelay(params: {
@@ -203,45 +434,67 @@ async function registerWithRelay(params: {
   fcmToken: string;
   accountLabel?: string;
 }): Promise<void> {
-  const res = await fetch(buildRelayUrl(params.relayBaseUrl, '/api/push/register'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      subscriptionId: params.subscriptionId,
-      fcmToken: params.fcmToken,
-      accountLabel: params.accountLabel,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(buildRelayUrl(params.relayBaseUrl, '/api/push/register'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subscriptionId: params.subscriptionId,
+        fcmToken: params.fcmToken,
+        accountLabel: params.accountLabel,
+      }),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new PushSetupError('relay', `Could not reach the push relay at ${params.relayBaseUrl} (${detail}).`);
+  }
   if (!res.ok) {
-    throw new Error(`Relay register failed: ${res.status}`);
+    throw new PushSetupError('relay', `The push relay rejected the registration: ${await readRelayError(res)}`);
+  }
+}
+
+/** The relay's view of a subscription - see relayStatusFor. */
+export type PushRelayStatus = 'active' | 'inactive' | 'unknown';
+
+/**
+ * Ask the relay what it knows about a subscription. `inactive` means the relay
+ * recognises the record and it is provably dead - it has never forwarded a push
+ * and isn't freshly registered. `unknown` covers everything we cannot vouch for:
+ * the relay doesn't recognise the id, an older relay without this endpoint, or a
+ * network blip. Callers must treat `unknown` as "leave it alone", never as dead.
+ */
+async function relayStatusFor(
+  relayBaseUrl: string,
+  subscriptionId: string,
+): Promise<PushRelayStatus> {
+  if (!relayBaseUrl || !subscriptionId) return 'unknown';
+  try {
+    const res = await fetch(
+      buildRelayUrl(relayBaseUrl, `/api/push/active/${encodeURIComponent(subscriptionId)}`),
+    );
+    if (!res.ok) return 'unknown';
+    const body = (await res.json()) as { active?: unknown };
+    if (body.active === true) return 'active';
+    if (body.active === false) return 'inactive';
+    return 'unknown';
+  } catch {
+    return 'unknown';
   }
 }
 
 /**
- * Ask the relay whether a leftover subscription is dead. Returns true ONLY when
- * the relay positively reports it inactive - a record it knows about that has
- * never forwarded a push and isn't freshly registered. Every other outcome (the
- * relay doesn't recognise the id, an older relay without this endpoint, a
- * network blip, or a live subscription) returns false, so we never reap
- * anything we can't confirm is dead. This is what lets setup clear its own
- * abandoned attempts - and dead siblings left by reinstalls that regenerated
- * the deviceClientId - without disturbing another live device or the PWA that
- * shares the account.
+ * Returns true ONLY when the relay positively reports a subscription inactive,
+ * so we never reap anything we can't confirm is dead. This is what lets setup
+ * clear its own abandoned attempts - and dead siblings left by reinstalls that
+ * regenerated the deviceClientId - without disturbing another live device or
+ * the PWA that shares the account.
  */
 async function relayReportsDead(
   relayBaseUrl: string,
   subscriptionId: string,
 ): Promise<boolean> {
-  try {
-    const res = await fetch(
-      buildRelayUrl(relayBaseUrl, `/api/push/active/${encodeURIComponent(subscriptionId)}`),
-    );
-    if (!res.ok) return false;
-    const body = (await res.json()) as { active?: unknown };
-    return body.active === false;
-  } catch {
-    return false;
-  }
+  return (await relayStatusFor(relayBaseUrl, subscriptionId)) === 'inactive';
 }
 
 async function pollVerificationCode(
@@ -254,18 +507,31 @@ async function pollVerificationCode(
   // verify window even in the unlucky case.
   const timeoutAt = Date.now() + 75_000;
   let delay = 400;
+  let lastRelayError: string | null = null;
   while (Date.now() < timeoutAt) {
-    const res = await fetch(
-      buildRelayUrl(relayBaseUrl, `/api/push/verify/${encodeURIComponent(subscriptionId)}`),
-    );
-    if (res.ok) {
-      const body = (await res.json()) as { verificationCode?: string | null };
-      if (body.verificationCode) return body.verificationCode;
+    try {
+      const res = await fetch(
+        buildRelayUrl(relayBaseUrl, `/api/push/verify/${encodeURIComponent(subscriptionId)}`),
+      );
+      if (res.ok) {
+        const body = (await res.json()) as { verificationCode?: string | null };
+        if (body.verificationCode) return body.verificationCode;
+        lastRelayError = null;
+      } else {
+        lastRelayError = await readRelayError(res);
+      }
+    } catch (err) {
+      lastRelayError = err instanceof Error ? err.message : String(err);
     }
     await new Promise((r) => setTimeout(r, delay));
     delay = Math.min(delay * 1.5, 2000);
   }
-  throw new Error('Timed out waiting for PushVerification from JMAP server');
+  throw new PushSetupError(
+    'verify',
+    lastRelayError
+      ? `The relay never received the verification code from the mail server (last relay response: ${lastRelayError}).`
+      : 'The mail server did not send a verification code to the relay within 75 s. Check that the server can reach the relay URL.',
+  );
 }
 
 // Coalesce concurrent setup attempts per account. App.tsx re-runs its push
@@ -297,27 +563,39 @@ export function setupPushNotifications(
   return run;
 }
 
+function logPhase(phase: string, detail?: string): void {
+  console.log(`[push] ${phase}${detail ? `: ${detail}` : ''}`);
+}
+
 async function setupPushNotificationsInner(
   params: PushSetupParams,
 ): Promise<PushSetupResult> {
   const native = getNative();
-  if (!native) throw new Error('Push notifications require Android');
+  if (!native) {
+    throw new PushSetupError('platform', 'Push notifications are only available on Android.');
+  }
 
   const relayBaseUrl = (params.relayBaseUrl ?? DEFAULT_RELAY_BASE_URL).replace(/\/+$/, '');
-  if (!relayBaseUrl) throw new Error('relayBaseUrl is required');
+  if (!relayBaseUrl) throw new PushSetupError('relay', 'relayBaseUrl is required');
+  if (!isValidRelayUrl(relayBaseUrl)) {
+    throw new PushSetupError('relay', 'The relay URL must use https://.');
+  }
 
+  logPhase('permission');
   const granted = await requestNotificationPermission();
-  if (!granted) throw new Error('Notification permission denied');
+  if (!granted) {
+    throw new PushSetupError('permission', 'Notification permission was not granted.');
+  }
 
-  const fcmToken = await native.getToken();
-  if (!fcmToken) throw new Error('FCM token unavailable');
+  logPhase('token');
+  const fcmToken = await getFcmTokenOrThrow(native);
 
   // setupPushNotifications operates on the currently-loaded jmapClient. We
   // need its username/serverUrl up-front so we can key per-account state.
   const username = jmapClient.username;
   const serverUrl = jmapClient.serverUrl;
   if (!username || !serverUrl) {
-    throw new Error('No account loaded - cannot set up push');
+    throw new PushSetupError('account', 'No account loaded - cannot set up push.');
   }
   const accountId = generateAccountId(username, serverUrl);
 
@@ -328,8 +606,9 @@ async function setupPushNotificationsInner(
 
   // Register this account's device-client-id with the relay. Multiple
   // accounts on the same device end up as separate registrations sharing
-  // one fcmToken - the relay forwards each push individually so the headless
-  // task can identify the source account via the FCM data payload.
+  // one fcmToken - the relay forwards each push individually and tags it
+  // with the JMAP account id so the headless task can route it.
+  logPhase('relay', relayBaseUrl);
   await registerWithRelay({
     relayBaseUrl,
     subscriptionId: deviceClientId,
@@ -339,19 +618,33 @@ async function setupPushNotificationsInner(
 
   // Reuse the previous JMAP subscription when the server still has it, but
   // push the expiry forward so it doesn't time out before the next app start.
+  // With forceRecreate we skip the reuse and destroy it instead (#841).
+  logPhase('jmap');
   const existingSubs = await listPushSubscriptions().catch(() => []);
+  const emailPush = serverSupportsEmailPush() ? await buildEmailPushConfig() : null;
   const subKey = subscriptionIdKey(accountId);
   const storedServerId = await AsyncStorage.getItem(subKey);
+  let jmapAccountId: string | null = null;
+  try {
+    jmapAccountId = jmapClient.accountId;
+  } catch {
+    jmapAccountId = null;
+  }
   if (storedServerId) {
     const match = existingSubs.find((s) => s.id === storedServerId);
     if (match) {
-      const refreshed = await refreshSubscriptionExpires(match);
-      if (refreshed) {
-        await addPushAccountId(accountId);
-        return { subscriptionId: storedServerId, verified: true };
+      if (!params.forceRecreate) {
+        const refreshed = await refreshSubscriptionExpires(match, emailPush);
+        if (refreshed) {
+          await addPushAccountId(accountId);
+          await writePushJmapAccountId(accountId, jmapAccountId);
+          logPhase('done', 'reused existing subscription');
+          return { subscriptionId: storedServerId, verified: true };
+        }
       }
       // Server rejected the refresh (likely the subscription was already
-      // deleted server-side) - drop the stale id and recreate below.
+      // deleted server-side) or the caller asked for a fresh record - drop
+      // the stale id and recreate below.
       await destroyPushSubscription(storedServerId).catch(() => undefined);
     }
     await AsyncStorage.removeItem(subKey);
@@ -382,18 +675,33 @@ async function setupPushNotificationsInner(
     }
   }
 
-  const serverAssignedId = await createPushSubscription({
-    deviceClientId,
-    url: buildRelayUrl(relayBaseUrl, `/api/push/jmap/${encodeURIComponent(deviceClientId)}`),
-    types: [...PUSH_TYPES],
-    expires: expiresFromNow(SUBSCRIPTION_EXPIRES_DAYS),
-  });
+  let serverAssignedId: string;
+  try {
+    serverAssignedId = await createPushSubscription({
+      deviceClientId,
+      url: buildRelayUrl(relayBaseUrl, `/api/push/jmap/${encodeURIComponent(deviceClientId)}`),
+      types: [...PUSH_TYPES],
+      expires: expiresFromNow(SUBSCRIPTION_EXPIRES_DAYS),
+      ...(emailPush ? { emailPush } : {}),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new PushSetupError('jmap', `The mail server refused the push subscription: ${detail}`);
+  }
 
+  logPhase('verify');
   const verificationCode = await pollVerificationCode(relayBaseUrl, deviceClientId);
-  await verifyPushSubscription(serverAssignedId, verificationCode);
+  try {
+    await verifyPushSubscription(serverAssignedId, verificationCode);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new PushSetupError('verify', `The mail server rejected the verification code: ${detail}`);
+  }
 
   await AsyncStorage.setItem(subKey, serverAssignedId);
   await addPushAccountId(accountId);
+  await writePushJmapAccountId(accountId, jmapAccountId);
+  logPhase('done', 'subscription verified');
 
   return { subscriptionId: serverAssignedId, verified: true };
 }
@@ -406,12 +714,25 @@ async function addPushAccountId(accountId: string): Promise<void> {
 }
 
 // Push the subscription's expires forward when it's getting close to the
-// server's ceiling. Returns false if the server rejects the update, which the
-// caller treats as "recreate".
+// server's ceiling, and re-sync `types` / the delivery filter when they drift
+// from what this client wants (a subscription created by an older build still
+// listens to `Email`/`Mailbox`; a Junk mailbox id can change under us).
+// Returns false if the server rejects the update, which the caller treats as
+// "recreate".
 async function refreshSubscriptionExpires(
-  sub: { id: string; expires?: string | null },
+  sub: {
+    id: string;
+    expires?: string | null;
+    types?: string[] | null;
+    emailPush?: Record<string, EmailPushConfig> | null;
+  },
+  // null when the server has no emailPush support - leave the property alone.
+  desiredEmailPush: Record<string, EmailPushConfig> | null,
 ): Promise<boolean> {
-  if (sub.expires) {
+  const typesNeedUpdate = !sameTypes(sub.types, PUSH_TYPES);
+  const emailPushNeedsUpdate =
+    desiredEmailPush !== null && !sameEmailPush(sub.emailPush, desiredEmailPush);
+  if (!typesNeedUpdate && !emailPushNeedsUpdate && sub.expires) {
     const remainingMs = new Date(sub.expires).getTime() - Date.now();
     const thresholdMs = SUBSCRIPTION_REFRESH_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
     if (Number.isFinite(remainingMs) && remainingMs > thresholdMs) {
@@ -420,9 +741,14 @@ async function refreshSubscriptionExpires(
     }
   }
   try {
-    return await updatePushSubscription(sub.id, {
-      expires: expiresFromNow(SUBSCRIPTION_EXPIRES_DAYS),
-    });
+    const patch: {
+      expires?: string;
+      types?: string[];
+      emailPush?: Record<string, EmailPushConfig>;
+    } = { expires: expiresFromNow(SUBSCRIPTION_EXPIRES_DAYS) };
+    if (typesNeedUpdate) patch.types = [...PUSH_TYPES];
+    if (emailPushNeedsUpdate && desiredEmailPush) patch.emailPush = desiredEmailPush;
+    return await updatePushSubscription(sub.id, patch);
   } catch {
     return false;
   }
@@ -438,48 +764,59 @@ async function deregisterFromRelay(
   ).catch(() => undefined);
 }
 
+async function clearAccountPushKeys(accountId: string): Promise<void> {
+  await AsyncStorage.multiRemove([
+    subscriptionIdKey(accountId),
+    deviceClientIdKey(accountId),
+    lastNotifiedKey(accountId),
+    notifiedIdsKey(accountId),
+  ]);
+  await writePushJmapAccountId(accountId, null);
+}
+
 /**
- * Tear down push for a single account. Destroys that account's JMAP
- * subscription (assumes the jmapClient is currently authenticated to that
- * account; the active-account logout flow guarantees this) and tells the
- * relay to drop its mapping. Other accounts' push setups are untouched.
+ * Tear down push for a single account. Destroys every JMAP subscription the
+ * server holds for this device (assumes the jmapClient is currently
+ * authenticated to that account; the active-account logout flow guarantees
+ * this) and tells the relay to drop its mapping. Other accounts' push setups
+ * are untouched.
  *
- * If no accounts have push left after removal, also deletes the FCM token
- * so the device stops receiving FCM messages entirely. Never throws -
- * callers treat teardown as best effort.
+ * The FCM token is deliberately left alive: the relay mapping is gone so
+ * nothing gets forwarded, and deleting the token makes the next getToken()
+ * fail for a while (native #45 "Disable then Enable" race). Only the
+ * logout-all path (`teardownPushNotifications`) kills the token.
  */
 export async function teardownPushNotificationsForAccount(
   accountId: string,
 ): Promise<void> {
   await migrateLegacyPushKeys();
 
-  const subKey = subscriptionIdKey(accountId);
-  const storedSubId = await AsyncStorage.getItem(subKey);
-  const dcidKey = deviceClientIdKey(accountId);
-  const storedDcid = await AsyncStorage.getItem(dcidKey);
+  const storedSubId = await AsyncStorage.getItem(subscriptionIdKey(accountId));
+  const storedDcid = await AsyncStorage.getItem(deviceClientIdKey(accountId));
   const relayBaseUrl = await getStoredRelayBaseUrl();
 
-  if (storedSubId) {
-    await destroyPushSubscription(storedSubId).catch(() => undefined);
+  // Destroy every subscription the server holds for this device, not just the
+  // id we happen to have recorded - a destroy that lost its round-trip or a
+  // failed enable can leave a registration this client no longer tracks (#841).
+  const idsToDestroy = new Set<string>();
+  if (storedSubId) idsToDestroy.add(storedSubId);
+  if (storedDcid) {
+    const existing = await listPushSubscriptions().catch(() => []);
+    for (const s of existing) {
+      if (s.deviceClientId === storedDcid) idsToDestroy.add(s.id);
+    }
+  }
+  for (const id of idsToDestroy) {
+    await destroyPushSubscription(id).catch(() => undefined);
   }
   if (relayBaseUrl && storedDcid) {
     await deregisterFromRelay(relayBaseUrl, storedDcid);
   }
 
-  await AsyncStorage.multiRemove([subKey, dcidKey, lastNotifiedKey(accountId)]);
+  await clearAccountPushKeys(accountId);
 
   const remaining = (await readPushAccountIds()).filter((id) => id !== accountId);
   await writePushAccountIds(remaining);
-
-  // If this was the last account with push, kill the FCM token so the device
-  // truly goes silent. Otherwise the token stays alive so the remaining
-  // accounts keep receiving pushes.
-  if (remaining.length === 0) {
-    const native = getNative();
-    if (native) {
-      await native.deleteToken().catch(() => undefined);
-    }
-  }
 }
 
 /**
@@ -495,10 +832,8 @@ export async function teardownPushNotifications(): Promise<void> {
   const relayBaseUrl = await getStoredRelayBaseUrl();
 
   for (const accountId of accountIds) {
-    const subKey = subscriptionIdKey(accountId);
-    const dcidKey = deviceClientIdKey(accountId);
-    const storedSubId = await AsyncStorage.getItem(subKey);
-    const storedDcid = await AsyncStorage.getItem(dcidKey);
+    const storedSubId = await AsyncStorage.getItem(subscriptionIdKey(accountId));
+    const storedDcid = await AsyncStorage.getItem(deviceClientIdKey(accountId));
 
     if (storedSubId) {
       // Will only succeed if the jmapClient happens to be authenticated to
@@ -509,10 +844,10 @@ export async function teardownPushNotifications(): Promise<void> {
     if (relayBaseUrl && storedDcid) {
       await deregisterFromRelay(relayBaseUrl, storedDcid);
     }
-    await AsyncStorage.multiRemove([subKey, dcidKey, lastNotifiedKey(accountId)]);
+    await clearAccountPushKeys(accountId);
   }
 
-  await AsyncStorage.removeItem(PUSH_ACCOUNT_IDS_KEY);
+  await AsyncStorage.multiRemove([PUSH_ACCOUNT_IDS_KEY, PUSH_JMAP_ACCOUNT_IDS_KEY]);
 
   const native = getNative();
   if (native) {
@@ -520,9 +855,76 @@ export async function teardownPushNotifications(): Promise<void> {
   }
 }
 
+export interface PushDevice {
+  // The JMAP PushSubscription id - what you destroy to revoke it.
+  id: string;
+  // Client-chosen id the relay keys its endpoint mapping on.
+  deviceClientId: string;
+  expires: string | null;
+  types: string[] | null;
+  // True when this registration belongs to the device you're looking at.
+  isThisDevice: boolean;
+  relayStatus: PushRelayStatus;
+}
+
+/**
+ * Every push registration the JMAP server holds for this account, annotated
+ * with whether it is this device and what the relay makes of it.
+ *
+ * Stalwart hides a subscription's url and verified state from clients, so
+ * deviceClientId is the only handle we get. That's enough to spot our own
+ * registration and to ask the relay about the rest - but registrations made
+ * against a different relay, or by a non-Bulwark client, come back `unknown`
+ * rather than dead, and the UI must present them as revocable-but-unclassified.
+ */
+export async function listPushDevices(params: {
+  accountId: string;
+  relayBaseUrl?: string;
+}): Promise<PushDevice[]> {
+  const relayBaseUrl = (params.relayBaseUrl ?? DEFAULT_RELAY_BASE_URL).replace(/\/+$/, '');
+  const thisDeviceClientId = await AsyncStorage.getItem(deviceClientIdKey(params.accountId));
+
+  const subs = await listPushSubscriptions();
+  return Promise.all(
+    subs.map(async (s) => ({
+      id: s.id,
+      deviceClientId: s.deviceClientId,
+      expires: s.expires ?? null,
+      types: s.types ?? null,
+      isThisDevice: thisDeviceClientId !== null && s.deviceClientId === thisDeviceClientId,
+      relayStatus: await relayStatusFor(relayBaseUrl, s.deviceClientId),
+    })),
+  );
+}
+
+/**
+ * Revoke one registration. Destroying the JMAP subscription stops the server
+ * fanning StateChanges to it; dropping the relay mapping stops the relay
+ * forwarding anything already in flight and frees the deviceClientId. Revoking
+ * this device runs the full local teardown so the UI doesn't keep claiming push
+ * is on.
+ */
+export async function revokePushDevice(params: {
+  accountId: string;
+  device: Pick<PushDevice, 'id' | 'deviceClientId' | 'isThisDevice'>;
+  relayBaseUrl?: string;
+}): Promise<void> {
+  const relayBaseUrl = (params.relayBaseUrl ?? DEFAULT_RELAY_BASE_URL).replace(/\/+$/, '');
+
+  if (params.device.isThisDevice) {
+    await teardownPushNotificationsForAccount(params.accountId);
+    return;
+  }
+
+  await destroyPushSubscription(params.device.id);
+  if (relayBaseUrl && params.device.deviceClientId) {
+    await deregisterFromRelay(relayBaseUrl, params.device.deviceClientId);
+  }
+}
+
 export type FcmMessageListener = (payload: {
-  title: string;
-  body: string;
+  title?: string;
+  body?: string;
   data: Record<string, string>;
 }) => void;
 

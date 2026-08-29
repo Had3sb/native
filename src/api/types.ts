@@ -573,7 +573,9 @@ export interface FileNode {
   blobId?: string | null;
   size?: number;
   created?: string;
-  updated?: string;
+  // Last modification time (UTCDate). Older builds asked for a non-existent
+  // `updated` property, which the server silently left undefined (#700).
+  modified?: string;
   // JMAP Sharing (RFC 9670). Populated only when the server advertises the
   // principals capability and the properties are requested explicitly. A node
   // is shared-out when `shareWith` has entries; `myRights` describes what the

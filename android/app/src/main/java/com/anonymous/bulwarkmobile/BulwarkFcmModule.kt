@@ -66,6 +66,10 @@ class BulwarkFcmModule(reactContext: ReactApplicationContext)
         val threadId = options.getString("threadId")
         val subject = options.takeIf { it.hasKey("subject") }?.getString("subject")
         val accountId = options.takeIf { it.hasKey("accountId") }?.getString("accountId")
+        val groupKey = options.takeIf { it.hasKey("groupKey") }?.getString("groupKey")
+            ?: accountId?.let { "bulwark-mail:$it" }
+        val groupTitle = options.takeIf { it.hasKey("groupTitle") }?.getString("groupTitle")
+            ?: accountId ?: "Bulwark Mail"
 
         // Bitmap fetch + draw off the bridge thread so the caller doesn't
         // block waiting for the favicon request.
@@ -74,8 +78,9 @@ class BulwarkFcmModule(reactContext: ReactApplicationContext)
                 ?: makeLetterAvatar(initials, bgColorHex)
             postNotification(
                 notificationId, title, body, largeIcon, bgColorHex,
-                emailId, threadId, subject, accountId,
+                emailId, threadId, subject, accountId, groupKey,
             )
+            if (groupKey != null) postGroupSummary(groupKey, groupTitle, bgColorHex, accountId)
             promise.resolve(null)
         }
     }
@@ -96,6 +101,7 @@ class BulwarkFcmModule(reactContext: ReactApplicationContext)
         threadId: String?,
         subject: String?,
         accountId: String?,
+        groupKey: String?,
     ) {
         val ctx = reactApplicationContext
         val intent = Intent(ctx, MainActivity::class.java).apply {
@@ -122,9 +128,62 @@ class BulwarkFcmModule(reactContext: ReactApplicationContext)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pending)
+        if (groupKey != null) {
+            builder.setGroup(groupKey)
+            builder.setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+        }
 
         val manager = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(notificationId, notificationId.hashCode(), builder.build())
+    }
+
+    // One summary per account group so several deliveries collapse into a
+    // single "N new messages" entry (Android renders the "+N more" itself
+    // from the children). Tapping the summary opens the app on the inbox;
+    // the per-message children carry the deep link.
+    private fun postGroupSummary(groupKey: String, groupTitle: String, colorHex: String, accountId: String?) {
+        val ctx = reactApplicationContext
+        val manager = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val children = manager.activeNotifications.filter {
+            it.groupKey?.endsWith(groupKey) == true &&
+                (it.notification.flags and android.app.Notification.FLAG_GROUP_SUMMARY) == 0
+        }
+        val count = maxOf(children.size, 1)
+        val inbox = NotificationCompat.InboxStyle()
+        children.sortedByDescending { it.postTime }.take(5).forEach { sbn ->
+            val extras = sbn.notification.extras
+            val line = listOfNotNull(
+                extras.getCharSequence(android.app.Notification.EXTRA_TITLE),
+                extras.getCharSequence(android.app.Notification.EXTRA_TEXT),
+            ).joinToString("  ")
+            if (line.isNotBlank()) inbox.addLine(line)
+        }
+        inbox.setBigContentTitle(groupTitle)
+        inbox.setSummaryText(if (count == 1) "1 new message" else "$count new messages")
+
+        val intent = Intent(ctx, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (accountId != null) putExtra(NotificationTapStore.EXTRA_ACCOUNT_ID, accountId)
+        }
+        val pending = PendingIntent.getActivity(
+            ctx,
+            groupKey.hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val summary = NotificationCompat.Builder(ctx, BulwarkMessagingService.CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle(groupTitle)
+            .setContentText(if (count == 1) "1 new message" else "$count new messages")
+            .setStyle(inbox)
+            .setColor(parseColor(colorHex, fallback = Color.parseColor("#2563eb")))
+            .setGroup(groupKey)
+            .setGroupSummary(true)
+            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+            .setAutoCancel(true)
+            .setContentIntent(pending)
+            .build()
+        manager.notify(groupKey, groupKey.hashCode(), summary)
     }
 
     private fun makeLetterAvatar(initials: String, bgHex: String): Bitmap {
