@@ -162,5 +162,6 @@ export async function exchangePasswordForTokens(
     expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined,
     tokenEndpoint: `${base}/auth/token`,
     clientId,
+    source: 'totp',
   };
 }

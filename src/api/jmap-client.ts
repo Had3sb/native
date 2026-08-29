@@ -12,6 +12,7 @@ import {
   refreshOAuthAccessToken,
   TransientRefreshError,
   type OAuthTokens,
+  type OAuthTokenSource,
 } from '../lib/oauth';
 import { FirstTouchGate } from './first-touch-gate';
 
@@ -54,6 +55,7 @@ export interface StoredCredentials {
   expiresAt?: number;
   tokenEndpoint?: string;
   clientId?: string;
+  tokenSource?: OAuthTokenSource;
 }
 
 /**
@@ -301,6 +303,7 @@ export class JMAPClient {
       expiresAt: tokens.expiresAt,
       tokenEndpoint: tokens.tokenEndpoint,
       clientId: tokens.clientId,
+      tokenSource: tokens.source,
     };
 
     this.session = this.rewriteSessionUrls(await this.fetchSession(baseUrl), baseUrl);
@@ -364,6 +367,21 @@ export class JMAPClient {
       expiresAt: this.credentials.expiresAt,
       tokenEndpoint: this.credentials.tokenEndpoint,
       clientId: this.credentials.clientId,
+      source: this.credentials.tokenSource,
+    };
+  }
+
+  /** OAuth bundle stored for `accountId` (null for password accounts). */
+  async getStoredOAuthTokens(accountId: string): Promise<OAuthTokens | null> {
+    const creds = await this.getStoredCredentials(accountId);
+    if (!creds?.accessToken || !creds.refreshToken || !creds.tokenEndpoint || !creds.clientId) return null;
+    return {
+      accessToken: creds.accessToken,
+      refreshToken: creds.refreshToken,
+      expiresAt: creds.expiresAt,
+      tokenEndpoint: creds.tokenEndpoint,
+      clientId: creds.clientId,
+      source: creds.tokenSource,
     };
   }
 

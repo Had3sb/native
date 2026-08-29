@@ -11,12 +11,18 @@ import { randomHex } from './random';
 
 export const HANDOFF_REDIRECT_URI = 'bulwarkmobile://auth/callback';
 
+export type OAuthTokenSource = 'handoff' | 'pairing' | 'totp' | 'native';
+
 export interface OAuthTokens {
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number; // epoch ms
   tokenEndpoint: string;
   clientId: string;
+  // Where the bundle came from. A paired phone shares the desktop's refresh
+  // token, so revoking it on sign-out would also sign the desktop out;
+  // every other source is safe to revoke.
+  source?: OAuthTokenSource;
 }
 
 export type HandoffResult =
@@ -162,6 +168,7 @@ export async function runWebmailHandoff(webmailUrl: string): Promise<HandoffResu
         expiresAt: expiresIn ? Date.now() + parseInt(expiresIn, 10) * 1000 : undefined,
         tokenEndpoint,
         clientId,
+        source: 'handoff',
       },
     };
   }
@@ -255,6 +262,7 @@ export async function redeemPairingCode(webmailUrl: string, code: string): Promi
       expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined,
       tokenEndpoint: data.token_endpoint,
       clientId: data.client_id,
+      source: 'pairing',
     },
   };
 }
@@ -318,6 +326,7 @@ export async function refreshOAuthAccessToken(tokens: OAuthTokens): Promise<OAut
           expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined,
           tokenEndpoint: tokens.tokenEndpoint,
           clientId: tokens.clientId,
+          source: tokens.source,
         };
       } finally {
         activeRefreshes.delete(cacheKey);

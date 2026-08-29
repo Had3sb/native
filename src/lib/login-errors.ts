@@ -115,6 +115,13 @@ export function describeLoginError(err: unknown, context: LoginErrorContext = {}
     };
   }
 
+  if (lower.includes('no bulwark webmail or sign-in service')) {
+    return {
+      title: `No sign-in page at ${host}`,
+      detail: 'This server has no Bulwark webmail and no OAuth sign-in. Use a password (or an app password) instead.',
+    };
+  }
+
   if (lower.includes('pairing code')) {
     return {
       title: 'That code has expired',

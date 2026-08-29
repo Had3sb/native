@@ -16,6 +16,7 @@ vi.mock('../../api/jmap-client', () => ({
     onTokenRefresh: vi.fn(() => () => undefined),
     hasAccountCapability: vi.fn(() => false),
     request: vi.fn(async () => { throw new Error('not mocked'); }),
+    getStoredOAuthTokens: vi.fn(async () => null),
     accountId: 'acc-1',
     currentSession: { apiUrl: 'https://mail.example.com/jmap/' },
     username: 'user',

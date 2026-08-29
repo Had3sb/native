@@ -9,7 +9,8 @@ import { useContactsStore } from './contacts-store';
 import { useCalendarStore } from './calendar-store';
 import { useFilterStore } from './filter-store';
 import { generateAccountId } from '../lib/account-utils';
-import { runWebmailHandoff, redeemPairingCode, HandoffCancelledError, type HandoffResult } from '../lib/oauth';
+import { runWebmailHandoff, redeemPairingCode, HandoffCancelledError, HandoffError, type HandoffResult } from '../lib/oauth';
+import { discoverOAuthMetadata, loginWithPkce, probeWebmail, revokeRefreshToken } from '../lib/oauth-native';
 import {
   teardownPushNotifications,
   teardownPushNotificationsForAccount,
@@ -48,6 +49,8 @@ export interface AuthState {
     opts?: { addAccount?: boolean; totp?: string },
   ) => Promise<void>;
   loginViaWebmail: (webmailUrl: string, opts?: { addAccount?: boolean }) => Promise<void>;
+  /** OAuth/OIDC (PKCE) straight against the mail server's authorization server. */
+  loginViaOAuth: (serverUrl: string, opts?: { addAccount?: boolean }) => Promise<void>;
   loginViaPairing: (webmailUrl: string, code: string, opts?: { addAccount?: boolean }) => Promise<void>;
   logout: () => Promise<void>;
   logoutAll: () => Promise<void>;
@@ -104,6 +107,19 @@ function refetchFeatureStores(): void {
   // events reflect new invitations / cancellations without the user swiping.
   if (calendarStore.loadedRange) {
     void calendarStore.refresh();
+  }
+}
+
+// Best-effort RFC 7009 revocation of an account's refresh token on sign-out.
+// A QR-paired phone shares the desktop's token, so those are left alone.
+async function revokeStoredRefreshToken(accountId: string): Promise<void> {
+  try {
+    const entry = useAccountStore.getState().getAccountById(accountId);
+    const tokens = await jmapClient.getStoredOAuthTokens(accountId);
+    if (!entry || !tokens || tokens.source === 'pairing') return;
+    await revokeRefreshToken(entry.serverUrl, tokens);
+  } catch {
+    // never block sign-out
   }
 }
 
@@ -270,6 +286,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   loginViaWebmail: async (webmailUrl, opts) => {
     set({ isLoading: true, error: null });
+    // Discovery finds the *JMAP* host; a Bulwark webmail is not necessarily
+    // served there. Opening `/login?mobile_redirect_uri=…` on a bare Stalwart
+    // lands on a 404 or the admin page, so check first and fall back to the
+    // server's own OAuth (PKCE) when the webmail is missing.
+    if (!(await probeWebmail(webmailUrl))) {
+      const metadata = await discoverOAuthMetadata(webmailUrl);
+      if (metadata) {
+        await get().loginViaOAuth(webmailUrl, opts);
+        return;
+      }
+      const message = 'No Bulwark webmail or sign-in service found at this address. Use a password instead.';
+      set({ isLoading: false, error: message });
+      throw new HandoffError(message);
+    }
     let result;
     try {
       result = await runWebmailHandoff(webmailUrl);
@@ -297,6 +327,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // ensure/forceRefreshToken keep it alive going forward.
     try {
       await completeOAuthHandoff(set, get, result, opts);
+    } catch (err) {
+      const message =
+        err instanceof AuthenticationError
+          ? 'Authentication rejected by server'
+          : err instanceof Error
+            ? err.message
+            : 'OAuth sign-in failed';
+      set({ isLoading: false, error: message });
+      throw err;
+    }
+  },
+
+  loginViaOAuth: async (serverUrl, opts) => {
+    set({ isLoading: true, error: null });
+    const base = serverUrl.replace(/\/+$/, '');
+    let tokens;
+    try {
+      const metadata = await discoverOAuthMetadata(base);
+      if (!metadata) throw new HandoffError('This server does not offer OAuth sign-in');
+      tokens = await loginWithPkce(base, metadata);
+    } catch (err) {
+      if (err instanceof HandoffCancelledError) {
+        set({ isLoading: false, error: null });
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Sign-in failed';
+      set({ isLoading: false, error: message });
+      throw err;
+    }
+    try {
+      await completeOAuthHandoff(set, get, { flow: 'oauth', serverUrl: base, tokens }, opts);
     } catch (err) {
       const message =
         err instanceof AuthenticationError
@@ -356,6 +417,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     // Clear credentials for this account first
     if (currentId) {
+      await revokeStoredRefreshToken(currentId);
       await jmapClient.clearAccountCredentials(currentId);
       accountStore.removeAccount(currentId);
     } else {
@@ -395,6 +457,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const accountStore = useAccountStore.getState();
     const ids = accountStore.accounts.map((a) => a.id);
     await teardownPushNotifications().catch(() => undefined);
+    for (const id of ids) await revokeStoredRefreshToken(id);
     await jmapClient.clearAllCredentials(ids);
     jmapClient.reset();
     clearAllFeatureStores();
@@ -510,6 +573,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const accountStore = useAccountStore.getState();
     if (!accountStore.getAccountById(accountId)) return;
     await teardownPushNotificationsForAccount(accountId).catch(() => undefined);
+    await revokeStoredRefreshToken(accountId);
     await jmapClient.clearAccountCredentials(accountId).catch(() => undefined);
     useEmailStore.getState().removeAccount(accountId);
     accountStore.removeAccount(accountId);
