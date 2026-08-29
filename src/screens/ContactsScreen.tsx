@@ -10,12 +10,15 @@ import {
   RefreshControl,
   ScrollView,
   Alert,
+  Share,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
-  Search, Plus, UserCircle, X, Menu, Trash2, Tag, FolderInput, Upload,
+  Search, Plus, UserCircle, X, Menu, Trash2, Tag, FolderInput, Upload, CheckSquare, Share2,
 } from 'lucide-react-native';
 import type { RootStackParamList } from '../navigation/types';
 import type { ContactCard } from '../api/types';
@@ -23,9 +26,11 @@ import {
   useContactsStore,
   sortContactsByDisplayName,
   selectGroupMembers,
+  selectUncategorized,
   type ContactCategory,
 } from '../stores/contacts-store';
 import { getContactDisplayName, isGroup, matchesContactSearch } from '../lib/contact-utils';
+import { contactsToVCard } from '../lib/vcard';
 import {
   ContactListRow,
   AddressBookPickerSheet,
@@ -50,8 +55,11 @@ function groupContacts(contacts: ContactCard[]): Section[] {
   const groups: Record<string, ContactCard[]> = {};
   for (const c of sorted) {
     const name = getContactDisplayName(c).trim();
-    const letter = (name[0] || '#').toUpperCase();
-    const key = /[A-Z]/.test(letter) ? letter : '#';
+    // Any letter (Ä, É, Ł, 王…) gets its own section like the webmail; only
+    // digits and symbols fall into "#". Hermes supports Unicode property escapes.
+    const first = Array.from(name)[0] || '#';
+    const letter = first.toLocaleUpperCase();
+    const key = /\p{L}/u.test(letter) ? letter : '#';
     if (!groups[key]) groups[key] = [];
     groups[key].push(c);
   }
@@ -59,7 +67,7 @@ function groupContacts(contacts: ContactCard[]): Section[] {
     .sort((a, b) => {
       if (a === '#') return 1;
       if (b === '#') return -1;
-      return a.localeCompare(b);
+      return a.localeCompare(b, undefined, { sensitivity: 'base' });
     })
     .map((title) => ({ title, data: groups[title] }));
 }
@@ -100,6 +108,7 @@ export default function ContactsScreen() {
   const moveContactsToAddressBook = useContactsStore((s) => s.moveContactsToAddressBook);
   const addKeywordToContacts = useContactsStore((s) => s.addKeywordToContacts);
   const setSelectedCategory = useContactsStore((s) => s.setSelectedCategory);
+  const getDefaultAddressBookId = useContactsStore((s) => s.getDefaultAddressBookId);
   const groupByLetter = useSettingsStore((s) => s.groupContactsByLetter);
 
   const [searchQuery, setSearchQuery] = React.useState('');
@@ -144,9 +153,8 @@ export default function ContactsScreen() {
         filtered = individuals.filter((c) => c.keywords?.[selectedCategory.keyword]);
         break;
       case 'uncategorized':
-        filtered = individuals.filter(
-          (c) => !c.addressBookIds || Object.keys(c.addressBookIds).length === 0,
-        );
+        // "No category" = contacts without a keyword, like the webmail.
+        filtered = selectUncategorized(individuals);
         break;
       default:
         filtered = individuals;
@@ -196,12 +204,49 @@ export default function ContactsScreen() {
     await bulkDelete(ids);
   };
 
+  const selectAllVisible = () => {
+    setSelection((prev) => {
+      const allSelected = visible.length > 0 && visible.every((c) => prev.has(c.id));
+      return allSelected ? new Set() : new Set(visible.map((c) => c.id));
+    });
+  };
+
+  const exportSelected = async () => {
+    const selected = contacts.filter((c) => selection.has(c.id));
+    if (selected.length === 0) return;
+    const vcf = contactsToVCard(selected);
+    try {
+      const filename = `contacts-${new Date().toISOString().slice(0, 10)}.vcf`;
+      const path = `${FileSystem.cacheDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(path, vcf);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(path, {
+          mimeType: 'text/vcard',
+          UTI: 'public.vcard',
+          dialogTitle: 'Export contacts',
+        });
+      } else {
+        await Share.share({ message: vcf });
+      }
+    } catch (err) {
+      Alert.alert('Export failed', err instanceof Error ? err.message : 'Unknown error');
+    }
+  };
+
+  const openNewMenu = () => {
+    Alert.alert('Create', undefined, [
+      { text: 'New contact', onPress: () => navigation.navigate('ContactForm', {}) },
+      { text: 'New group', onPress: () => navigation.navigate('ContactForm', { asGroup: true }) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   // Default target for moves/imports: the currently-viewed address book, else
-  // the first available book.
+  // the account's default book.
   const defaultBookId = React.useMemo(() => {
     if (selectedCategory.type === 'addressBook') return selectedCategory.addressBookId;
-    return addressBooks[0]?.id ?? null;
-  }, [selectedCategory, addressBooks]);
+    return getDefaultAddressBookId();
+  }, [selectedCategory, addressBooks, getDefaultAddressBookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleBulkMove = async (bookId: string) => {
     const ids = Array.from(selection);
@@ -286,6 +331,20 @@ export default function ContactsScreen() {
             </Pressable>
             <Text style={styles.headerTitle}>{selection.size} selected</Text>
             <View style={styles.headerActions}>
+              <Pressable
+                onPress={selectAllVisible}
+                style={styles.headerIconBtn}
+                hitSlop={8}
+              >
+                <CheckSquare size={20} color={c.text} />
+              </Pressable>
+              <Pressable
+                onPress={() => { void exportSelected(); }}
+                style={styles.headerIconBtn}
+                hitSlop={8}
+              >
+                <Share2 size={20} color={c.text} />
+              </Pressable>
               {addressBooks.length > 0 && (
                 <Pressable
                   onPress={() => setMoveSheetOpen(true)}
@@ -335,6 +394,7 @@ export default function ContactsScreen() {
               </Pressable>
               <Pressable
                 onPress={() => navigation.navigate('ContactForm', {})}
+                onLongPress={openNewMenu}
                 style={styles.addBtn}
                 hitSlop={8}
               >
