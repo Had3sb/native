@@ -31,6 +31,9 @@ interface AccountState {
   setActiveAccount: (accountId: string) => void;
   setDefaultAccount: (accountId: string) => void;
   updateAccount: (accountId: string, updates: Partial<AccountEntry>) => void;
+  // Persist a new display order (ids in the desired order; unknown ids are
+  // ignored, missing ones keep their relative order at the end).
+  reorderAccounts: (orderedIds: string[]) => void;
   getAccountById: (accountId: string) => AccountEntry | undefined;
   getActiveAccount: () => AccountEntry | null;
   getDefaultAccount: () => AccountEntry | null;
@@ -129,6 +132,21 @@ export const useAccountStore = create<AccountState>()(
         set((s) => ({
           accounts: s.accounts.map((a) => (a.id === accountId ? { ...a, ...updates } : a)),
         }));
+      },
+
+      reorderAccounts: (orderedIds) => {
+        set((s) => {
+          const byId = new Map(s.accounts.map((a) => [a.id, a]));
+          const next: AccountEntry[] = [];
+          for (const id of orderedIds) {
+            const entry = byId.get(id);
+            if (entry && !next.includes(entry)) next.push(entry);
+          }
+          for (const a of s.accounts) {
+            if (!next.includes(a)) next.push(a);
+          }
+          return { accounts: next };
+        });
       },
 
       getAccountById: (accountId) => get().accounts.find((a) => a.id === accountId),
