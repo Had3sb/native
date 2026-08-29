@@ -143,6 +143,9 @@ interface PersistedSettings {
   showPreview: boolean;
   mailLayout: MailLayout;
   emailsPerPage: number;
+  // Mail list sort order: oldest-first when true. Applies to every mailbox
+  // (the JMAP Email/query sorts by receivedAt).
+  mailSortAscending: boolean;
   disableThreading: boolean;
   mailAttachmentAction: MailAttachmentAction;
   attachmentPosition: AttachmentPosition;
@@ -259,6 +262,7 @@ const DEFAULT_PERSISTED: PersistedSettings = {
   showPreview: true,
   mailLayout: 'split',
   emailsPerPage: 25,
+  mailSortAscending: false,
   disableThreading: false,
   mailAttachmentAction: 'preview',
   attachmentPosition: 'beside-sender',

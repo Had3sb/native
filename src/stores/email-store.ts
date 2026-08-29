@@ -242,6 +242,7 @@ export interface EmailState {
   searchEmails: (query: string) => Promise<Email[]>;
   setSearchQuery: (query: string) => void;
   setFilters: (filters: EmailFilters) => void;
+  setSortAscending: (ascending: boolean) => void;
   clearSearchAndFilters: () => void;
   reset: () => void;
 }
@@ -655,6 +656,8 @@ export const useEmailStore = create<EmailState>()(
             rawMailboxId(state.mailboxes, mailboxId),
             Math.max(limit, 50),
           );
+          // The cache returns newest-first; flip for an ascending sort.
+          if (useSettingsStore.getState().mailSortAscending) seededEmails.reverse();
           seededTotal = seededEmails.length;
         } catch (err) {
           console.warn('[email-store] cache seed failed:', err);
@@ -700,6 +703,10 @@ export const useEmailStore = create<EmailState>()(
       const { ids } = await queryEmails(ref.id, {
         position: emails.length,
         limit,
+        sort: [{
+          property: 'receivedAt',
+          isAscending: useSettingsStore.getState().mailSortAscending,
+        }],
         filter,
         accountId: ref.accountId,
       });
@@ -772,16 +779,19 @@ export const useEmailStore = create<EmailState>()(
     const ref = refFor(state.mailboxes, currentMailboxId);
     const emailState = state.emailStates[stateKey(ref.accountId)];
     const filter = buildJmapFilter(ref.id, searchQuery, filters);
-    const limit = useSettingsStore.getState().emailsPerPage;
+    const { emailsPerPage: limit, mailSortAscending: sortAscending } =
+      useSettingsStore.getState();
+    const sort = [{ property: 'receivedAt', isAscending: sortAscending }];
     const baseView = isBaseView(searchQuery, filters);
 
     // A response that lands after the user switched account/mailbox or
-    // changed search/filters must not overwrite the newer view.
+    // changed search/filters/sort must not overwrite the newer view.
     const viewChanged = () =>
       get().activeAccountId !== activeAccountId ||
       get().currentMailboxId !== currentMailboxId ||
       get().searchQuery !== searchQuery ||
-      get().filters !== filters;
+      get().filters !== filters ||
+      useSettingsStore.getState().mailSortAscending !== sortAscending;
 
     // The incremental path diffs against the *base-view* list, which lives in
     // the per-mailbox snapshot — NOT `emails`, which may still hold search or
@@ -806,6 +816,7 @@ export const useEmailStore = create<EmailState>()(
       ) {
         const baseEmails = snap.emails;
         const queryChanges = await getEmailQueryChanges(ref.id, snap.queryState, {
+          sort,
           filter: undefined,
           accountId: ref.accountId,
         });
@@ -906,7 +917,7 @@ export const useEmailStore = create<EmailState>()(
       // Full re-query path. Used when there's no prior queryState, when the
       // user has search/filters active (queryState only tracks the base
       // query), or when the server returned cannotCalculateChanges above.
-      const queryRes = await queryEmails(ref.id, { limit, filter, accountId: ref.accountId });
+      const queryRes = await queryEmails(ref.id, { limit, sort, filter, accountId: ref.accountId });
       const fetched = queryRes.ids.length > 0
         ? await getEmailsWithState(queryRes.ids, ref.accountId)
         : { list: [], state: undefined as string | undefined };
@@ -946,6 +957,7 @@ export const useEmailStore = create<EmailState>()(
               ref.id,
               Math.max(limit, 50),
             );
+            if (sortAscending) cached.reverse();
             if (
               get().activeAccountId === activeAccountId &&
               get().currentMailboxId === currentMailboxId &&
@@ -1021,6 +1033,22 @@ export const useEmailStore = create<EmailState>()(
       filters,
       ...(backToBase ? restoredBaseView(state) : {}),
     });
+    void get().refreshEmails();
+  },
+
+  setSortAscending: (ascending) => {
+    const settings = useSettingsStore.getState();
+    if (settings.mailSortAscending === ascending) return;
+    settings.updateSetting('mailSortAscending', ascending);
+    // Every cached queryState and snapshot window was built under the old
+    // sort order — drop them all (active view and tucked-away accounts) so
+    // the next refresh does a full re-query instead of running
+    // Email/queryChanges against a differently-sorted query.
+    const accountSnapshots: Record<string, AccountSnapshot> = {};
+    for (const [id, acc] of Object.entries(get().accountSnapshots)) {
+      accountSnapshots[id] = { ...acc, mailboxSnapshots: {} };
+    }
+    set({ queryState: undefined, mailboxSnapshots: {}, accountSnapshots });
     void get().refreshEmails();
   },
 
@@ -1563,9 +1591,11 @@ export const useEmailStore = create<EmailState>()(
         .filter((it) => it.originalMailboxIds[currentRawId])
         .map((it) => ({ ...it.email, mailboxIds: it.originalMailboxIds }));
       if (restored.length > 0) {
-        const merged = [...restored, ...emails].sort(
-          (a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
-        );
+        const ascending = useSettingsStore.getState().mailSortAscending;
+        const merged = [...restored, ...emails].sort((a, b) => {
+          const byDate = new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime();
+          return ascending ? -byDate : byDate;
+        });
         set({ emails: merged });
       }
     }

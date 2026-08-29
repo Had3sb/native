@@ -6,7 +6,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import {
   Search, SquarePen, Menu, Filter, Square, SquareCheck, Minus, X,
   Star, Paperclip, Mail as MailIcon, MailOpen, Trash2, RotateCcw, CalendarDays,
-  Archive, FolderInput, Tag, Import,
+  Archive, FolderInput, Tag, Import, ArrowDownWideNarrow, ArrowUpNarrowWide,
 } from 'lucide-react-native';
 import { spacing, radius, typography, componentSizes, type ThemePalette } from '../theme/tokens';
 import { useColors } from '../theme/colors';
@@ -206,6 +206,7 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
   const moveEmailsToMailbox = useEmailStore((s) => s.moveEmailsToMailbox);
   const deleteEmailsBatch = useEmailStore((s) => s.deleteEmailsBatch);
   const setKeywordForEmails = useEmailStore((s) => s.setKeywordForEmails);
+  const setSortAscending = useEmailStore((s) => s.setSortAscending);
 
   const keywordDefs = useKeywordsStore((s) => s.keywords);
   const keywordsHydrated = useKeywordsStore((s) => s.hydrated);
@@ -217,6 +218,7 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
   const swipeMode = useSettingsStore((s) => s.swipeMode);
   const showPreview = useSettingsStore((s) => s.showPreview);
   const disableThreading = useSettingsStore((s) => s.disableThreading);
+  const sortAscending = useSettingsStore((s) => s.mailSortAscending);
   const networkOnline = useNetworkStore((s) => s.online);
 
   // When threading is on, collapse same-thread emails so the list shows the
@@ -694,6 +696,19 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
             </Pressable>
           )}
         </View>
+        <Pressable
+          style={styles.filterButton}
+          onPress={() => setSortAscending(!sortAscending)}
+          accessibilityRole="button"
+          accessibilityLabel={sortAscending ? 'Sorted oldest first' : 'Sorted newest first'}
+          accessibilityHint="Reverses the mail sort order"
+        >
+          {sortAscending ? (
+            <ArrowUpNarrowWide size={18} color={c.primary} />
+          ) : (
+            <ArrowDownWideNarrow size={18} color={c.textMuted} />
+          )}
+        </Pressable>
         <Pressable
           style={[styles.filterButton, activeFilterCount > 0 && styles.filterButtonActive]}
           onPress={() => setFilterMenuOpen(true)}

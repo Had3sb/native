@@ -61,10 +61,24 @@ vi.mock('../outbox-store', async () => {
 
 // settings-store transitively pulls in jmap-client / expo-secure-store, which
 // trip on react-native's Flow-typed entrypoint under vitest. The store only
-// reads archiveMode in archiveEmail, so a minimal stub is enough.
-vi.mock('../settings-store', () => ({
-  useSettingsStore: { getState: () => ({ archiveMode: 'single', emailsPerPage: 25 }) },
-}));
+// reads a handful of scalar settings, so a minimal stateful stub is enough.
+vi.mock('../settings-store', () => {
+  const settings: Record<string, unknown> = {
+    archiveMode: 'single',
+    emailsPerPage: 25,
+    mailSortAscending: false,
+  };
+  return {
+    useSettingsStore: {
+      getState: () => ({
+        ...settings,
+        updateSetting: (key: string, value: unknown) => {
+          settings[key] = value;
+        },
+      }),
+    },
+  };
+});
 
 // offline-cache-store is touched by selectMailbox (cache-seed fallback),
 // getEmailDetail (best-effort body refresh), and setActiveAccount (account
@@ -113,6 +127,7 @@ const TEST_ACCOUNT_ID = generateAccountId('test@example.com', 'https://mail.exam
 
 import * as emailApi from '../../api/email';
 import { useEmailStore } from '../email-store';
+import { useSettingsStore } from '../settings-store';
 
 const mockGetMailboxesWithState = emailApi.getMailboxesWithState as ReturnType<typeof vi.fn>;
 const mockGetSharedMailboxes = emailApi.getSharedMailboxes as ReturnType<typeof vi.fn>;
@@ -133,6 +148,7 @@ beforeEach(() => {
   // serving, so the guard inside fetchMailboxes / refreshEmails / etc.
   // doesn't short-circuit the tests.
   useEmailStore.setState({ activeAccountId: TEST_ACCOUNT_ID });
+  useSettingsStore.getState().updateSetting('mailSortAscending', false);
 });
 
 describe('email-store', () => {
@@ -349,6 +365,86 @@ describe('email-store', () => {
       });
       // Filter results must not leak into the base-view snapshot.
       expect(useEmailStore.getState().mailboxSnapshots['mb-1'].emails).toEqual([{ id: 'e9' }]);
+    });
+  });
+
+  // Issue #5: the sort-order toggle. Flipping it must drop every cached
+  // snapshot / queryState (they belong to the old sort order) and re-query
+  // with the new direction; the incremental queryChanges path must carry the
+  // same sort as the query that produced its queryState.
+  describe('sort order (issue #5)', () => {
+    it('setSortAscending clears cached query state and re-queries ascending', async () => {
+      useEmailStore.setState({
+        currentMailboxId: 'mb-1',
+        emails: [{ id: 'e1' } as any],
+        totalEmails: 1,
+        queryState: 'q-desc',
+        mailboxSnapshots: {
+          'mb-1': { emails: [{ id: 'e1' } as any], total: 1, queryState: 'q-desc' },
+        },
+        accountSnapshots: {
+          'other-acc': {
+            mailboxes: [],
+            emailStates: {},
+            currentMailboxId: null,
+            mailboxSnapshots: { 'mb-9': { emails: [], total: 0, queryState: 'q-9' } },
+          } as any,
+        },
+      });
+      mockQueryEmails.mockResolvedValue({ ids: ['e1'], total: 1, queryState: 'q-asc' });
+      mockGetEmailsWithState.mockResolvedValue({ list: [{ id: 'e1' } as any], state: 'em-1' });
+
+      useEmailStore.getState().setSortAscending(true);
+
+      // Synchronous invalidation: old-order caches are gone everywhere,
+      // including accounts that are tucked away.
+      expect(useEmailStore.getState().queryState).toBeUndefined();
+      expect(useEmailStore.getState().mailboxSnapshots).toEqual({});
+      expect(useEmailStore.getState().accountSnapshots['other-acc'].mailboxSnapshots).toEqual({});
+
+      await vi.waitFor(() => expect(mockQueryEmails).toHaveBeenCalled());
+      const [, opts] = mockQueryEmails.mock.calls[0];
+      expect(opts.sort).toEqual([{ property: 'receivedAt', isAscending: true }]);
+      // With the snapshot's queryState gone the incremental path must not run.
+      expect(mockGetEmailQueryChanges).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when the direction is unchanged', () => {
+      useEmailStore.setState({
+        currentMailboxId: 'mb-1',
+        mailboxSnapshots: { 'mb-1': { emails: [], total: 0, queryState: 'q-base' } },
+      });
+
+      useEmailStore.getState().setSortAscending(false);
+
+      expect(useEmailStore.getState().mailboxSnapshots['mb-1']).toBeDefined();
+      expect(mockQueryEmails).not.toHaveBeenCalled();
+    });
+
+    it('incremental refresh passes the active sort to Email/queryChanges', async () => {
+      useSettingsStore.getState().updateSetting('mailSortAscending', true);
+      const base = [{ id: 'e1' } as any];
+      useEmailStore.setState({
+        currentMailboxId: 'mb-1',
+        emails: base,
+        totalEmails: 1,
+        searchQuery: '',
+        filters: {},
+        mailboxSnapshots: { 'mb-1': { emails: base, total: 1, queryState: 'q-asc' } },
+      });
+      mockGetEmailQueryChanges.mockResolvedValue({
+        oldQueryState: 'q-asc',
+        newQueryState: 'q-asc-2',
+        total: 1,
+        removed: [],
+        added: [],
+      });
+
+      await useEmailStore.getState().refreshEmails();
+
+      const [, , opts] = mockGetEmailQueryChanges.mock.calls[0];
+      expect(opts.sort).toEqual([{ property: 'receivedAt', isAscending: true }]);
+      expect(mockQueryEmails).not.toHaveBeenCalled();
     });
   });
 
