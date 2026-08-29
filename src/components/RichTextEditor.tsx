@@ -21,7 +21,9 @@ export type RichTextCommand =
   | 'justifyRight'
   | 'removeFormat'
   | 'undo'
-  | 'redo';
+  | 'redo'
+  // Text colour: a CSS colour after the colon, e.g. 'foreColor:#d97706'.
+  | `foreColor:${string}`;
 
 export interface RichTextSelectionState {
   bold: boolean;
@@ -50,6 +52,8 @@ export interface RichTextEditorHandle {
   insertLink(url: string, label?: string): void;
   unsetLink(): void;
   insertImage(src: string, cid?: string, alt?: string): void;
+  /** Insert an HTML fragment at the caret (template bodies, tables). */
+  insertHtml(html: string): void;
   setHtml(html: string): void;
   /**
    * Read the live editor DOM content. Resolves with the current innerHTML or
@@ -97,7 +101,17 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(function Ri
     [],
   );
 
+  // Scripts injected before the page has run its inline script are lost, and
+  // the composer talks to the editor as soon as async data arrives (signature
+  // after the identities load, hydrated inline images). Queue until the page
+  // posts its first message, then replay in order.
+  const readyRef = React.useRef(false);
+  const queuedRef = React.useRef<string[]>([]);
   const call = React.useCallback((script: string) => {
+    if (!readyRef.current) {
+      queuedRef.current.push(script);
+      return;
+    }
     webViewRef.current?.injectJavaScript(`${script}; true;`);
   }, []);
 
@@ -124,7 +138,9 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(function Ri
 
   React.useImperativeHandle(ref, () => ({
     exec: (command) => {
-      const [name, value] = command.split(':');
+      const sep = command.indexOf(':');
+      const name = sep === -1 ? command : command.slice(0, sep);
+      const value = sep === -1 ? undefined : command.slice(sep + 1);
       if (value) call(`window.__rne && window.__rne.exec(${JSON.stringify(name)}, ${JSON.stringify(value)})`);
       else call(`window.__rne && window.__rne.exec(${JSON.stringify(name)})`);
     },
@@ -136,6 +152,9 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(function Ri
     },
     insertImage: (src, cid, alt) => {
       call(`window.__rne && window.__rne.insertImage(${JSON.stringify(src)}, ${JSON.stringify(cid ?? '')}, ${JSON.stringify(alt ?? '')})`);
+    },
+    insertHtml: (html) => {
+      call(`window.__rne && window.__rne.insertHtml(${JSON.stringify(html)})`);
     },
     setHtml: (next) => {
       call(`window.__rne && window.__rne.setHtml(${JSON.stringify(next)})`);
@@ -161,6 +180,12 @@ const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(function Ri
       data = JSON.parse(event.nativeEvent.data);
     } catch {
       return;
+    }
+    if (!readyRef.current) {
+      readyRef.current = true;
+      const queued = queuedRef.current;
+      queuedRef.current = [];
+      for (const script of queued) webViewRef.current?.injectJavaScript(`${script}; true;`);
     }
     switch (data.type) {
       case 'change':

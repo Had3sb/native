@@ -80,7 +80,7 @@ export function buildEditorHtml(opts: {
 </style>
 </head>
 <body>
-<div id="editor" contenteditable="true" data-placeholder=${placeholderJson}></div>
+<div id="editor" contenteditable="true" dir="auto" data-placeholder=${placeholderJson}></div>
 <script>
 (function () {
   var editor = document.getElementById('editor');

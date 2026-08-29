@@ -6,6 +6,7 @@ import type { Email, EmailAddress, JMAPMethodCall, Mailbox, Thread } from './typ
 import { toWildcardQuery } from '../lib/search-utils';
 import { sanitizeDisplayName } from '../lib/rfc5322-mailbox';
 import { generateMessageId, stripMessageIdBrackets } from '../lib/email-threading';
+import { buildMdnMessage, type MdnOptions } from '../lib/mdn';
 
 export const EMAIL_LIST_PROPERTIES = [
   'id', 'threadId', 'mailboxIds', 'keywords', 'size',
@@ -989,6 +990,12 @@ export interface OutgoingEmail {
   // Pre-assigned Message-ID (e.g. when re-sending a draft); generated when absent.
   messageId?: string;
   requestReadReceipt?: boolean;
+  /**
+   * SMTP MAIL FROM when it must differ from the header From - a catch-all
+   * alias on an owned domain is sent through the identity's envelope while
+   * the visible From keeps the alias (webmail #246).
+   */
+  envelopeMailFrom?: string;
 }
 
 export interface SendEmailResult {
@@ -1128,19 +1135,19 @@ export async function sendEmail(
   const submissionCreate: Record<string, unknown> = { emailId: '#draft', identityId };
   // For a deferred send the envelope must be set explicitly so the HOLDFOR
   // mail-from parameter rides along (JMAP §7.3: an omitted envelope makes the
-  // server derive mailFrom from the Identity, dropping our parameter).
-  if (holdForSeconds && holdForSeconds > 0) {
+  // server derive mailFrom from the Identity, dropping our parameter). An
+  // explicit envelope sender (catch-all From override) needs it as well.
+  const holdFor = holdForSeconds && holdForSeconds > 0 ? Math.ceil(holdForSeconds) : 0;
+  if (holdFor > 0 || email.envelopeMailFrom) {
     const rcptTo = [...email.to, ...(email.cc ?? []), ...(email.bcc ?? [])]
       .map((r) => r.email.trim())
       .filter(Boolean)
       .map((address) => ({ email: address }));
-    submissionCreate.envelope = {
-      mailFrom: {
-        email: email.from[0]?.email,
-        parameters: { HOLDFOR: String(Math.ceil(holdForSeconds)) },
-      },
-      rcptTo,
+    const mailFrom: Record<string, unknown> = {
+      email: email.envelopeMailFrom || email.from[0]?.email,
     };
+    if (holdFor > 0) mailFrom.parameters = { HOLDFOR: String(holdFor) };
+    submissionCreate.envelope = { mailFrom, rcptTo };
   }
 
   const submissionArgs: Record<string, unknown> = {
@@ -1401,4 +1408,73 @@ export async function rescheduleScheduledSend(
   if (notCreated) throw new Error(notCreated.description ?? notCreated.type ?? 'Failed to reschedule');
   const created = body.created?.replacement as { id?: string; sendAt?: string } | undefined;
   return { emailSubmissionId: created?.id, sendAt: created?.sendAt };
+}
+
+/**
+ * Move a message back into Drafts (out of Sent) and re-flag it `$draft` so
+ * it can be edited and re-sent - used after cancelling a scheduled send for
+ * editing (webmail `restoreEmailToDraft`).
+ */
+export async function restoreEmailToDraft(
+  emailId: string,
+  draftsMailboxId: string,
+  sentMailboxId?: string,
+  accountIdOverride?: string,
+): Promise<void> {
+  const accountId = accountIdOverride ?? jmapClient.accountId;
+  const patch: Record<string, unknown> = {
+    [mailboxPointer(draftsMailboxId)]: true,
+    [keywordPointer('$draft')]: true,
+    [keywordPointer('$seen')]: true,
+  };
+  if (sentMailboxId && sentMailboxId !== draftsMailboxId) patch[mailboxPointer(sentMailboxId)] = null;
+  await emailSetBatched(accountId, { update: { [emailId]: patch } }, 'draft');
+}
+
+export interface SendReadReceiptOptions extends MdnOptions {
+  /** Identity the receipt is submitted through (its address is the MDN From). */
+  identityId: string;
+  /** Where the sent receipt is filed. */
+  sentMailboxId: string;
+  /** Submitting account (shared/group account); defaults to the primary. */
+  accountId?: string;
+}
+
+/**
+ * Send an RFC 8098 read receipt (MDN). JMAP has no MDN primitive, so the
+ * multipart/report is built client-side (`lib/mdn.ts`), uploaded as a blob,
+ * imported into Sent and submitted with an explicit envelope - mirrors the
+ * webmail's `client.sendReadReceipt`. The caller flags the original
+ * `$mdnsent` afterwards.
+ */
+export async function sendReadReceipt(opts: SendReadReceiptOptions): Promise<string> {
+  const accountId = opts.accountId ?? jmapClient.accountId;
+  const raw = buildMdnMessage(opts);
+  const bytes = new TextEncoder().encode(raw);
+  // Lazy: blob.ts pulls in expo-file-system, which this module otherwise
+  // never needs (and which the node test environment cannot load).
+  const { uploadBytes } = await import('./blob');
+  const upload = await uploadBytes(bytes, 'message/rfc822', accountId);
+  const emailId = await importEmailBlob(upload.blobId, opts.sentMailboxId, { $seen: true }, accountId);
+  const res = await jmapClient.request(
+    [
+      ['EmailSubmission/set', {
+        accountId,
+        create: {
+          mdn: {
+            emailId,
+            identityId: opts.identityId,
+            envelope: {
+              mailFrom: { email: opts.fromEmail },
+              rcptTo: [{ email: opts.to }],
+            },
+          },
+        },
+      }, '0'],
+    ],
+    SUBMISSION_USING,
+  );
+  const body = requireMethodResult(res, '0', 'EmailSubmission/set');
+  assertSetResult(body, ['mdn'], 'read receipt');
+  return emailId;
 }
