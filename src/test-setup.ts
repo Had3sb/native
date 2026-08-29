@@ -72,3 +72,14 @@ vi.mock('expo-web-browser', () => ({
   openAuthSessionAsync: vi.fn(async () => ({ type: 'cancel' as const })),
   maybeCompleteAuthSession: vi.fn(),
 }));
+
+// @react-native-community/netinfo ships Flow-typed source that rolldown
+// cannot parse. The outbox/network stores import it at module load, so any
+// suite that reaches them (auth-store -> email-store -> outbox-store) needs
+// this mock. Reports "online" by default.
+vi.mock('@react-native-community/netinfo', () => ({
+  default: {
+    addEventListener: vi.fn(() => () => undefined),
+    fetch: vi.fn(async () => ({ isConnected: true, isInternetReachable: true })),
+  },
+}));
