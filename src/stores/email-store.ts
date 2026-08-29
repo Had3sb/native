@@ -29,8 +29,11 @@ import {
   undoSpam as apiUndoSpam,
   unprefixMailboxId,
 } from '../api/email';
+import { JMAPMethodError } from '../api/jmap-result';
 import { mailboxesForSiblingOf, findJunkMailbox } from '../lib/mailbox-tree';
 import { toWildcardQuery } from '../lib/search-utils';
+import { orderForMailbox, sanitizeSortLevels, type SortLevel } from '../lib/message-list-order';
+import { buildListSort, markKeywordSortUnsupported } from '../lib/keyword-sort-polarity';
 import { generateAccountId } from '../lib/account-utils';
 import { t } from './locale-store';
 import { useSettingsStore } from './settings-store';
@@ -399,10 +402,32 @@ function isBaseView(searchQuery: string, filters: EmailFilters): boolean {
   return !searchQuery.trim() && activeFilterKeys(filters).length === 0;
 }
 
-// The Email/query sort for the current settings. Extended by the message-list
-// order presets; today it's the receivedAt direction only.
-function currentSort(): Array<{ property: string; isAscending: boolean; keyword?: string }> {
-  return [{ property: 'receivedAt', isAscending: useSettingsStore.getState().mailSortAscending }];
+// The Email/query sort for the folder on screen: the configured order presets
+// / levels (#718, Inbox-only or every folder) with the server's keyword
+// comparator polarity applied, `$pinned` first, and RN's oldest-first toggle
+// on the trailing date comparator.
+type EmailSort = Array<{ property: string; isAscending: boolean; keyword?: string }>;
+function orderFor(state: EmailState): SortLevel[] {
+  const { messageListOrder, messageListOrderScope } = useSettingsStore.getState();
+  const role = state.currentMailboxId
+    ? state.mailboxes.find((m) => m.id === state.currentMailboxId)?.role
+    : undefined;
+  return orderForMailbox(sanitizeSortLevels(messageListOrder), messageListOrderScope, role);
+}
+function resolveSort(state: EmailState, accountId: string | undefined): Promise<EmailSort> {
+  return buildListSort(accountId ?? jmapClient.accountId, orderFor(state), {
+    pinnedFirst: true,
+    dateAscending: useSettingsStore.getState().mailSortAscending,
+  });
+}
+// A stable fingerprint of everything that influences the sort, so a response
+// built under a previous order is dropped instead of overwriting the view.
+function orderFingerprint(): string {
+  const s = useSettingsStore.getState();
+  return JSON.stringify([s.mailSortAscending, s.messageListOrderScope, s.messageListOrder]);
+}
+function isUnsupportedSort(err: unknown): boolean {
+  return err instanceof JMAPMethodError && err.type === 'unsupportedSort';
 }
 
 // Splice rows the user just read/unstarred back into a freshly re-queried
@@ -743,7 +768,7 @@ export const useEmailStore = create<EmailState>()(
       const { ids } = await queryEmails(scope.mailboxId, {
         position: emails.length,
         limit,
-        sort: currentSort(),
+        sort: await resolveSort(state, scope.accountId),
         filter,
         accountId: scope.accountId,
       });
@@ -1825,7 +1850,8 @@ async function refreshEmailsImpl(): Promise<void> {
     const filter = buildJmapFilter(searchQuery, filters);
     const { emailsPerPage: limit, mailSortAscending: sortAscending } =
       useSettingsStore.getState();
-    const sort = currentSort();
+    const orderKey = orderFingerprint();
+    let sort = await resolveSort(state, scope.accountId);
     const baseView = isBaseView(searchQuery, filters);
 
     // A response that lands after the user switched account/mailbox or
@@ -1835,7 +1861,8 @@ async function refreshEmailsImpl(): Promise<void> {
       get().currentMailboxId !== currentMailboxId ||
       get().searchQuery !== searchQuery ||
       get().filters !== filters ||
-      useSettingsStore.getState().mailSortAscending !== sortAscending;
+      orderFingerprint() !== orderKey;
+    if (viewChanged()) return;
 
     // The incremental path diffs against the *base-view* list, which lives in
     // the per-mailbox snapshot — NOT `emails`, which may still hold search or
@@ -1969,7 +1996,17 @@ async function refreshEmailsImpl(): Promise<void> {
       // Full re-query path. Used when there's no prior queryState, when the
       // user has search/filters active (queryState only tracks the base
       // query), or when the server returned cannotCalculateChanges above.
-      const queryRes = await queryEmails(scope.mailboxId, { limit, sort, filter, accountId: scope.accountId });
+      let queryRes: Awaited<ReturnType<typeof queryEmails>>;
+      try {
+        queryRes = await queryEmails(scope.mailboxId, { limit, sort, filter, accountId: scope.accountId });
+      } catch (err) {
+        // The server refused a hasKeyword comparator (unsupportedSort): drop
+        // the keyword levels for this account and re-run with the rest.
+        if (!isUnsupportedSort(err)) throw err;
+        markKeywordSortUnsupported(scope.accountId ?? jmapClient.accountId);
+        sort = await resolveSort(state, scope.accountId);
+        queryRes = await queryEmails(scope.mailboxId, { limit, sort, filter, accountId: scope.accountId });
+      }
       const fetched = queryRes.ids.length > 0
         ? await getEmailsWithState(queryRes.ids, scope.accountId)
         : { list: [], state: undefined as string | undefined };

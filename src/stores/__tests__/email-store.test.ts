@@ -128,6 +128,10 @@ vi.mock('../../api/jmap-client', () => ({
     getMaxObjectsInGet: () => 500,
     getMaxCallsInRequest: () => 16,
     getSharedMailAccounts: () => [{ id: 'grp-1', name: 'Support' }],
+    // The keyword-sort polarity probe runs through this; answering
+    // unsupportedSort keeps the sort at the plain receivedAt comparator the
+    // assertions below expect.
+    request: vi.fn(async () => ({ methodResponses: [['error', { type: 'unsupportedSort' }, 'asc']] })),
   },
 }));
 
@@ -716,6 +720,8 @@ describe('email-store', () => {
       const third = useEmailStore.getState().refreshEmails();
       expect(second).toBe(first);
       expect(third).toBe(first);
+      // The sort is resolved asynchronously before Email/query runs.
+      await new Promise((r) => setTimeout(r, 0));
       resolveQuery({ ids: [], total: 0, queryState: 'q' });
       await first;
       await new Promise((r) => setTimeout(r, 0));
