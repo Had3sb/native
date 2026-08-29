@@ -37,6 +37,30 @@ export interface AuthInfo {
   apiKeys: ApiKeyInfo[];
 }
 
+export interface CryptoInfo {
+  type: EncryptionType;
+  publicKeyId: string | null;
+  encryptOnAppend: boolean;
+  allowSpamTraining: boolean;
+}
+
+export interface PublicKeyInfo {
+  id: string;
+  description: string;
+  emailAddresses: string[];
+  createdAt: string | null;
+  expiresAt: string | null;
+  // Key material (PEM / armored). Only returned by some server versions.
+  key?: string;
+}
+
+export interface PublicKeyInput {
+  description: string;
+  key: string;
+  emailAddresses?: string[];
+  expiresAt?: string | null;
+}
+
 export interface PrincipalInfo {
   displayName: string;
   emails: string[];
@@ -151,10 +175,113 @@ export async function fetchAuthInfo(): Promise<AuthInfo> {
 }
 
 export async function fetchEncryptionType(): Promise<EncryptionType> {
+  return (await fetchCryptoInfo()).type;
+}
+
+export async function fetchCryptoInfo(): Promise<CryptoInfo> {
   const accountId = jmapClient.accountId;
   const responses = await send([['x:AccountSettings/get', { accountId, ids: ['singleton'] }, '0']]);
   const result = resultFor<{ list?: Array<{ encryptionAtRest?: unknown }> }>(responses, '0');
-  return extractEncryptionType(result.list?.[0]?.encryptionAtRest);
+  const raw = (result.list?.[0]?.encryptionAtRest ?? {}) as {
+    publicKey?: string | null;
+    encryptOnAppend?: boolean;
+    allowSpamTraining?: boolean;
+  };
+  return {
+    type: extractEncryptionType(result.list?.[0]?.encryptionAtRest),
+    publicKeyId: typeof raw.publicKey === 'string' ? raw.publicKey : null,
+    encryptOnAppend: raw.encryptOnAppend === true,
+    allowSpamTraining: raw.allowSpamTraining === true,
+  };
+}
+
+/**
+ * Configure Stalwart's encryption at rest (`x:AccountSettings/set`
+ * `encryptionAtRest`). `Aes128`/`Aes256` need a public key id from
+ * {@link fetchPublicKeys}; `encryptOnAppend` also encrypts mail the user
+ * files (sent/imported), `allowSpamTraining` lets the classifier read a
+ * message before it is encrypted.
+ */
+export async function updateEncryptionAtRest(input: {
+  type: EncryptionType;
+  publicKeyId?: string | null;
+  encryptOnAppend?: boolean;
+  allowSpamTraining?: boolean;
+}): Promise<void> {
+  const accountId = jmapClient.accountId;
+  let payload: Record<string, unknown>;
+  if (input.type === 'Disabled') {
+    payload = { '@type': 'Disabled' };
+  } else {
+    if (!input.publicKeyId) throw new Error('A public key is required to enable encryption');
+    payload = {
+      '@type': input.type,
+      publicKey: input.publicKeyId,
+      encryptOnAppend: input.encryptOnAppend ?? false,
+      allowSpamTraining: input.allowSpamTraining ?? false,
+    };
+  }
+  const responses = await send([
+    ['x:AccountSettings/set', { accountId, update: { singleton: { encryptionAtRest: payload } } }, '0'],
+  ]);
+  const result = resultFor<{ notUpdated?: Record<string, { description?: string; type?: string }> }>(responses, '0');
+  const failure = result.notUpdated?.singleton;
+  if (failure) throw new Error(failure.description || failure.type || 'Failed to update encryption settings');
+}
+
+function publicKeyFromResult(raw: Record<string, unknown>): PublicKeyInfo {
+  const emails =
+    raw.emailAddresses && typeof raw.emailAddresses === 'object'
+      ? Object.keys(raw.emailAddresses as Record<string, unknown>)
+      : [];
+  return {
+    id: String(raw.id ?? ''),
+    description: typeof raw.description === 'string' ? raw.description : '',
+    emailAddresses: emails,
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : null,
+    expiresAt: typeof raw.expiresAt === 'string' ? raw.expiresAt : null,
+    key: typeof raw.key === 'string' ? raw.key : undefined,
+  };
+}
+
+/** S/MIME certificates and PGP public keys stored on the server (`x:PublicKey`). */
+export async function fetchPublicKeys(): Promise<PublicKeyInfo[]> {
+  const accountId = jmapClient.accountId;
+  const queryResponses = await send([['x:PublicKey/query', { accountId }, '0']]);
+  const query = resultFor<{ ids?: string[] }>(queryResponses, '0');
+  if (!query.ids?.length) return [];
+  const getResponses = await send([['x:PublicKey/get', { accountId, ids: query.ids }, '0']]);
+  const got = resultFor<{ list?: Array<Record<string, unknown>> }>(getResponses, '0');
+  return (got.list ?? []).map(publicKeyFromResult);
+}
+
+export async function createPublicKey(input: PublicKeyInput): Promise<string> {
+  const accountId = jmapClient.accountId;
+  const tmpId = 'new';
+  const payload: Record<string, unknown> = {
+    description: input.description,
+    key: input.key,
+    emailAddresses: ipsToMap(input.emailAddresses) ?? {},
+  };
+  if (input.expiresAt) payload.expiresAt = input.expiresAt;
+  const responses = await send([['x:PublicKey/set', { accountId, create: { [tmpId]: payload } }, '0']]);
+  const result = resultFor<{
+    created?: Record<string, { id: string }>;
+    notCreated?: Record<string, { type?: string; description?: string }>;
+  }>(responses, '0');
+  const notCreated = result.notCreated?.[tmpId];
+  if (notCreated) throw new Error(notCreated.description || notCreated.type || 'Failed to add public key');
+  const created = result.created?.[tmpId];
+  if (!created?.id) throw new Error('Server did not return the created public key');
+  return created.id;
+}
+
+export async function removePublicKey(id: string): Promise<void> {
+  const accountId = jmapClient.accountId;
+  const responses = await send([['x:PublicKey/set', { accountId, destroy: [id] }, '0']]);
+  const result = resultFor<{ notDestroyed?: Record<string, { description?: string; type?: string }> }>(responses, '0');
+  const failure = result.notDestroyed?.[id];
+  if (failure) throw new Error(failure.description || failure.type || 'Failed to remove public key');
 }
 
 export async function fetchPrincipal(): Promise<PrincipalInfo> {
