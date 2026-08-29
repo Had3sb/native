@@ -297,7 +297,7 @@ export function EventDetailSheet({
             {reminders.length > 0 && (
               <DetailRow
                 icon={<Bell size={16} color={c.textMuted} />}
-                text={reminders.map((r) => formatReminder(r.minutesBefore)).join(', ')}
+                text={reminders.map((r) => formatReminder(r.minutesBefore, t)).join(', ')}
               />
             )}
             {calendar && (

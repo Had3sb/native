@@ -27,6 +27,7 @@ import {
 } from 'lucide-react-native';
 import { addHours, addMinutes, format } from 'date-fns';
 import type {
+  Alert,
   Calendar,
   CalendarEvent,
   EventLocation,
@@ -51,9 +52,12 @@ import { useCalendarLocale } from '../../lib/calendar-locale';
 import {
   alertsToReminders,
   remindersToAlerts,
+  preservedAlerts,
   formatReminder,
   REMINDER_PRESETS,
+  REMINDER_UNIT_MINUTES,
   type Reminder,
+  type ReminderUnit,
 } from '../../lib/calendar-alerts';
 import { buildRecurrenceSummary, isSimpleRecurrenceRule } from '../../lib/recurrence';
 import {
@@ -88,7 +92,11 @@ interface EventModalProps {
   currentUserEmails?: string[];
   // Client-side iCal subscriptions are read-only targets (#762).
   isSubscriptionCalendar?: (calendarId: string) => boolean;
-  onSave: (data: Partial<CalendarEvent>, calendarId: string) => void | Promise<void>;
+  onSave: (
+    data: Partial<CalendarEvent>,
+    calendarId: string,
+    options?: { sendSchedulingMessages?: boolean },
+  ) => void | Promise<void>;
   onDelete?: (event: CalendarEvent) => void;
   onClose: () => void;
 }
@@ -201,6 +209,14 @@ export function EventModal({
   const [customRule, setCustomRule] = React.useState<RecurrenceRule | null>(null);
   const [recurrenceEditorOpen, setRecurrenceEditorOpen] = React.useState(false);
   const [reminders, setReminders] = React.useState<Reminder[]>([]);
+  // Alerts the picker can't show (absolute / end-relative / non-display)
+  // ride along untouched so a save never drops them.
+  const [preserved, setPreserved] = React.useState<Record<string, Alert>>({});
+  const [customAmount, setCustomAmount] = React.useState('30');
+  const [customUnit, setCustomUnit] = React.useState<ReminderUnit>('minutes');
+  const [customReminderOpen, setCustomReminderOpen] = React.useState(false);
+  // "Send invitations" (webmail default: on) decides sendSchedulingMessages.
+  const [sendInvitations, setSendInvitations] = React.useState(true);
   const [location, setLocation] = React.useState('');
   const [videoUrl, setVideoUrl] = React.useState('');
   const [recurrenceOpen, setRecurrenceOpen] = React.useState(false);
@@ -230,6 +246,9 @@ export function EventModal({
       setCustomRule(detected === 'custom' ? event.recurrenceRules?.[0] ?? null : null);
       setRecurrenceEditorOpen(false);
       setReminders(alertsToReminders(event.alerts));
+      setPreserved(preservedAlerts(event.alerts));
+      setSendInvitations(true);
+      setCustomReminderOpen(false);
       setLocation(detectLocation(event));
       setVideoUrl(detectVideoUrl(event));
     } else {
@@ -245,6 +264,9 @@ export function EventModal({
       setCustomRule(null);
       setRecurrenceEditorOpen(false);
       setReminders([]);
+      setPreserved({});
+      setSendInvitations(true);
+      setCustomReminderOpen(false);
       setLocation('');
       setVideoUrl('');
     }
@@ -313,7 +335,7 @@ export function EventModal({
         // All-day events are date-only and carry no zone.
         timeZone: allDay ? null : getEffectiveTimeZone(),
         recurrenceRules: clearedOr(recurrenceRules, 'recurrenceRules'),
-        alerts: clearedOr(remindersToAlerts(reminders), 'alerts'),
+        alerts: clearedOr(remindersToAlerts(reminders, preserved), 'alerts'),
         useDefaultAlerts: reminders.length > 0 ? false : undefined,
         locations: clearedOr(buildLocations(location), 'locations'),
         virtualLocations: clearedOr(buildVirtualLocations(videoUrl), 'virtualLocations'),
@@ -344,7 +366,9 @@ export function EventModal({
       for (const key of Object.keys(data) as (keyof CalendarEvent)[]) {
         if (data[key] === undefined) delete data[key];
       }
-      await onSave(data, calendarId);
+      await onSave(data, calendarId, {
+        sendSchedulingMessages: attendees.length > 0 && sendInvitations,
+      });
       onClose();
     } finally {
       setSaving(false);
@@ -588,7 +612,7 @@ export function EventModal({
               <View style={{ gap: spacing.xs }}>
                 {reminders.map((r) => (
                   <View key={r.minutesBefore} style={styles.reminderRow}>
-                    <Text style={styles.fieldText}>{formatReminder(r.minutesBefore)}</Text>
+                    <Text style={styles.fieldText}>{formatReminder(r.minutesBefore, t)}</Text>
                     <Pressable
                       onPress={() => removeReminder(r.minutesBefore)}
                       hitSlop={8}
@@ -619,9 +643,51 @@ export function EventModal({
                     style={styles.popoverRow}
                     onPress={() => addReminder(preset)}
                   >
-                    <Text style={styles.popoverRowText}>{formatReminder(preset)}</Text>
+                    <Text style={styles.popoverRowText}>{formatReminder(preset, t)}</Text>
                   </Pressable>
                 ))}
+                <Pressable
+                  style={styles.popoverRow}
+                  onPress={() => { setReminderPickerOpen(false); setCustomReminderOpen(true); }}
+                >
+                  <Text style={styles.popoverRowText}>{t('calendar.recurrence.custom', 'Custom…')}</Text>
+                </Pressable>
+              </View>
+            )}
+            {customReminderOpen && (
+              <View style={styles.customReminderRow}>
+                <TextInput
+                  value={customAmount}
+                  onChangeText={(v) => setCustomAmount(v.replace(/[^0-9]/g, ''))}
+                  keyboardType="number-pad"
+                  style={styles.customAmountInput}
+                  placeholder="30"
+                  placeholderTextColor={c.textMuted}
+                />
+                <View style={styles.customUnits}>
+                  {(['minutes', 'hours', 'days', 'weeks'] as ReminderUnit[]).map((unit) => (
+                    <Pressable
+                      key={unit}
+                      onPress={() => setCustomUnit(unit)}
+                      style={[styles.unitChip, customUnit === unit && styles.unitChipActive]}
+                    >
+                      <Text style={[styles.unitChipText, customUnit === unit && styles.unitChipTextActive]}>
+                        {t(`calendar.alerts.unit_${unit}_before`, `${unit} before`)}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Button
+                  size="sm"
+                  onPress={() => {
+                    const amount = parseInt(customAmount, 10);
+                    if (!Number.isFinite(amount) || amount < 0) return;
+                    addReminder(amount * REMINDER_UNIT_MINUTES[customUnit]);
+                    setCustomReminderOpen(false);
+                  }}
+                >
+                  {t('calendar.alerts.add', 'Add reminder')}
+                </Button>
               </View>
             )}
           </Section>
@@ -674,6 +740,19 @@ export function EventModal({
                 setAttendees((prev) => prev.filter((a) => a.email.toLowerCase() !== email.toLowerCase()))
               }
             />
+            {attendees.length > 0 && (
+              <View style={styles.allDayRow}>
+                <Text style={[styles.fieldText, { flex: 1 }]}>
+                  {t('calendar.participants.send_invitations', 'Send invitations to participants')}
+                </Text>
+                <Switch
+                  value={sendInvitations}
+                  onValueChange={setSendInvitations}
+                  thumbColor={sendInvitations ? c.primary : c.textMuted}
+                  trackColor={{ false: c.surface, true: c.primaryBg }}
+                />
+              </View>
+            )}
           </Section>
 
           {isEdit && onDelete && (
@@ -842,6 +921,36 @@ function makeStyles(c: ThemePalette) {
     backgroundColor: c.surface,
   },
   reminderRemove: { padding: 2 },
+  customReminderRow: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: radius.sm,
+    backgroundColor: c.surface,
+  },
+  customAmountInput: {
+    ...typography.body,
+    color: c.text,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: c.background,
+  },
+  customUnits: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  unitChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.background,
+  },
+  unitChipActive: { backgroundColor: c.primary, borderColor: c.primary },
+  unitChipText: { ...typography.caption, color: c.text },
+  unitChipTextActive: { color: c.primaryForeground },
   addRow: {
     flexDirection: 'row',
     alignItems: 'center',

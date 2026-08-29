@@ -165,10 +165,20 @@ export interface CalendarState {
   ensureRange: (after: string, before: string) => Promise<void>;
   refresh: () => Promise<void>;
   handleStateChange: (change: StateChange) => Promise<void>;
-  createEvent: (event: Partial<CalendarEvent>, calendarId: string) => Promise<CalendarEvent>;
+  // `options.sendSchedulingMessages` overrides the default (send iMIP when
+  // the event has participants) — the editor's "send invitations" switch.
+  createEvent: (
+    event: Partial<CalendarEvent>,
+    calendarId: string,
+    options?: { sendSchedulingMessages?: boolean },
+  ) => Promise<CalendarEvent>;
   // `changes` may be a plain partial or a JMAP patch with JSON-pointer keys
   // (e.g. `recurrenceOverrides/<recurrenceId>`).
-  updateEvent: (id: string, changes: Partial<CalendarEvent> | Record<string, unknown>) => Promise<void>;
+  updateEvent: (
+    id: string,
+    changes: Partial<CalendarEvent> | Record<string, unknown>,
+    options?: { sendSchedulingMessages?: boolean },
+  ) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
   // Resolve a client-side expanded occurrence (or a master) to its master
   // event, fetching it from the server when the expansion replaced it.
@@ -428,17 +438,19 @@ export const useCalendarStore = create<CalendarState>()(
     }
   },
 
-  createEvent: async (event, calendarId) => {
+  createEvent: async (event, calendarId, options) => {
     // Shared calendars live in the owner's account — route the create there,
     // and against the calendar's raw server id (calendarId is the namespaced
     // store id for shared calendars).
     const calendars = get().calendars;
     const cal = calendars.find((c) => c.id === calendarId);
     const accountId = cal?.accountId;
+    const schedule =
+      options?.sendSchedulingMessages ?? (hasSchedulingParticipants(event) ? true : undefined);
     const created = await apiCreateEvent(
       event,
       cal?.originalId || calendarId,
-      hasSchedulingParticipants(event) ? true : undefined,
+      schedule,
       accountId,
     );
     // The /set echo lacks server-computed properties (utcStart/utcEnd, the
@@ -465,7 +477,7 @@ export const useCalendarStore = create<CalendarState>()(
     return full;
   },
 
-  updateEvent: async (id, changes) => {
+  updateEvent: async (id, changes, options) => {
     // Resolve client-side expanded occurrence IDs back to the master event ID.
     const storeEvent = get().events.find((e) => e.id === id);
     const realId = storeEvent?.originalId || id;
@@ -484,9 +496,12 @@ export const useCalendarStore = create<CalendarState>()(
     // Notify attendees if either the stored event or the incoming changes
     // carry participants.
     const schedule =
-      hasSchedulingParticipants(changes as Partial<CalendarEvent>) ||
-      hasSchedulingParticipants(storeEvent);
-    await apiUpdateEvent(realId, patch, schedule ? true : undefined, storeEvent?.accountId);
+      options?.sendSchedulingMessages ??
+      (hasSchedulingParticipants(changes as Partial<CalendarEvent>) ||
+        hasSchedulingParticipants(storeEvent)
+        ? true
+        : undefined);
+    await apiUpdateEvent(realId, patch, schedule, storeEvent?.accountId);
     set({
       events: get().events.map((e) => (e.id === id ? { ...e, ...(changes as Partial<CalendarEvent>) } : e)),
     });

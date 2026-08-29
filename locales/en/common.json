@@ -2888,7 +2888,8 @@
       "add": "Add reminder",
       "remove": "Remove reminder",
       "amount": "Reminder amount",
-      "unit": "Reminder unit"
+      "unit": "Reminder unit",
+      "unit_minutes_after": "minutes after"
     },
     "settings": {
       "title": "Calendar settings",

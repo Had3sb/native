@@ -88,7 +88,13 @@ import type { Calendar, CalendarEvent, RecurrenceRule } from '../api/types';
 
 type ViewMode = 'month' | 'week' | 'agenda';
 type PendingAction =
-  | { kind: 'edit'; event: CalendarEvent; updates: Partial<CalendarEvent>; calendarId: string }
+  | {
+      kind: 'edit';
+      event: CalendarEvent;
+      updates: Partial<CalendarEvent>;
+      calendarId: string;
+      sendScheduling?: boolean;
+    }
   | { kind: 'delete'; event: CalendarEvent }
   | null;
 
@@ -464,14 +470,15 @@ export default function CalendarScreen() {
       try {
         if (action.kind === 'edit') {
           const { updates } = action;
+          const opts = { sendSchedulingMessages: action.sendScheduling };
           switch (scope) {
             case 'this': {
               if (event.recurrenceId) {
                 // Client-side expanded occurrence: write a one-shot override
                 // on the master instead of touching the series.
-                await updateEvent(event.id, buildRecurrenceOverridePatch(updates, event.recurrenceId));
+                await updateEvent(event.id, buildRecurrenceOverridePatch(updates, event.recurrenceId), opts);
               } else {
-                await updateEvent(event.id, updates);
+                await updateEvent(event.id, updates, opts);
               }
               break;
             }
@@ -484,7 +491,7 @@ export default function CalendarScreen() {
               const targetCalendarId =
                 action.calendarId || getPrimaryCalendarId(master) || '';
               try {
-                await createEvent(newEventData, targetCalendarId);
+                await createEvent(newEventData, targetCalendarId, opts);
               } catch (createError) {
                 // Roll back the truncation so the series isn't left cut short.
                 try {
@@ -499,7 +506,7 @@ export default function CalendarScreen() {
             case 'all': {
               const master = await getMasterEvent(event);
               if (!master) throw new Error('Master event not found');
-              await updateEvent(master.id, buildAllScopeUpdates(updates, event, master));
+              await updateEvent(master.id, buildAllScopeUpdates(updates, event, master), opts);
               break;
             }
           }
@@ -544,7 +551,12 @@ export default function CalendarScreen() {
   );
 
   const handleSave = React.useCallback(
-    async (data: Partial<CalendarEvent>, calendarId: string) => {
+    async (
+      data: Partial<CalendarEvent>,
+      calendarId: string,
+      options?: { sendSchedulingMessages?: boolean },
+    ) => {
+      const sendScheduling = options?.sendSchedulingMessages;
       if (modalEvent) {
         const updates: Partial<CalendarEvent> = { ...data };
         // Moving the event to another calendar: the store remaps the store id
@@ -555,12 +567,12 @@ export default function CalendarScreen() {
         if (isRecurringSeriesMember(modalEvent)) {
           // Ask which occurrences the edit applies to; the actual write
           // happens in handleScopeSelect.
-          setPendingAction({ kind: 'edit', event: modalEvent, updates, calendarId });
+          setPendingAction({ kind: 'edit', event: modalEvent, updates, calendarId, sendScheduling });
           return;
         }
-        await updateEvent(modalEvent.id, updates);
+        await updateEvent(modalEvent.id, updates, { sendSchedulingMessages: sendScheduling });
       } else {
-        await createEvent(data, calendarId);
+        await createEvent(data, calendarId, { sendSchedulingMessages: sendScheduling });
       }
     },
     [modalEvent, createEvent, updateEvent],

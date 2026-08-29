@@ -83,7 +83,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: fixed preset list, multiple allowed, non-offset alerts are dropped from the UI but kept until save (`src/components/calendar/EventModal.tsx:299-312`, `src/lib/calendar-alerts.ts:51-70`). Note the "kept until save" comment is wrong: `remindersToAlerts` rebuilds the map from presets only, so an absolute-trigger alert is lost on the next save.
   - Fix hint: add a custom value+unit row; when rebuilding alerts, carry over alerts whose trigger has no `offset`.
 
-- [ ] **Duplicate event, export .ics, copy meeting link / title, add note** — `P3` — `missing`
+- [ ] **Duplicate event, export .ics, copy meeting link / title, add note** — `P3` — `missing` — duplicate (+1 day, opens editor), share as .ics (`eventToICS` port + expo-sharing) and copy meeting link done in 5fe8e40; deferred: copy title, append-a-note
   - What WEB does: popover/context-menu actions duplicate (+1 day, opens editor), export via `downloadEventICS`, copy meeting link, copy title, append a timestamped note to the description (ref `components/calendar/calendar-app.tsx:1017-1125`, `lib/calendar-ics-export.ts:96, 176`).
   - What RN does: `EventDetailSheet` has an `onDuplicate` prop that `CalendarScreen` never passes (`src/components/calendar/EventDetailSheet.tsx:59, 336-342`); no export/copy/note.
   - Fix hint: wire `onDuplicate` (clone like WEB `handleDuplicateFromDetail`), add "Share .ics" via `expo-sharing` + a port of `eventToICS`, add "Copy link" with `Clipboard`.
@@ -231,7 +231,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `queryEvents` ignores its `_after`/`_before` arguments citing "Stalwart rejects after/before filters" (outdated) and uses `limit: 1000` (`src/api/calendar.ts:188-208`); `fetchEvents` then re-fetches everything whenever `ensureRange` widens the union (`src/stores/calendar-store.ts:235-251`). Accounts with more than 1000 objects silently lose events; every navigation past the loaded range re-downloads all events.
   - Fix hint: send `filter: { after, before, inCalendar... }` as WEB does (`{ operator: 'AND', conditions: [...] }` when combined), keep `timeZone`; then `loadedRange` can be the requested window rather than a growing union.
 
-- [ ] **iCal import passes raw parsed objects to `CalendarEvent/set`; existing UIDs are skipped instead of linked (#113)** — `P2` — `partial`
+- [x] **iCal import passes raw parsed objects to `CalendarEvent/set`; existing UIDs are skipped instead of linked (#113)** — `P2` — `partial` — fixed in 5fe8e40
   - What WEB does: whitelists the JSCalendar properties it sends (drops server-computed `utcStart`/`utcEnd`/`isOrigin`/`created`/`updated`, rewrites participants to `calendarAddress`, normalises all-day duration/timeZone) and links UIDs that exist in another calendar by adding the target calendar to `calendarIds` (ref `stores/calendar-store.ts:822-958`, changelog 1.5.x #113).
   - What RN does: `importEvents` skips existing UIDs and batch-creates `{ ...parsed, calendarIds }` untouched (`src/stores/calendar-store.ts:352-376`, `src/api/calendar.ts:278-297`). Whether Stalwart rejects computed properties on create depends on the parse output; WEB chose to whitelist after hitting failures ("Deduplicate UIDs during iCal import to prevent mass failures").
   - Fix hint: port WEB's `prepared` mapping (`stores/calendar-store.ts:885-957`) and the link-by-`calendarIds` branch.
