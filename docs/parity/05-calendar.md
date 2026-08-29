@@ -27,7 +27,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `buildRuleFromEditorValue` sets `rscale: 'gregorian', skip: 'omit'` on every custom rule (ref `src/lib/recurrence.ts:220-221`). RN affected: any custom recurrence created on mobile breaks Android CalDAV sync.
   - Fix hint: delete the two properties in `buildRuleFromEditorValue`; the simple presets in `EventModal.tsx:143-146` are already clean.
 
-- [ ] **Synthetic occurrence ids / server-side expansion (Stalwart >= 0.16.20) not used** — `P3` — `missing`
+- [ ] **Synthetic occurrence ids / server-side expansion (Stalwart >= 0.16.20) not used** — `P3` — `missing` — deferred: optional; client-side expansion is at parity and the scope dialog now writes overrides through the master, so the synthetic-id path buys nothing functionally yet
   - What WEB does: probes `CalendarEvent/set` with `h333333` once, then queries with `expandRecurrences: true`, hydrates occurrences from base events and writes occurrence patches through the synthetic id with a fallback to base-event overrides (ref `lib/jmap/client.ts:5648-5680, 5747-5751, 5828-5868`, `lib/recurrence-instances.ts:35, 73, 208-232`, `stores/calendar-store.ts:82-184`).
   - What RN does: always fetches raw events and expands on the client (`src/stores/calendar-store.ts:228`, `src/lib/recurrence-expansion.ts`). Functionally fine on all server versions; RN's expansion file is a line-for-line port of WEB's (diffed: only comments, formatting and the `isServerRecurrenceInstance` pass-through differ).
   - Fix hint: optional. If adopted, port `recurrence-instances.ts` wholesale and the `isServerRecurrenceInstance` guard in `expandRecurringEvents`.
@@ -73,12 +73,12 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `CalendarRights.mayWrite` is documented as a "legacy short flag" (`src/api/types.ts:~507`) and is what `CalendarSidebarDrawer` (`:92-98`), `TasksSheet` (`:84-87`), `ICalImportSheet` (`:51-54`) and `CalendarInvitationBanner` (`:96`) test. Stalwart never sends it, so every calendar counts as writable and the "Subscribed" section can never populate.
   - Fix hint: replace with `!r || r.mayWriteAll || r.mayWriteOwn` and drop `mayWrite` from the type.
 
-- [ ] **No "send invitations" toggle in the editor** — `P3` — `missing`
+- [x] **No "send invitations" toggle in the editor** — `P3` — `missing` — fixed in 2abea97
   - What WEB does: `sendInvitations` checkbox (default on) decides `sendSchedulingMessages` (ref `components/calendar/event-modal.tsx:409, 594, 1333-1338`).
   - What RN does: always sends when participants exist (`src/stores/calendar-store.ts:22-24, 293-297`).
   - Fix hint: add a switch in the Participants section and thread it through `onSave`.
 
-- [ ] **Reminder picker is presets-only** — `P3` — `partial`
+- [x] **Reminder picker is presets-only** — `P3` — `partial` — fixed in 2abea97 (custom amount + unit row; absolute / end-relative / non-display alerts survive a save)
   - What WEB does: alert rows with a number + unit (minutes/hours/days/weeks/at time), multiple rows, preserving exotic alerts (ref `components/calendar/event-modal.tsx:101-135, 358-386`, changelog 1.6.x #170).
   - What RN does: fixed preset list, multiple allowed, non-offset alerts are dropped from the UI but kept until save (`src/components/calendar/EventModal.tsx:299-312`, `src/lib/calendar-alerts.ts:51-70`). Note the "kept until save" comment is wrong: `remindersToAlerts` rebuilds the map from presets only, so an absolute-trigger alert is lost on the next save.
   - Fix hint: add a custom value+unit row; when rebuilding alerts, carry over alerts whose trigger has no `offset`.
@@ -88,7 +88,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `EventDetailSheet` has an `onDuplicate` prop that `CalendarScreen` never passes (`src/components/calendar/EventDetailSheet.tsx:59, 336-342`); no export/copy/note.
   - Fix hint: wire `onDuplicate` (clone like WEB `handleDuplicateFromDetail`), add "Share .ics" via `expo-sharing` + a port of `eventToICS`, add "Copy link" with `Clipboard`.
 
-- [ ] **Quick natural-language event input** — `P3` — `missing`
+- [ ] **Quick natural-language event input** — `P3` — `missing` — deferred: low priority, needs a port of the webmail's quick-event parser and a text field above the month grid
   - What WEB does: `QuickEventInput` in the toolbar (ref `components/calendar/quick-event-input.tsx`, `calendar-toolbar.tsx`).
   - What RN does: none.
   - Fix hint: low priority; could reuse WEB's parser in a text field above the month grid.
@@ -147,7 +147,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: key = `${accountId}|${id}` where `id` is already the namespaced `${accountId}:${raw}` (`src/lib/calendar-utils.ts:474-478`). Works, but the account id is duplicated in the key and would break if the namespacing format changes.
   - Fix hint: use `cal.originalId ?? cal.id` like WEB.
 
-- [ ] **Calendar creation does not pin `supported-calendar-component-set` (#760)** — `P3` — `bugfix-parity`
+- [ ] **Calendar creation does not pin `supported-calendar-component-set` (#760)** — `P3` — `bugfix-parity` — deferred: the drawer now creates calendars over `Calendar/set` (dae5700); MKCALENDAR against Stalwart's `/dav/` endpoint needs a CalDAV client + calendar-home discovery that RN does not have
   - What WEB does: MKCALENDAR through the WebDAV proxy with `VEVENT`/`VTODO`/both, then finishes over JMAP; falls back to `Calendar/set` (ref `lib/jmap/client.ts:5366-5400, 5436-5485`, `components/calendar/calendar-kind-picker.tsx:16-18`, changelog 1.9.0 #760).
   - What RN does: plain `Calendar/set` (`src/api/calendar.ts:374-396`). Only matters once RN gains a create-calendar UI; RN has no WebDAV proxy, but it can talk to Stalwart's CalDAV endpoint directly (the same host serves `/dav/`).
   - Fix hint: when adding calendar creation, issue `MKCALENDAR` against the account's calendar-home with `supported-calendar-component-set`, then `Calendar/get` to find the new id.
@@ -174,7 +174,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Views / navigation / locale
 
-- [ ] **Entire calendar UI is hard-coded English although RN has i18n** — `P2` — `missing` — partial in 0f80e98: screen, month/week/agenda views, event card/sheet/modal, drawer, scope dialog, settings, banner and calendar/share sheets use `t()` + date-fns locales; deferred: TasksSheet, ICalImportSheet, ICalSubscriptionSheet, RecurrenceEditor and `formatReminder` still hard-code English
+- [ ] **Entire calendar UI is hard-coded English although RN has i18n** — `P2` — `missing` — partial in 0f80e98: screen, month/week/agenda views, event card/sheet/modal, drawer, scope dialog, settings, banner and calendar/share sheets use `t()` + date-fns locales; TasksSheet (09c24fa) and `formatReminder` (2abea97) localized too; deferred: ICalImportSheet, ICalSubscriptionSheet and RecurrenceEditor still hard-code English
   - What WEB does: everything through `next-intl` (`t('calendar.*')`), month/day names and popover dates localized (changelog 1.6.x "Localize event start date in detail popover and event modal").
   - What RN does: `src/i18n/index.ts` + `useLocaleStore` are used by 18 other files, but none of `src/components/calendar/*`, `src/screens/CalendarScreen.tsx` or `CalendarSettings.tsx` import it; all labels ("Today", "No events", "Does not repeat", "Going?", RSVP labels, drawer titles, etc.) and `date-fns` `format()` calls without a `locale` are English (`CalendarScreen.tsx:408, 448, 504, 640-641`, `EventModal.tsx:60-67, 326, ...`, `MonthView.tsx:25-26`, `AgendaView.tsx:33-37`).
   - Fix hint: add a `calendar.*` namespace to `locales/*.json` (WEB's keys can be copied) and pass a date-fns locale from the locale store into `format()`.
@@ -219,7 +219,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `formatRange` uses `eventTimeRange` -> `getEventEndDate` (exclusive), so a single-day all-day event on Mar 1 prints "Mar 1 – Mar 2" and a two-day one "Mar 1 – Mar 3" (`src/components/calendar/EventDetailSheet.tsx:63-74`, `src/lib/calendar-utils.ts:84-90`).
   - Fix hint: for `allDay` use `getEventDisplayEndDate(event)` before comparing/formatting.
 
-- [ ] **Deep links to calendar/event** — `P3` — `missing`
+- [ ] **Deep links to calendar/event** — `P3` — `missing` — deferred: no `linking` config exists yet (mail area plumbing); `Calendar` route still takes no params
   - What WEB does: `parseCalendarPath`/`buildCalendarPath` handle `/calendar/<view>/<date>?event=` (ref `lib/deep-links.ts:272-300`, changelog 1.8.3 "Deep links for mail, calendar, contacts, files").
   - What RN does: `Calendar: undefined` route params (`src/navigation/types.ts:33`); no linking config for calendar. Only matters once RN adds a `linking` config; the mail area may already cover the plumbing.
   - Fix hint: accept `{ date?, eventId? }` params on the Calendar route and open the detail sheet.
@@ -251,7 +251,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `createEvent` merges the `/set` echo over the payload (`src/api/calendar.ts:272-274`) and appends without expansion (`src/stores/calendar-store.ts:286-304`).
   - Fix hint: after create, `CalendarEvent/get` the id (RN `getEvents([id])`) and, if `recurrenceRules` is set, run `expandRecurringEvents` for `loadedRange` or call `refresh()`.
 
-- [ ] **Push: FCM subscription excludes `CalendarEvent`/`Calendar` types** — `P3` — `partial`
+- [ ] **Push: FCM subscription excludes `CalendarEvent`/`Calendar` types** — `P3` — `partial` — deferred: local reminders (8e1d03c) are scheduled from foreground fetches only; adding the calendar types to the FCM subscription lives in `src/lib/push-notifications.ts` (push area) and would need a background refresh + reschedule hook
   - What WEB does: push subscription covers calendar types so the sidebar refreshes on external changes (FEATURES.md "JMAP push keeps everything in sync").
   - What RN does: foreground EventSource/polling dispatches to `useCalendarStore.handleStateChange` (`App.tsx:390-397`, `src/stores/calendar-store.ts:261-284`) — at parity while the app is open; the background FCM subscription lists only `['Email','EmailDelivery','Mailbox']` (`src/lib/push-notifications.ts:104`), so calendar changes never wake the app. Acceptable unless local reminders are added.
   - Fix hint: leave as is unless background calendar refresh becomes needed.
