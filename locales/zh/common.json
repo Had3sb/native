@@ -1377,7 +1377,8 @@
         "subject": "主题",
         "header": "自定义标头",
         "size": "大小",
-        "body": "正文"
+        "body": "正文",
+        "attachment": "附件"
       },
       "comparators": {
         "contains": "包含",
@@ -1388,7 +1389,9 @@
         "ends_with": "以…结尾",
         "matches": "匹配模式",
         "greater_than": "大于",
-        "less_than": "小于"
+        "less_than": "小于",
+        "has_any": "存在",
+        "has_type": "类型为"
       },
       "action_types": {
         "move": "移至文件夹",
@@ -1461,7 +1464,9 @@
         "actions_count": "{count, plural, one {# 个操作} other {# 个操作}}"
       },
       "origin_external": "外部",
-      "managed_by_tooltip": "由 {source} 管理。请在该应用中编辑，或使用原始 Sieve 编辑器。"
+      "managed_by_tooltip": "由 {source} 管理。请在该应用中编辑，或使用原始 Sieve 编辑器。",
+      "value_placeholder_multi": "值（多个用逗号分隔）",
+      "attachment_type_placeholder": "例如：pdf、doc、jpg"
     },
     "templates": {
       "title": "邮件模板",

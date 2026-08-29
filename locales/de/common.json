@@ -1377,7 +1377,8 @@
         "subject": "Betreff",
         "header": "Benutzerdefinierter Header",
         "size": "Größe",
-        "body": "Nachrichtentext"
+        "body": "Nachrichtentext",
+        "attachment": "Anhang"
       },
       "comparators": {
         "contains": "enthält",
@@ -1388,7 +1389,9 @@
         "ends_with": "endet mit",
         "matches": "entspricht dem Muster",
         "greater_than": "ist größer als",
-        "less_than": "ist kleiner als"
+        "less_than": "ist kleiner als",
+        "has_any": "vorhanden",
+        "has_type": "vom Typ"
       },
       "action_types": {
         "move": "In Ordner verschieben",
@@ -1461,7 +1464,9 @@
         "actions_count": "{count, plural, one {# Aktion} other {# Aktionen}}"
       },
       "origin_external": "Extern",
-      "managed_by_tooltip": "Verwaltet von {source}. Bearbeiten Sie sie in dieser App oder verwenden Sie den rohen Sieve-Editor."
+      "managed_by_tooltip": "Verwaltet von {source}. Bearbeiten Sie sie in dieser App oder verwenden Sie den rohen Sieve-Editor.",
+      "value_placeholder_multi": "Wert (mehrere mit Komma trennen)",
+      "attachment_type_placeholder": "z.B. pdf, doc, jpg"
     },
     "templates": {
       "title": "E-Mail-Vorlagen",

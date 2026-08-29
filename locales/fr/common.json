@@ -1377,7 +1377,8 @@
         "subject": "Objet",
         "header": "En-tête personnalisé",
         "size": "Taille",
-        "body": "Corps"
+        "body": "Corps",
+        "attachment": "Pièce jointe"
       },
       "comparators": {
         "contains": "contient",
@@ -1388,7 +1389,9 @@
         "ends_with": "se termine par",
         "matches": "correspond au motif",
         "greater_than": "est supérieur à",
-        "less_than": "est inférieur à"
+        "less_than": "est inférieur à",
+        "has_any": "est présent",
+        "has_type": "de type"
       },
       "action_types": {
         "move": "Déplacer vers le dossier",
@@ -1461,7 +1464,9 @@
         "actions_count": "{count, plural, one {# action} other {# actions}}"
       },
       "origin_external": "Externe",
-      "managed_by_tooltip": "Géré par {source}. Modifiez-le dans cette application, ou utilisez l'éditeur Sieve brut."
+      "managed_by_tooltip": "Géré par {source}. Modifiez-le dans cette application, ou utilisez l'éditeur Sieve brut.",
+      "value_placeholder_multi": "Valeur (plusieurs séparées par des virgules)",
+      "attachment_type_placeholder": "p. ex. pdf, doc, jpg"
     },
     "templates": {
       "title": "Modèles d'e-mails",

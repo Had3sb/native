@@ -1377,7 +1377,8 @@
         "subject": "件名",
         "header": "カスタムヘッダー",
         "size": "サイズ",
-        "body": "本文"
+        "body": "本文",
+        "attachment": "添付ファイル"
       },
       "comparators": {
         "contains": "を含む",
@@ -1388,7 +1389,9 @@
         "ends_with": "で終わる",
         "matches": "パターンに一致",
         "greater_than": "より大きい",
-        "less_than": "より小さい"
+        "less_than": "より小さい",
+        "has_any": "あり",
+        "has_type": "タイプ"
       },
       "action_types": {
         "move": "フォルダーに移動",
@@ -1461,7 +1464,9 @@
         "actions_count": "{count, plural, other {#個のアクション}}"
       },
       "origin_external": "外部",
-      "managed_by_tooltip": "{source} によって管理されています。そのアプリで編集するか、生の Sieve エディターを使用してください。"
+      "managed_by_tooltip": "{source} によって管理されています。そのアプリで編集するか、生の Sieve エディターを使用してください。",
+      "value_placeholder_multi": "値（カンマで複数指定可）",
+      "attachment_type_placeholder": "例: pdf, doc, jpg"
     },
     "templates": {
       "title": "メールテンプレート",

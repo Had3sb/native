@@ -1377,7 +1377,8 @@
         "subject": "Temats",
         "header": "Pielāgota galvene",
         "size": "Izmērs",
-        "body": "Teksts"
+        "body": "Teksts",
+        "attachment": "Pielikums"
       },
       "comparators": {
         "contains": "satur",
@@ -1388,7 +1389,9 @@
         "ends_with": "beidzas ar",
         "matches": "atbilst paraugam",
         "greater_than": "lielāks nekā",
-        "less_than": "mazāks nekā"
+        "less_than": "mazāks nekā",
+        "has_any": "ir klāt",
+        "has_type": "tipa"
       },
       "action_types": {
         "move": "Pārvietot uz mapi",
@@ -1461,7 +1464,9 @@
         "actions_count": "{count, plural, one {# darbība} other {# darbības}}"
       },
       "origin_external": "Ārējs",
-      "managed_by_tooltip": "Pārvalda {source}. Rediģējiet to šajā lietotnē vai izmantojiet neapstrādāto Sieve redaktoru."
+      "managed_by_tooltip": "Pārvalda {source}. Rediģējiet to šajā lietotnē vai izmantojiet neapstrādāto Sieve redaktoru.",
+      "value_placeholder_multi": "Vērtība (vairākas atdalītas ar komatu)",
+      "attachment_type_placeholder": "piem. pdf, doc, jpg"
     },
     "templates": {
       "title": "Vēstuļu veidnes",

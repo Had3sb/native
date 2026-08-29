@@ -1390,7 +1390,8 @@
         "subject": "Subject",
         "header": "Custom Header",
         "size": "Size",
-        "body": "Body"
+        "body": "Body",
+        "attachment": "Attachment"
       },
       "comparators": {
         "contains": "contains",
@@ -1401,7 +1402,9 @@
         "ends_with": "ends with",
         "matches": "matches pattern",
         "greater_than": "is greater than",
-        "less_than": "is less than"
+        "less_than": "is less than",
+        "has_any": "is present",
+        "has_type": "of type"
       },
       "action_types": {
         "move": "Move to folder",
@@ -1474,8 +1477,9 @@
         "conditions_count": "{count, plural, one {# condition} other {# conditions}}",
         "actions_count": "{count, plural, one {# action} other {# actions}}"
       },
-      "origin_external": "External",
-      "managed_by_tooltip": "Managed by {source}. Edit it in that app, or use the raw Sieve editor."
+      "managed_by_tooltip": "Managed by {source}. Edit it in that app, or use the raw Sieve editor.",
+      "value_placeholder_multi": "Value (multiple separated by commas)",
+      "attachment_type_placeholder": "e.g. pdf, doc, jpg"
     },
     "templates": {
       "title": "Email Templates",

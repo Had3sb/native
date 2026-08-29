@@ -1377,7 +1377,8 @@
         "subject": "제목",
         "header": "사용자 지정 헤더",
         "size": "크기",
-        "body": "본문"
+        "body": "본문",
+        "attachment": "첨부 파일"
       },
       "comparators": {
         "contains": "포함함",
@@ -1388,7 +1389,9 @@
         "ends_with": "다음으로 끝남",
         "matches": "패턴 일치",
         "greater_than": "다음보다 큼",
-        "less_than": "다음보다 작음"
+        "less_than": "다음보다 작음",
+        "has_any": "있음",
+        "has_type": "유형"
       },
       "action_types": {
         "move": "폴더로 이동",
@@ -1461,7 +1464,9 @@
         "actions_count": "동작 {count}개"
       },
       "origin_external": "외부",
-      "managed_by_tooltip": "{source}에서 관리됩니다. 해당 앱에서 편집하거나 원시 Sieve 편집기를 사용하세요."
+      "managed_by_tooltip": "{source}에서 관리됩니다. 해당 앱에서 편집하거나 원시 Sieve 편집기를 사용하세요.",
+      "value_placeholder_multi": "값 (쉼표로 여러 개 구분)",
+      "attachment_type_placeholder": "예: pdf, doc, jpg"
     },
     "templates": {
       "title": "이메일 템플릿",

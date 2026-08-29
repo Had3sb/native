@@ -1,4 +1,4 @@
-﻿import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseScript } from '../parser';
@@ -254,7 +254,7 @@ describe('external rule preservation (issue #201)', () => {
   });
 
   describe('round-trip', () => {
-    it('preserves external rules through parse â†’ generate â†’ parse', () => {
+    it('preserves external rules through parse → generate → parse', () => {
       const initial = `require ["fileinto", "imap4flags"];\n\n# rule:[VIP]\nif header :contains "From" "boss@company.com" {\n    fileinto "VIP";\n    addflag "\\\\Flagged";\n}\n\n# Nextcloud Mail - begin\nif header :contains "Subject" "invoice" {\n    fileinto "Finance";\n}\n# Nextcloud Mail - end\n`;
 
       const firstParse = parseScript(initial);
@@ -340,7 +340,7 @@ describe('external rule preservation (issue #201)', () => {
       expect(result.externalRequires).toContain('fileinto');
     });
 
-    it('round-trips a Nextcloud region verbatim through parse â†’ generate â†’ parse', () => {
+    it('round-trips a Nextcloud region verbatim through parse → generate → parse', () => {
       const bulwark = makeBulwarkRule({ name: 'Test' });
       const initial = `${generateScript([bulwark])}\n${nextcloudScript}`;
 

@@ -1377,7 +1377,8 @@
         "subject": "Oggetto",
         "header": "Intestazione personalizzata",
         "size": "Dimensione",
-        "body": "Corpo"
+        "body": "Corpo",
+        "attachment": "Allegato"
       },
       "comparators": {
         "contains": "contiene",
@@ -1388,7 +1389,9 @@
         "ends_with": "termina con",
         "matches": "corrisponde al modello",
         "greater_than": "è maggiore di",
-        "less_than": "è minore di"
+        "less_than": "è minore di",
+        "has_any": "è presente",
+        "has_type": "di tipo"
       },
       "action_types": {
         "move": "Sposta nella cartella",
@@ -1461,7 +1464,9 @@
         "actions_count": "{count, plural, one {# azione} other {# azioni}}"
       },
       "origin_external": "Esterno",
-      "managed_by_tooltip": "Gestito da {source}. Modificalo in quell'app o usa l'editor Sieve grezzo."
+      "managed_by_tooltip": "Gestito da {source}. Modificalo in quell'app o usa l'editor Sieve grezzo.",
+      "value_placeholder_multi": "Valore (più valori separati da virgole)",
+      "attachment_type_placeholder": "es. pdf, doc, jpg"
     },
     "templates": {
       "title": "Modelli email",

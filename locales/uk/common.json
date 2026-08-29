@@ -1377,7 +1377,8 @@
         "subject": "Тема",
         "header": "Спеціальний заголовок",
         "size": "Розмір",
-        "body": "Тіло"
+        "body": "Тіло",
+        "attachment": "Вкладення"
       },
       "comparators": {
         "contains": "містить",
@@ -1388,7 +1389,9 @@
         "ends_with": "закінчується на",
         "matches": "відповідає шаблону",
         "greater_than": "більше ніж",
-        "less_than": "менше ніж"
+        "less_than": "менше ніж",
+        "has_any": "присутнє",
+        "has_type": "типу"
       },
       "action_types": {
         "move": "Перемістити в папку",
@@ -1461,7 +1464,9 @@
         "actions_count": "{count, plural, one {# дія} few {# дії} many {# дій} other {# дій}}"
       },
       "origin_external": "Зовнішнє",
-      "managed_by_tooltip": "Керується {source}. Редагуйте в тому додатку або використовуйте редактор Sieve."
+      "managed_by_tooltip": "Керується {source}. Редагуйте в тому додатку або використовуйте редактор Sieve.",
+      "value_placeholder_multi": "Значення (декілька через кому)",
+      "attachment_type_placeholder": "напр. pdf, doc, jpg"
     },
     "templates": {
       "title": "Шаблони електронної пошти",

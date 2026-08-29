@@ -1382,7 +1382,8 @@
         "subject": "Předmět",
         "header": "Vlastní hlavička",
         "size": "Velikost",
-        "body": "Tělo zprávy"
+        "body": "Tělo zprávy",
+        "attachment": "Příloha"
       },
       "comparators": {
         "contains": "obsahuje",
@@ -1393,7 +1394,9 @@
         "ends_with": "končí na",
         "matches": "odpovídá vzoru",
         "greater_than": "je větší než",
-        "less_than": "je menší než"
+        "less_than": "je menší než",
+        "has_any": "je přítomna",
+        "has_type": "typu"
       },
       "action_types": {
         "move": "Přesunout do složky",
@@ -1466,7 +1469,9 @@
         "actions_count": "{count, plural, one {1 akce} few {# akce} other {# akcí}}"
       },
       "origin_external": "Externí",
-      "managed_by_tooltip": "Spravováno aplikací {source}. Úpravy provádějte v příslušné aplikaci nebo použijte editor zdrojového kódu Sieve."
+      "managed_by_tooltip": "Spravováno aplikací {source}. Úpravy provádějte v příslušné aplikaci nebo použijte editor zdrojového kódu Sieve.",
+      "value_placeholder_multi": "Hodnota (více oddělených čárkami)",
+      "attachment_type_placeholder": "např. pdf, doc, jpg"
     },
     "templates": {
       "title": "E-mailové šablony",

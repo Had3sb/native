@@ -1,4 +1,4 @@
-﻿import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { parseScript } from '../parser';
 import { generateScript } from '../generator';
 import type { FilterRule } from '../types';
@@ -101,7 +101,7 @@ describe('parseScript', () => {
   });
 
   describe('round-trip', () => {
-    it('preserves complex rules through generate â†’ parse', () => {
+    it('preserves complex rules through generate → parse', () => {
       const rules: FilterRule[] = [
         makeRule({ id: '1', name: 'Newsletter', enabled: true, stopProcessing: true }),
         makeRule({
