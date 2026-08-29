@@ -10,6 +10,12 @@
       "days_clear": "The next {count} days are clear.",
       "no_upcoming": "No upcoming events"
     },
+    "drawer": {
+      "my_calendars": "My calendars",
+      "no_calendars": "No calendars yet.",
+      "shared_with_me": "Shared with me",
+      "subscribed": "Subscribed"
+    },
     "event_modal": {
       "participant_placeholder": "Add participant by email"
     },
