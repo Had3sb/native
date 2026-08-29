@@ -52,7 +52,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: `rewriteSessionUrls` only rewrites when `extractOrigin(url)` matches `^https?://` (`src/api/jmap-client.ts:320-340`); a relative `apiUrl` is returned unchanged and `fetch('/jmap/')` then fails with "Network request failed". Same gap in `src/api/unified-inbox.ts:55-60`. (RN correctly avoids `new URL()` so templates are not corrupted.)
   - Fix hint: in `rewrite()`, when `extractOrigin` is null and the string starts with `/`, return `serverOrigin + url`.
 
-- [ ] **Capability check uses the broad `principals` URN, not `principals:owner` (44360024)** — `P2` — `bugfix-parity`
+- [x] **Capability check uses the broad `principals` URN, not `principals:owner` (44360024)** — `P2` — `bugfix-parity` — fixed in a0ce925
   - What WEB does: declares `urn:ietf:params:jmap:principals:owner` in `using` only when that exact capability is advertised in session or account capabilities (`lib/jmap/client.ts:4689-4698`, `6472`; changelog "Check the specific capability a request declares (principals:owner), not a broader one").
   - What RN does: `supportsSharing()` checks `CAPABILITIES.PRINCIPALS` (`src/api/files.ts:23-25`) and then pushes `PRINCIPALS_OWNER` into `using` (`files.ts:40-43`). A server advertising `principals` but not `principals:owner` rejects every FileNode request with `unknownCapability`.
   - Fix hint: check `hasCapability(CAPABILITIES.PRINCIPALS_OWNER) || accountCapabilities[...]` before adding it.
@@ -72,7 +72,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: relies on the server for Message-ID; uses raw `header:In-Reply-To:asText` / `header:References:asText` strings (`src/api/email.ts:823-826`).
   - Fix hint: port `generateMessageId` + `stripMessageIdBrackets`, use `inReplyTo`/`references` arrays.
 
-- [ ] **Dead duplicate `src/api/submission.ts` with zero error checking** — `P3` — `rn-only-bug`
+- [x] **Dead duplicate `src/api/submission.ts` with zero error checking** — `P3` — `rn-only-bug` — fixed in 42ab246
   - What RN does: `submission.ts:140-199` is an older `sendEmail` that ignores `notCreated`/errors; no importers (`grep api/submission` empty). Risk is someone wiring it back in.
   - Fix hint: delete the file.
 
@@ -143,7 +143,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: `react-native-sse` accumulates `xhr.responseText` for the life of the connection (`EventSource.js:108`, `_lastIndexProcessed`), and RN requests `{ping}=30`, `{closeafter}=no` (`src/api/push.ts:126-129`), so memory grows for every ping/event until reconnect. No ping-timeout detection either.
   - Fix hint: either request `closeafter=state` (server closes after each event; library auto-reconnects) or recycle the EventSource every ~30 min / when no `ping` event arrived in 90 s (add a `ping` listener).
 
-- [ ] **Push subscription `types` include `Email` and `Mailbox`; no `emailPush` spam filter** — `P2` — `partial`
+- [x] **Push subscription `types` include `Email` and `Mailbox`; no `emailPush` spam filter** — `P2` — `partial` — fixed in 00faceb
   - What WEB does: subscribes to `EmailDelivery` only, plus an `emailPush` filter excluding `$junk`/Junk when the server advertises `urn:ietf:params:jmap:emailpush` (`lib/web-push.ts:39-52`, `lib/jmap/client.ts:8085-8142`; changelog 1.9.x "Stop sending notifications for spam").
   - What RN does: `PUSH_TYPES = ['Email', 'EmailDelivery', 'Mailbox']` (`src/lib/push-notifications.ts:104`); `createPushSubscription` has no `emailPush` support (`src/api/push.ts:23-57`). Every read/flag/move on any device wakes the relay -> FCM -> headless task, which then re-queries the inbox (`src/lib/push-background-task.ts:452-455`); a spam delivery still triggers a push (only the inbox `notKeyword $seen` query hides it, at the cost of a wake-up).
   - Fix hint: subscribe to `EmailDelivery` only; add `hasEmailPushCapability()` + `emailPush` filter as in WEB; the relay must forward it (see memory note: relay lacks EmailPush).
@@ -217,16 +217,16 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: the whole response is read into memory and base64-encoded (`BulwarkClientCertModule.kt:170-190`, `src/lib/client-cert.ts:204-216`); attachment downloads for cert users go through `secureFetch(...).arrayBuffer()` (`src/lib/email-export.ts:100-110`) and uploads through `bodyToBase64` (`client-cert.ts:171-188`), so a 50 MB attachment costs ~200 MB of JS heap and can time out at 30 s (`client-cert.ts:250`; WEB uses 300 s for transfers, `lib/jmap/client.ts:634`).
   - Fix hint: stream to a file in the native module (`FileOutputStream`) and return the path; raise the transfer timeout.
 
-- [ ] **Blob downloads via `File.downloadFileAsync` bypass token refresh** — `P2` — `rn-only-bug`
+- [x] **Blob downloads via `File.downloadFileAsync` bypass token refresh** — `P2` — `rn-only-bug` — fixed in d2ed27f
   - What WEB does: `fetchBlob` goes through `authenticatedFetch`, which refreshes a Bearer token on 401 (`lib/jmap/client.ts:4150-4157`, `855-863`).
   - What RN does: `downloadInto` builds the header from `jmapClient.authHeader` without `ensureFreshToken()` and does not retry on 401 (`src/lib/email-export.ts:93-97`); after the access token expires, attachment/EML download fails until some other JMAP call has refreshed the token. `fetchBlobArrayBuffer` does refresh (`src/api/jmap-client.ts:575-581`).
   - Fix hint: expose `ensureFreshToken()` publicly, call it before `downloadFileAsync`, and on 401 call `forceRefreshToken()` and retry once.
 
-- [ ] **Downloaded attachment temp files are never cleaned up** — `P3` — `rn-only-bug`
+- [x] **Downloaded attachment temp files are never cleaned up** — `P3` — `rn-only-bug` — fixed in d2ed27f (launch sweep wired in App.tsx)
   - What RN does: `shareAttachment`/`openAttachment` write into `Paths.cache` (`src/lib/email-export.ts:127`, `195`) and only delete when the same name is reused; the APK installer deletes on failure (`src/lib/install-update.ts:78`, `143`). Cache may be purged by the OS but shared files linger (readable to apps that were granted the URI).
   - Fix hint: delete the file after the share sheet resolves, and sweep `Paths.cache` older than a day at launch.
 
-- [ ] **WebView: `data:` navigations allowed inside the message frame** — `P3` — `partial`
+- [x] **WebView: `data:` navigations allowed inside the message frame** — `P3` — `partial` — fixed in 06742ef
   - What WEB does: message HTML is sandboxed in an `srcDoc` iframe with a CSP meta tag (changelog 1.5.x); `data:` top-level navigation is blocked by the browser.
   - What RN does: `onShouldStartLoadWithRequest` returns `true` for any `data:` URL (`src/components/EmailBodyView.tsx:715-718`), so `<a href="data:text/html,...">` replaces the message with attacker HTML rendered inside the app chrome (phishing form); the WebView is otherwise well hardened (`originWhitelist=['about:blank']`, file access off, `mixedContentMode="never"`, `setSupportMultipleWindows={false}`, `incognito`, `domStorageEnabled={false}`, `EmailBodyView.tsx:675-712`).
   - Fix hint: allow `data:` only for `request.isTopFrame === false` or block it entirely (the body is loaded via `source={{html}}`, not a data: URL).
@@ -240,7 +240,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: `console.log('[push] fcm message', payload.title)` in production (`App.tsx:301-303`). No credential logging found (grep for password/token/secret in console calls is empty).
   - Fix hint: drop or guard with `__DEV__`.
 
-- [ ] **Custom SHA-256 implementation (verified correct) could use `expo-crypto`** — `P3` — `rn-only-bug`
+- [x] **Custom SHA-256 implementation (verified correct) could use `expo-crypto`** — `P3` — `rn-only-bug` — fixed in n/a (kept: PKCE needs a synchronous digest; expo-crypto digest is async)
   - What RN does: `src/lib/sha256.ts` is a straight FIPS 180-4 implementation (padding, 64-bit length split, unsigned hex output all correct) used only for APK checksum verification (`src/lib/install-update.ts:118-127`); verification is opt-in when the release body carries a hash.
   - Fix hint: once `expo-crypto` is added (see randomness finding) replace with `Crypto.digest('SHA-256', bytes)`; keep the size check.
 
@@ -260,7 +260,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
   - What RN does: `fetchEncryptionType` returns only the `@type` (`src/api/account-security.ts:150-155`); shown read-only in `AccountSecuritySettings.tsx:595`. No `x:PublicKey/*`, no set path. Per-account isolation is inherent (single-session client uses `jmapClient.accountId`).
   - Fix hint: port `updateEncryptionAtRest`, `fetchPublicKeys`, `createPublicKey`, `removePublicKey` into `account-security.ts` (same `STALWART_USING`) and a key list/paste screen.
 
-- [ ] **S/MIME settings screen is a mock; no S/MIME detection in the viewer** — `P2` — `missing`
+- [x] **S/MIME settings screen is a mock; no S/MIME detection in the viewer** — `P2` — `missing` — fixed in 06742ef (viewer banner; settings stub hidden in 3d0d440; crypto deferred)
   - What WEB does: built-in S/MIME was removed from core into the privileged crypto plugin (changelog 1.5.0 note, "S/MIME: The built-in S/MIME implementation has been removed from core"); core keeps only detection (`isSmimeEmail`, `lib/jmap/client.ts:484-505`), the range-limited blob read for signature checks (`7503-7550`), and the plugin hook surface. Per-account key isolation, legacy 3DES/PBE and self-signed detection live in the plugin.
   - What RN does: `SmimeSettings` renders `MOCK_KEYS`/`MOCK_CERTS` and three settings that nothing reads (`src/components/settings/SmimeSettings.tsx:32-61`; `src/stores/settings-store.ts:203-205`, `308-310`), reachable from Settings as `encryption` (`src/screens/SettingsScreen.tsx:130`). Nothing detects `application/pkcs7-mime`/`multipart/signed` bodies, so an encrypted message shows as an empty body with a `smime.p7m` attachment.
   - Fix hint: parity for RN *core* = (1) port `isSmimeEmail` and show a "signed/encrypted with S/MIME - not supported on mobile" banner, (2) remove or hide the mock section. Full sign/verify/decrypt needs WebCrypto, which Hermes lacks: it would require `react-native-quick-crypto` (OpenSSL) plus a PKCS#7/CMS parser (`pkijs` runs on WebCrypto and would need a shim), private keys in SecureStore/Keychain, and per-account isolation of the key store; there is no plugin tier in RN to host it. Treat as a separate project.
@@ -276,7 +276,7 @@ RN's JMAP client (`src/api/jmap-client.ts`, 615 lines) is a thin transport: sess
 
 ### Newsletter unsubscribe
 
-- [ ] **List-Unsubscribe not parsed or offered** — `P2` — `missing`
+- [x] **List-Unsubscribe not parsed or offered** — `P2` — `missing` — fixed in d2ed27f
   - What WEB does: `extractListHeaders` parses `List-Unsubscribe`/`List-Id`/`List-Help`/`List-Post` (`lib/email-headers.ts:253-300`); the banner opens http links in a new tab (no RFC 8058 one-click POST) and sends `mailto:` unsubscribes itself via JMAP (`components/email/unsubscribe-banner.tsx:63-110`; changelog 1.5.x "Send mailto: unsubscribe ourselves instead of via the OS handler").
   - What RN does: `EMAIL_FULL_PROPERTIES` requests no headers (`src/api/email.ts:11-15`); no parsing, no banner (`grep -rln unsubscribe src` hits only unrelated store code).
   - Fix hint: add `header:List-Unsubscribe:asText` and `header:List-Unsubscribe-Post:asText` to the full properties; port `parseUnsubscribeUrls`; for http+`List-Unsubscribe=One-Click` do the RFC 8058 POST (`application/x-www-form-urlencoded`, body `List-Unsubscribe=One-Click`) in-app, otherwise open the link; for `mailto:` reuse `sendEmail`.
