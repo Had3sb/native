@@ -91,6 +91,12 @@ class BulwarkFcmModule(reactContext: ReactApplicationContext)
         promise.resolve(payload?.toMap())
     }
 
+    @ReactMethod
+    fun getInitialShare(promise: Promise) {
+        val payload = ShareIntentStore.consume()
+        promise.resolve(payload?.toMap())
+    }
+
     private fun postNotification(
         notificationId: String,
         title: String,

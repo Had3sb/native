@@ -26,16 +26,21 @@ module.exports = {
   expo: {
     name: 'Bulwark Mobile',
     slug: 'bulwark-mobile',
-    scheme: 'bulwarkmobile',
+    // mailto: lets Android/iOS offer the app for mail links in other apps.
+    scheme: ['bulwarkmobile', 'mailto'],
     version: VERSION,
     orientation: 'portrait',
     icon: './assets/icon.png',
-    userInterfaceStyle: 'dark',
+    userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     splash: {
       image: './assets/splash-icon.png',
       resizeMode: 'contain',
-      backgroundColor: '#09090b',
+      backgroundColor: '#ffffff',
+      dark: {
+        image: './assets/splash-icon.png',
+        backgroundColor: '#09090b',
+      },
     },
     ios: {
       supportsTablet: true,

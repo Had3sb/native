@@ -39,6 +39,7 @@ import { DownloadsSettings } from '../components/settings/DownloadsSettings';
 import { useLocaleStore } from '../stores/locale-store';
 import { useHasCalendar, useHasContacts, useHasFiles, useHasSieve, useHasVacation } from '../lib/capabilities';
 import { supportsSideloadUpdates } from '../lib/platform-capabilities';
+import { usePendingSettingsTab } from '../navigation/pending-settings-tab';
 
 type Tab =
   | 'account' | 'language' | 'notifications'
@@ -184,6 +185,13 @@ export default function SettingsScreen({ onLogout, onBack, onTabSelect }: Settin
     if (!hasVacation) set.add('vacation');
     return set;
   }, [hasCalendar, hasContacts, hasFiles, hasSieve, hasVacation]);
+  // A settings/<tab> deep link parks its target here; open it once.
+  const pendingTab = usePendingSettingsTab((s) => s.tab);
+  useEffect(() => {
+    if (!pendingTab) return;
+    const tab = usePendingSettingsTab.getState().consume();
+    if (tab && TABS.some((t) => t.id === tab && t.implemented)) setSelectedTab(tab as Tab);
+  }, [pendingTab]);
   const groupedTabs = React.useMemo(() => {
     void locale; // dependency: re-translate on locale change
     return groupTabs().map((g) => ({

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, Linking, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
@@ -50,6 +50,10 @@ import { useNetworkStore } from './src/stores/network-store';
 import { useUpdatesStore } from './src/stores/updates-store';
 import { UpdateBanner } from './src/components/UpdateBanner';
 import { PushOnboardingPrompt } from './src/components/PushOnboardingPrompt';
+import { ToastHost } from './src/components/ToastHost';
+import { getEmails } from './src/api/email';
+import { handleDeepLink, parseDeepLink, shareToDeepLink, type DeepLink } from './src/navigation/linking';
+import { addShareListener, getInitialShare, shareAttachments } from './src/lib/share-intent';
 import { OfflineCacheBanner } from './src/components/OfflineCacheBanner';
 import { useOfflineCacheStore } from './src/stores/offline-cache-store';
 import { useOutboxStore } from './src/stores/outbox-store';
@@ -83,6 +87,29 @@ async function navigateToNotificationTap(payload: NotificationTapPayload): Promi
   });
 }
 
+// Deep links (bulwarkmobile://, webmail https permalinks, mailto:) and
+// Android share-sheet payloads all end up here once the navigator is ready.
+async function openDeepLink(link: DeepLink): Promise<void> {
+  await handleDeepLink(link, {
+    navigation: navigationRef,
+    resolveThreadId: async (emailId) => {
+      try {
+        const [email] = await getEmails([emailId]);
+        return email?.threadId ?? null;
+      } catch {
+        return null;
+      }
+    },
+    switchAccount: async (accountId) => {
+      const auth = useAuthStore.getState();
+      if (auth.activeAccountId === accountId) return true;
+      if (!useAccountStore.getState().getAccountById(accountId)) return false;
+      await auth.switchAccount(accountId);
+      return useAuthStore.getState().activeAccountId === accountId;
+    },
+  });
+}
+
 function LoadingScreen({ message }: { message: string }) {
   const c = useColors();
   return (
@@ -108,6 +135,7 @@ function MainTabsNavigator({ navigation }: NativeStackScreenProps<RootStackParam
       <UpdateBanner />
       <OfflineCacheBanner />
       <PushOnboardingPrompt />
+      <ToastHost />
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
@@ -341,6 +369,52 @@ export default function App() {
     return () => {
       cancelled = true;
       unsubscribe();
+    };
+  }, [isAuthenticated]);
+
+  // Deep links and share-sheet payloads. The cold-start URL / share is read
+  // once auth is restored so the target screen has credentials.
+  React.useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    const open = (link: DeepLink | null) => {
+      if (!link || cancelled) return;
+      // Give the navigator a tick to mount after the auth gate flips.
+      setTimeout(() => { void openDeepLink(link); }, 50);
+    };
+    void Linking.getInitialURL().then((url) => open(url ? parseDeepLink(url) : null));
+    void getInitialShare().then((share) => {
+      if (!share) return;
+      const link = shareToDeepLink(share);
+      if (link.kind === 'compose' && share.uris?.length) {
+        navigationRef.isReady() && navigationRef.navigate('Compose', {
+          prefillTo: link.to,
+          prefillSubject: link.subject,
+          prefillBody: link.body,
+          prefillAttachments: shareAttachments(share),
+        });
+        return;
+      }
+      open(link);
+    });
+    const urlSub = Linking.addEventListener('url', ({ url }) => open(parseDeepLink(url)));
+    const shareSub = addShareListener((share) => {
+      const link = shareToDeepLink(share);
+      if (link.kind === 'compose' && share.uris?.length && navigationRef.isReady()) {
+        navigationRef.navigate('Compose', {
+          prefillTo: link.to,
+          prefillSubject: link.subject,
+          prefillBody: link.body,
+          prefillAttachments: shareAttachments(share),
+        });
+        return;
+      }
+      open(link);
+    });
+    return () => {
+      cancelled = true;
+      urlSub.remove();
+      shareSub();
     };
   }, [isAuthenticated]);
 
