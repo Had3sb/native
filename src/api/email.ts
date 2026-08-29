@@ -1185,7 +1185,13 @@ export async function sendEmail(
         const props = notCreated.properties?.length ? ` (properties: ${notCreated.properties.join(', ')})` : '';
         throw new Error(`${notCreated.description ?? notCreated.type ?? 'Failed to create message'}${props}`);
       }
-      emailId = (result as { created?: Record<string, { id?: string }> }).created?.draft?.id;
+      // Stalwart answers a submission carrying `onSuccessUpdateEmail` with a
+      // SECOND `Email/set` response (reusing the submission's call id) that
+      // reports the filing update and carries no `created`. Only take an id
+      // when one is actually there - assigning unconditionally overwrote the
+      // real id with undefined, which silently disabled the undo-send window.
+      const createdId = (result as { created?: Record<string, { id?: string }> }).created?.draft?.id;
+      if (createdId) emailId = createdId;
       // Filing problems from onSuccessUpdateEmail come back on the implicit
       // Email/set; the message already left, so warn rather than fail.
       const notUpdated = (result as { notUpdated?: Record<string, { description?: string; type?: string }> }).notUpdated;
