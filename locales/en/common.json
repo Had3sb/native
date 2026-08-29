@@ -2763,7 +2763,9 @@
       "new_all_day_event": "New all-day event",
       "new_task": "New task",
       "go_to_today": "Go to today",
-      "tap_to_create": "Tap + to create one"
+      "tap_to_create": "Tap + to create one",
+      "export_ics_short": ".ics",
+      "copy_link_short": "Link"
     },
     "detail": {
       "add_note": "Add a note...",

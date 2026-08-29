@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { Calendar, CalendarEvent, CalendarRights, StateChange } from '../api/types';
+import type { Calendar, CalendarEvent, CalendarRights, Participant, StateChange } from '../api/types';
+import { normalizeAllDayDuration } from '../lib/calendar-utils';
 import {
   type CalendarUpdates,
   updateCalendar as apiUpdateCalendar,
@@ -65,6 +66,73 @@ function mapServerEventToStoreEvent(
     accountId,
     isShared: true,
   };
+}
+
+// Whitelist the JSCalendar properties an imported (parsed) event may carry:
+// drop server-computed / identity fields (utcStart, utcEnd, isOrigin, created,
+// updated, id) that CalendarEvent/set rejects, rewrite participants onto
+// `calendarAddress` and normalise all-day duration / time zone. Mirrors the
+// webmail's import preparation (#113).
+export function prepareImportedEvent(event: Partial<CalendarEvent>): Partial<CalendarEvent> {
+  const src = event as Record<string, unknown> & Partial<CalendarEvent>;
+  let participants: Record<string, Participant> | undefined;
+  if (src.participants) {
+    participants = {};
+    for (const [key, p] of Object.entries(src.participants)) {
+      const cleaned: Record<string, unknown> = {
+        '@type': 'Participant',
+        name: p.name,
+        email: p.email,
+        calendarAddress: p.calendarAddress || p.sendTo?.imip,
+        description: p.description,
+        kind: p.kind,
+        roles: p.roles,
+        participationStatus: p.participationStatus,
+        participationComment: p.participationComment,
+        expectReply: p.expectReply,
+        scheduleAgent: p.scheduleAgent,
+      };
+      for (const k of Object.keys(cleaned)) {
+        if (cleaned[k] === undefined || cleaned[k] === null) delete cleaned[k];
+      }
+      participants[key] = cleaned as Participant;
+    }
+  }
+  const data: Record<string, unknown> = {
+    uid: src.uid,
+    title: src.title,
+    description: src.description,
+    start: src.start,
+    duration: src.showWithoutTime ? normalizeAllDayDuration(src.duration) : src.duration,
+    timeZone: src.showWithoutTime ? null : src.timeZone,
+    showWithoutTime: src.showWithoutTime,
+    status: src.status,
+    freeBusyStatus: src.freeBusyStatus,
+    color: src.color,
+    keywords: src.keywords,
+    // Stalwart derives the iCalendar ORGANIZER solely from
+    // organizerCalendarAddress; dropping it would strip the ORGANIZER from
+    // imported invites and break RSVP replies afterwards.
+    organizerCalendarAddress: src.organizerCalendarAddress || src.replyTo?.imip,
+    locations: src.locations,
+    virtualLocations: src.virtualLocations,
+    links: src.links,
+    recurrenceRules: src.recurrenceRules,
+    recurrenceOverrides: src.recurrenceOverrides,
+    excludedRecurrenceRules: src.excludedRecurrenceRules,
+    alerts: src.alerts,
+    useDefaultAlerts: src.useDefaultAlerts,
+    participants,
+    '@type': src['@type'],
+    due: src.due,
+    progress: src.progress,
+    priority: src.priority,
+    percentComplete: src.percentComplete,
+  };
+  for (const k of Object.keys(data)) {
+    if (data[k] === undefined || data[k] === null) delete data[k];
+  }
+  return data as Partial<CalendarEvent>;
 }
 
 export interface LoadedRange {
@@ -499,22 +567,49 @@ export const useCalendarStore = create<CalendarState>()(
     const cal = get().calendars.find((c) => c.id === calendarId);
     const accountId = cal?.accountId;
     const serverCalendarId = cal?.originalId || calendarId;
-    // Stalwart enforces UID uniqueness across calendars. Skip events whose UID
-    // already exists; create the rest. (We don't attempt cross-calendar linking
-    // on mobile — a duplicate is simply skipped.)
+    // Stalwart enforces UID uniqueness across calendars (#113):
+    // - UID already in the target calendar -> skip (true duplicate)
+    // - UID in another calendar -> link it to the target via calendarIds
+    // - new UID -> create
     let toCreate = events;
+    let linked = 0;
     try {
       const existingIds = await queryEvents([], '', '', accountId);
       const existing = existingIds.length > 0 ? await fetchEvents(existingIds, accountId) : [];
-      const seenUids = new Set(existing.map((e) => e.uid).filter(Boolean) as string[]);
-      toCreate = events.filter((e) => !e.uid || !seenUids.has(e.uid));
+      const byUid = new Map<string, CalendarEvent>();
+      for (const e of existing) if (e.uid) byUid.set(e.uid, e);
+      const fresh: Partial<CalendarEvent>[] = [];
+      for (const e of events) {
+        const found = e.uid ? byUid.get(e.uid) : undefined;
+        if (!found) {
+          fresh.push(e);
+          continue;
+        }
+        if (found.calendarIds?.[serverCalendarId]) continue;
+        try {
+          await apiUpdateEvent(
+            found.id,
+            { calendarIds: { ...(found.calendarIds || {}), [serverCalendarId]: true } },
+            undefined,
+            accountId,
+          );
+          linked++;
+        } catch {
+          // Leave it where it is; the import of the rest continues.
+        }
+      }
+      toCreate = fresh;
     } catch {
       // Couldn't dedupe — proceed and let the server reject genuine dupes.
     }
-    if (toCreate.length === 0) return 0;
-    const count = await apiBatchCreateEvents(toCreate, serverCalendarId, accountId);
-    await get().refresh();
-    return count;
+    const prepared = toCreate.map(prepareImportedEvent);
+    let count = 0;
+    // Batch in chunks of 50 to avoid oversized requests.
+    for (let i = 0; i < prepared.length; i += 50) {
+      count += await apiBatchCreateEvents(prepared.slice(i, i + 50), serverCalendarId, accountId);
+    }
+    if (count > 0 || linked > 0) await get().refresh();
+    return count + linked;
   },
 
   createCalendar: async (name, color, description) => {

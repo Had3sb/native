@@ -61,6 +61,7 @@ import {
   applySharedCalendarColors,
   buildEventDayIndex,
   eventsOnDayFromIndex,
+  getEventStartDate,
   getPrimaryCalendarId,
   pickUnusedCalendarColor,
   sharedCalendarColorKey,
@@ -81,6 +82,8 @@ import { useLocaleStore } from '../stores/locale-store';
 import { useUserCalendarAddresses } from '../lib/calendar-user-addresses';
 import { useCalendarSubscriptionsStore } from '../stores/calendar-subscriptions-store';
 import { startCalendarNotificationSync } from '../lib/calendar-notifications';
+import { shareEventICS } from '../lib/calendar-ics-export';
+import * as Clipboard from 'expo-clipboard';
 import type { Calendar, CalendarEvent, RecurrenceRule } from '../api/types';
 
 type ViewMode = 'month' | 'week' | 'agenda';
@@ -594,6 +597,54 @@ export default function CalendarScreen() {
     [t],
   );
 
+  // Clone the event one day later and open it in the editor (webmail's
+  // handleDuplicateFromDetail).
+  const handleDuplicateFromDetail = React.useCallback(
+    async (event: CalendarEvent) => {
+      setDetailEvent(null);
+      const newStart = addDays(getEventStartDate(event), 1);
+      const data: Partial<CalendarEvent> = {
+        title: event.title,
+        description: event.description,
+        start: event.showWithoutTime
+          ? format(newStart, "yyyy-MM-dd'T'00:00:00")
+          : format(newStart, "yyyy-MM-dd'T'HH:mm:ss"),
+        duration: event.duration,
+        timeZone: event.timeZone,
+        showWithoutTime: event.showWithoutTime,
+        status: 'confirmed',
+        freeBusyStatus: event.freeBusyStatus,
+      };
+      if (event.locations) data.locations = JSON.parse(JSON.stringify(event.locations));
+      if (event.virtualLocations) data.virtualLocations = JSON.parse(JSON.stringify(event.virtualLocations));
+      if (event.recurrenceRules?.length) data.recurrenceRules = JSON.parse(JSON.stringify(event.recurrenceRules));
+      if (event.alerts) data.alerts = JSON.parse(JSON.stringify(event.alerts));
+      const calendarId = getPrimaryCalendarId(event) || '';
+      try {
+        const created = await createEvent(data, calendarId);
+        const stored = useCalendarStore.getState().events.find((e) => e.id === created.id) ?? created;
+        openEditDirect(stored);
+      } catch (err) {
+        reportError(err);
+      }
+    },
+    [createEvent, openEditDirect, reportError],
+  );
+
+  const handleExportFromDetail = React.useCallback(
+    (event: CalendarEvent) => {
+      shareEventICS(event).catch(reportError);
+    },
+    [reportError],
+  );
+
+  const handleCopyLink = React.useCallback(
+    (_event: CalendarEvent, link: string) => {
+      Clipboard.setStringAsync(link).catch(reportError);
+    },
+    [reportError],
+  );
+
   const handleCalendarEditSave = React.useCallback(
     async (values: CalendarEditValues) => {
       if (!calendarEditTarget) return;
@@ -809,6 +860,9 @@ export default function CalendarScreen() {
         onClose={() => setDetailEvent(null)}
         onEdit={handleEditFromDetail}
         onDelete={handleDeleteFromDetail}
+        onDuplicate={(ev) => { if (!isReadOnlyEvent(ev)) void handleDuplicateFromDetail(ev); }}
+        onExport={handleExportFromDetail}
+        onCopyLink={handleCopyLink}
         onRsvp={async (ev, participantId, status) => {
           await rsvpEvent(ev.id, participantId, status, buildReplyTo(ev));
           setDetailEvent((cur) =>

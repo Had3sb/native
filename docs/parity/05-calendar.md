@@ -37,7 +37,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
   - What RN does: `handleSave` emits `undefined` for cleared fields (`recurrenceRules: undefined`, `participants: undefined`, `alerts: remindersToAlerts([]) === undefined`, `locations: undefined`) which JSON serialisation drops, so the server keeps the old value (ref `src/components/calendar/EventModal.tsx:262-281`, `src/lib/calendar-alerts.ts:72-73`). Setting "Does not repeat" on a recurring event, removing all attendees, deleting the last reminder or clearing the location silently does nothing.
   - Fix hint: in edit mode compare against `event` and send `null` for fields that existed and are now empty; RN's `cleanRecurrenceRules` already turns `[]`/`null` into `recurrenceRule: null` (`src/api/calendar.ts:115-118`), so `recurrenceRules: []` works today for recurrence.
 
-- [ ] **`this_and_future` / huge-span RRULE (#735) — RN not affected** — `P3` — `bugfix-parity`
+- [x] **`this_and_future` / huge-span RRULE (#735) — RN not affected** — `P3` — `bugfix-parity` — verified, nothing to fix (caps already in place; "this and following" truncates with `until` and drops `count`)
   - What WEB does: memory note on #735 (Stalwart u32 overflow for spans > 136 years). WEB's editor caps `until` to a picked date and `count` to 999.
   - What RN does: same caps (`src/lib/recurrence.ts:227-229`, `RecurrenceEditor.tsx:139-144, 244-249`), no alarms with absolute triggers far in the future. Not affected; noted so it isn't re-investigated.
 
@@ -265,7 +265,7 @@ RN has a solid read path (month/week/agenda, shared-calendar namespacing, per-vi
 
 ### Tasks
 
-- [ ] **Task sheet supports only title + due date; no edit, description, priority, due time, progress states, alerts, filters, "show on calendar"** — `P2` — `partial`
+- [x] **Task sheet supports only title + due date; no edit, description, priority, due time, progress states, alerts, filters, "show on calendar"** — `P2` — `partial` — fixed in 09c24fa (edit, description, priority, due date + time, calendar move, all/pending/completed/overdue filters, overdue-first sort, `needs-action` <-> `completed` with `progressUpdated`, due tasks overlaid on the grid; task alerts still come only from the server data)
   - What WEB does: task modal with description, due date + optional time, priority (none/high/medium/low -> 1-9), progress, calendar, alert; list filters all/pending/completed/overdue, overdue-first sort, `showTasksOnCalendar` overlays due tasks on the grid; completion toggles `needs-action` <-> `completed` with `progressUpdated` (ref `components/calendar/task-modal.tsx:55-140`, `task-list-view.tsx:80-110`, `stores/task-store.ts:366, 442-452`).
   - What RN does: `TasksSheet` creates `{ title, progress, due }` only, no tap-to-edit, delete + toggle only (`src/components/calendar/TasksSheet.tsx:117-135, 210-235`); un-completing sets `in-process` (`src/stores/calendar-store.ts:418-426`); `showTasksOnCalendar` (`settings-store.ts:174`) is unused; tasks are never drawn in month/week/agenda.
   - Fix hint: add a task edit sheet mirroring `task-modal.tsx`, filter chips, and render due tasks as all-day chips when `showTasksOnCalendar`.

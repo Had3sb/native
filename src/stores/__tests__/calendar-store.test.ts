@@ -11,6 +11,7 @@ vi.mock('../../api/calendar', () => ({
   createEvent: vi.fn(),
   updateEvent: vi.fn(),
   deleteEvents: vi.fn(),
+  batchCreateEvents: vi.fn(),
   setDefaultCalendar: vi.fn(),
 }));
 
@@ -535,6 +536,46 @@ describe('calendar-store', () => {
       expect(mockDeleteEvents).toHaveBeenCalledWith(['ev1'], undefined, undefined);
       // The visible range was reloaded (empty here).
       expect(mockQueryEvents).toHaveBeenCalled();
+    });
+  });
+
+  describe('importEvents', () => {
+    it('links UIDs that exist in another calendar instead of skipping them and whitelists properties (#113)', async () => {
+      useCalendarStore.setState({
+        calendars: [{ id: 'cal-1' }, { id: 'cal-2' }] as any,
+        loadedRange: { after: '2026-03-01T00:00:00Z', before: '2026-03-31T00:00:00Z' },
+      });
+      mockQueryEvents.mockResolvedValue(['e1', 'e2']);
+      mockGetEvents.mockResolvedValue([
+        { id: 'e1', uid: 'uid-elsewhere', calendarIds: { 'cal-1': true } },
+        { id: 'e2', uid: 'uid-here', calendarIds: { 'cal-2': true } },
+      ]);
+      mockUpdateEvent.mockResolvedValue(undefined);
+      const batch = calendarApi.batchCreateEvents as ReturnType<typeof vi.fn>;
+      batch.mockResolvedValue(1);
+
+      const count = await useCalendarStore.getState().importEvents(
+        [
+          { uid: 'uid-elsewhere', title: 'Linked', start: '2026-03-02T09:00:00' },
+          { uid: 'uid-here', title: 'Dup', start: '2026-03-02T09:00:00' },
+          {
+            uid: 'uid-new', title: 'New', start: '2026-03-03T00:00:00', showWithoutTime: true,
+            duration: 'PT23H59M59S', timeZone: 'Europe/Berlin', utcStart: '2026-03-03T00:00:00Z',
+            participants: { p: { email: 'x@y', sendTo: { imip: 'mailto:x@y' }, roles: { attendee: true } } },
+          } as any,
+        ],
+        'cal-2',
+      );
+
+      // The UID in cal-1 is linked into cal-2; the one already in cal-2 is skipped.
+      expect(mockUpdateEvent).toHaveBeenCalledWith('e1', { calendarIds: { 'cal-1': true, 'cal-2': true } }, undefined, undefined);
+      expect(count).toBe(2);
+      const created = batch.mock.calls[0][0][0];
+      expect(created.duration).toBe('P1D');
+      expect(created.timeZone).toBeUndefined();
+      expect(created.utcStart).toBeUndefined();
+      expect(created.participants.p.calendarAddress).toBe('mailto:x@y');
+      expect(created.participants.p.sendTo).toBeUndefined();
     });
   });
 

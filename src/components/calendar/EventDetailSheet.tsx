@@ -21,8 +21,10 @@ import {
   Copy,
   HelpCircle,
   MapPin,
+  Link2,
   Pencil,
   Repeat,
+  Share2,
   Trash2,
   Users,
   Video,
@@ -64,6 +66,9 @@ interface EventDetailSheetProps {
   onEdit?: (event: CalendarEvent) => void;
   onDelete?: (event: CalendarEvent) => void;
   onDuplicate?: (event: CalendarEvent) => void;
+  onExport?: (event: CalendarEvent) => void;
+  // Copy the meeting link; only offered when the event has one.
+  onCopyLink?: (event: CalendarEvent, link: string) => void;
   onRsvp?: (event: CalendarEvent, participantId: string, status: RsvpStatus) => void | Promise<void>;
 }
 
@@ -130,6 +135,8 @@ export function EventDetailSheet({
   onEdit,
   onDelete,
   onDuplicate,
+  onExport,
+  onCopyLink,
   onRsvp,
 }: EventDetailSheetProps) {
   const c = useColors();
@@ -367,7 +374,7 @@ export function EventDetailSheet({
             )}
           </ScrollView>
 
-          {(canEdit || onDuplicate) && (
+          {(canEdit || onDuplicate || onExport || (onCopyLink && videoUri)) && (
             <View style={styles.actions}>
               {onEdit && canEdit && (
                 <ActionButton
@@ -381,6 +388,20 @@ export function EventDetailSheet({
                   icon={<Copy size={18} color={c.text} />}
                   label={t('calendar.events.duplicate', 'Duplicate')}
                   onPress={() => onDuplicate(event)}
+                />
+              )}
+              {onExport && (
+                <ActionButton
+                  icon={<Share2 size={18} color={c.text} />}
+                  label={t('calendar.events.export_ics_short', '.ics')}
+                  onPress={() => onExport(event)}
+                />
+              )}
+              {onCopyLink && videoUri && (
+                <ActionButton
+                  icon={<Link2 size={18} color={c.text} />}
+                  label={t('calendar.events.copy_link_short', 'Link')}
+                  onPress={() => onCopyLink(event, videoUri)}
                 />
               )}
               {onDelete && canEdit && (
